@@ -85,8 +85,13 @@ const (
 	// and internal/embed/testdata/cassettes/embed.index/: one embeddings
 	// batch through llm.Client.Embed, keyed off the wire in embed's
 	// TestLLMEmbedderReplaysItsCassette — 9 files / 19 interactions.
-	tier0MinInteractions = 19
-	tier0MinCassettes    = 9
+	//
+	// W2 breadth (D121 "Wave 2 breadth") added two more agent.decide runs —
+	// an alteration as a compensating version (4 decisions) and a supplier
+	// born blocked whose payment the validators then refuse (5) — +2 files /
+	// +9 interactions, to 11 / 28 once both lanes merged.
+	tier0MinInteractions = 28
+	tier0MinCassettes    = 11
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way

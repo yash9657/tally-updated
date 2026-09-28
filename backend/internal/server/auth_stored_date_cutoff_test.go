@@ -815,6 +815,17 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"releases is a separate in-process request to the voucher route, judged by the cutoff there",
 	"POST /v1/companies/{companyID}/agent/runs/{runID}/cancel": "" +
 		"cancelling a run writes the run's status only; it commits nothing and carries no date",
+	// W2 breadth. The re-preview is a DRY RUN: the in-process request it makes
+	// to the voucher route is judged there (asserted and stored date), and every
+	// transaction it opens is rolled back; the route itself writes nothing.
+	"POST /v1/companies/{companyID}/agent/approvals/{approvalID}/preview": "" +
+		"re-previewing an approver's edit writes nothing (a rolled-back dry run through the real voucher " +
+		"route, which is judged by the cutoff there)",
+	// The unblock names a LEDGER, which is a master and carries no document date;
+	// it moves no entry across any period (0095).
+	"POST /v1/companies/{companyID}/ledgers/{ledgerID}/unblock": "" +
+		"unblocking an agent-created ledger clears a master's block flag; a ledger carries no document " +
+		"date and the unblock posts nothing",
 
 	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
 	//

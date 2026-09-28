@@ -117,7 +117,7 @@ func (s *Server) postOrder(direction orders.Direction) http.HandlerFunc {
 			OrderNo:   req.OrderNo,
 			OrderDate: req.OrderDate,
 			Narration: req.Narration,
-			CreatedBy: req.CreatedBy,
+			CreatedBy: attributedTo(r, req.CreatedBy),
 		}
 		var err error
 		// ⛔ THE ZERO UUID PARSES (HANDOFF §7.3). optionalUUID would turn "" into
@@ -273,7 +273,7 @@ func (s *Server) putOrderClose(direction orders.Direction) http.HandlerFunc {
 			writeError(w, http.StatusNotFound, "no such "+strings.ToLower(string(direction))+" order")
 			return
 		}
-		if err := s.orders.Close(ctx, orderID, req.IsClosed, req.Reason, ""); err != nil {
+		if err := s.orders.Close(ctx, orderID, req.IsClosed, req.Reason, attributedTo(r, "")); err != nil {
 			writeOrderError(w, err)
 			return
 		}

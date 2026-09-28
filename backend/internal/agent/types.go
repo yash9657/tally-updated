@@ -178,6 +178,18 @@ type Request struct {
 	// the only place the amount of an approver-EDITED body is ever known,
 	// since an edited body is not previewed again.
 	MaxDebitPaise *int64
+	// Params are the concrete path parameters (preview and commit), for a
+	// dispatcher that must read the state a write is about to change BEFORE
+	// the handler runs — a bank-reconciliation un-tick deletes its row, so
+	// what it removed can only be read first.
+	Params map[string]string
+	// ExpectVersions, on the commit of a voucher ALTER, is the head version
+	// the preview (or the approver's re-preview) restated, per logical
+	// voucher. ⛔ The commit refuses if the voucher has moved on since: an
+	// approved alteration of version 3 must not silently overwrite a version
+	// 4 somebody keyed in the meantime (a lost update the ledger itself would
+	// happily append).
+	ExpectVersions map[uuid.UUID]int
 }
 
 // Posting is one line of a ledger effect, read back from the handler's own
@@ -192,12 +204,134 @@ type Posting struct {
 
 // Effect is the ledger-effect diff of a write: what the real validators and
 // derivations would post. Totals are paise, computed by Go.
+//
+// Postings / DebitPaise / CreditPaise are what THIS write posts (for an alter:
+// the new version's legs). The fields below them are the wave-2 breadth: an
+// alter's before-and-after, a stock voucher's movements, a master's audit
+// row, an order, a bank date. ⛔ EVERY FIELD IS READ BACK FROM WHAT THE REAL
+// HANDLER WROTE in its own transaction (internal/server's readTxEffect) —
+// never derived from the request body — so the approver's diff is the books'
+// answer, not the model's claim.
 type Effect struct {
 	Postings    []Posting `json:"postings"`
 	DebitPaise  int64     `json:"debit_paise"`
 	CreditPaise int64     `json:"credit_paise"`
 	Vouchers    int       `json:"vouchers"`
+
+	// Versions is every voucher version the write appended: its op (CREATE,
+	// ALTER), and for an alter the version it supersedes.
+	Versions []VersionWritten `json:"versions,omitempty"`
+	// Replaces is, for an ALTER, the head version the new one supersedes and
+	// its legs — the "before" of the diff. The superseded version is never
+	// changed (voucher_version is append-only); this is a compensating version.
+	Replaces []VersionRef `json:"replaces,omitempty"`
+	// Delta is, for an ALTER, the net change per ledger (after − before, Dr
+	// positive, paise). A ledger whose net is unchanged is omitted.
+	Delta []LedgerDelta `json:"delta,omitempty"`
+	// Stock is the stock movements the write recorded (stock vouchers, item
+	// invoices).
+	Stock []StockMove `json:"stock,omitempty"`
+	// Masters is the master_audit rows the write appended: what a master
+	// create or alter changed, before and after, in the audit's own words.
+	Masters []MasterChange `json:"masters,omitempty"`
+	// Orders is the order heads the write created or changed.
+	Orders []OrderChange `json:"orders,omitempty"`
+	// BankDates is the bank-reconciliation ticks the write set or cleared.
+	BankDates []BankDateChange `json:"bank_dates,omitempty"`
 }
+
+// Empty reports whether the write produced nothing the preview can show —
+// which is a preview that cannot be approved (there is nothing to approve).
+func (e *Effect) Empty() bool {
+	return e == nil || (len(e.Postings) == 0 && e.Vouchers == 0 && len(e.Stock) == 0 &&
+		len(e.Masters) == 0 && len(e.Orders) == 0 && len(e.BankDates) == 0)
+}
+
+// VersionWritten is one voucher_version a write appended.
+type VersionWritten struct {
+	VoucherID uuid.UUID `json:"voucher_id"`
+	VersionNo int       `json:"version_no"`
+	Op        string    `json:"op"`
+	Class     string    `json:"class"`
+	VoucherNo string    `json:"voucher_no,omitempty"`
+	Date      string    `json:"date,omitempty"`
+}
+
+// VersionRef is a superseded head: the "before" of an alteration.
+type VersionRef struct {
+	VoucherID   uuid.UUID `json:"voucher_id"`
+	VersionNo   int       `json:"version_no"`
+	Postings    []Posting `json:"postings"`
+	DebitPaise  int64     `json:"debit_paise"`
+	CreditPaise int64     `json:"credit_paise"`
+}
+
+// LedgerDelta is one ledger's net change under an alteration.
+type LedgerDelta struct {
+	LedgerID    uuid.UUID `json:"ledger_id"`
+	Ledger      string    `json:"ledger"`
+	BeforePaise int64     `json:"before_paise"`
+	AfterPaise  int64     `json:"after_paise"`
+	ChangePaise int64     `json:"change_paise"`
+}
+
+// StockMove is one stock_movement row a write recorded.
+type StockMove struct {
+	VoucherID uuid.UUID `json:"voucher_id"`
+	LineNo    int       `json:"line_no"`
+	Item      string    `json:"item"`
+	Godown    string    `json:"godown,omitempty"`
+	Direction string    `json:"direction"`
+	Qty       string    `json:"qty"`
+	Rate      string    `json:"rate"`
+	Amount    string    `json:"amount"`
+}
+
+// MasterChange is one master_audit row a write appended.
+type MasterChange struct {
+	Entity   string          `json:"entity"`
+	EntityID uuid.UUID       `json:"entity_id"`
+	Op       string          `json:"op"`
+	Before   json.RawMessage `json:"before,omitempty"`
+	After    json.RawMessage `json:"after,omitempty"`
+}
+
+// OrderChange is one order head a write created or changed.
+type OrderChange struct {
+	OrderID   uuid.UUID   `json:"order_id"`
+	Direction string      `json:"direction"`
+	OrderNo   string      `json:"order_no"`
+	Date      string      `json:"date"`
+	Closed    bool        `json:"closed"`
+	Lines     []OrderLine `json:"lines,omitempty"`
+}
+
+// OrderLine is one line of an order a write created.
+type OrderLine struct {
+	LineNo int    `json:"line_no"`
+	Item   string `json:"item"`
+	Qty    string `json:"qty"`
+	Rate   string `json:"rate"`
+}
+
+// BankDateChange is one bank-reconciliation tick set, changed or cleared.
+type BankDateChange struct {
+	VoucherID uuid.UUID `json:"voucher_id"`
+	LedgerID  uuid.UUID `json:"ledger_id"`
+	LegNo     int       `json:"leg_no"`
+	Before    string    `json:"before,omitempty"`
+	After     string    `json:"after,omitempty"`
+}
+
+// ObjectKind is what a commit wrote (0095's agent_commit.object_kind).
+type ObjectKind string
+
+const (
+	ObjectVoucher            ObjectKind = "voucher"
+	ObjectMaster             ObjectKind = "master"
+	ObjectOrder              ObjectKind = "order"
+	ObjectBankReconciliation ObjectKind = "bank_reconciliation"
+)
 
 // Result is what a dispatch produced.
 type Result struct {
@@ -208,6 +342,11 @@ type Result struct {
 	// Replayed is true when a commit found its idempotency key already
 	// recorded and answered from it without running the handler.
 	Replayed bool `json:"replayed,omitempty"`
+	// ObjectKind / ObjectIDs are what the commit wrote when it was not (only)
+	// vouchers: a master, an order, a bank reconciliation. For a voucher
+	// commit ObjectIDs equals VoucherIDs.
+	ObjectKind ObjectKind  `json:"object_kind,omitempty"`
+	ObjectIDs  []uuid.UUID `json:"object_ids,omitempty"`
 }
 
 // OK reports a 2xx.

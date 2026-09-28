@@ -381,7 +381,16 @@ export type ScreenKind =
    * trusts are the ones that apply to an agent's work too (PLAN-AGENTIC W2: "the
    * panel pre-fills the same native screens so Ctrl+A remains the accept key").
    */
-  | "approval-inbox";
+  | "approval-inbox"
+  /**
+   * AGENT SETTINGS (W2 breadth, D121 "Wave 2 breadth"): the autonomy table,
+   * the agent-created ledgers waiting to be unblocked, and the intent log's
+   * verification — the owner's half of the agent plane. Every route it drives
+   * is a bare token (`agent-autonomy`, `master-unblock`, `agent-run`) that
+   * Data Entry is refused with zero rules; the server, not this screen,
+   * decides who may.
+   */
+  | "agent-settings";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is

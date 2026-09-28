@@ -154,3 +154,79 @@ export function parkedRunEvents(): AgentEvent[] {
     },
   ];
 }
+
+/**
+ * W2 breadth: a pending MASTER create — a new supplier with bank details. Its
+ * effect has no postings; the diff is the master_audit row the server read
+ * back, and the ledger is born blocked.
+ */
+export function masterApproval(): AgentApproval {
+  return {
+    id: "appr-master-1",
+    run_id: RUN_ID,
+    step_key: "gate:1",
+    state: "pending",
+    action_id: "post.ledgers",
+    acl_key: "create master",
+    risk: "master",
+    instruction: "Add our new supplier Naya Supplier Pvt Ltd.",
+    args: { action_id: "post.ledgers", path_params: {}, body: { name: "Naya Supplier Pvt Ltd", group_name: "Sundry Creditors" } },
+    preview: {
+      status: 201,
+      effect: {
+        postings: [],
+        debit_paise: 0,
+        credit_paise: 0,
+        vouchers: 0,
+        masters: [
+          {
+            entity: "ledger",
+            entity_id: "ledger-new",
+            op: "CREATE",
+            after: {
+              name: "Naya Supplier Pvt Ltd",
+              group: "Sundry Creditors",
+              bank_account_number: "50100123456789",
+              bank_ifsc: "HDFC0001234",
+              blocked: true,
+            },
+          },
+        ],
+      },
+    },
+    reasons: ["autonomy for create master is L1: every commit waits for a human",
+      "an agent-created master is born only through a human decision"],
+    provenance: { context_sources: ["user", "document"], fields: { bank_account_number: "document" } },
+    on_behalf_of: "user-1",
+    requested_at: "2026-05-10T09:00:00Z",
+    deadline_at: "2999-01-01T00:00:00Z",
+  };
+}
+
+/** W2 breadth: a pending ALTERATION of a posted payment, with its before-image and delta. */
+export function alterApproval(): AgentApproval {
+  const leg = (ledger: string, dr: "D" | "C", paise: number) => ({
+    ledger_id: `ledger-${ledger}`, ledger, dr_cr: dr, amount: (paise / 100).toFixed(4), amount_paise: paise });
+  return {
+    ...paymentApproval({ id: "appr-alter-1", officeRentID: "ledger-Office Rent" }),
+    action_id: "put.vouchers.payment._voucherid",
+    acl_key: "alter payment",
+    preview: {
+      status: 200,
+      effect: {
+        postings: [leg("Office Rent", "D", 2600000), leg("HDFC Bank", "C", 2600000)],
+        debit_paise: 2600000,
+        credit_paise: 2600000,
+        vouchers: 1,
+        versions: [{ voucher_id: "v-1", version_no: 2, op: "ALTER", class: "Payment", voucher_no: "1" }],
+        replaces: [{ voucher_id: "v-1", version_no: 1, debit_paise: 2500000, credit_paise: 2500000,
+          postings: [leg("Office Rent", "D", 2500000), leg("HDFC Bank", "C", 2500000)] }],
+        delta: [
+          { ledger_id: "ledger-HDFC Bank", ledger: "HDFC Bank", before_paise: -2500000, after_paise: -2600000, change_paise: -100000 },
+          { ledger_id: "ledger-Office Rent", ledger: "Office Rent", before_paise: 2500000, after_paise: 2600000, change_paise: 100000 },
+        ],
+      },
+    },
+  };
+}
+

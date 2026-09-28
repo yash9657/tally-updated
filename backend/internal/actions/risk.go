@@ -100,6 +100,11 @@ var resourceRisk = map[authz.Resource]Risk{
 	"company": RiskGovernance, "security": RiskGovernance, "import": RiskGovernance,
 	"sync": RiskGovernance, "backup": RiskGovernance,
 	"agent-run": RiskGovernance, "agent-approval": RiskGovernance,
+	// W2 breadth: the autonomy table and the release of an agent-created
+	// ledger. Each is a way for an agent to widen what it may do next — a
+	// higher level, or a party it made becoming payable — so each is the
+	// human's alone.
+	"agent-autonomy": RiskGovernance, "master-unblock": RiskGovernance,
 }
 
 // governanceReads are DISPLAY actions that are nevertheless governance: a
@@ -115,6 +120,9 @@ var governanceReads = map[authz.Resource]bool{
 	// agent that can see what it is waiting on and phrase its next step at
 	// the approver. Reads of runs and approvals are for humans.
 	"agent-run": true, "agent-approval": true,
+	// The autonomy table: an agent that can read which of its commits need no
+	// human can aim at exactly those.
+	"agent-autonomy": true,
 	// The ACL itself.
 	"security": true,
 }

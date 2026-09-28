@@ -6,6 +6,7 @@ import { mockAddAgentApproval, mockAgentDecisions } from "../api/mock";
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
 import { paymentApproval } from "./agentFixtures";
+import { _resetLedgerCache } from "./vouchers/gstVoucher";
 
 /**
  * AN AGENT PROPOSAL IN THE NATIVE F5 PAYMENT SCREEN (W2) — the whole of "the
@@ -33,7 +34,10 @@ interface Spied {
   posts: VoucherRequest[];
 }
 
-async function setup(decide?: CoredClient["decideAgentApproval"]): Promise<Spied> {
+async function setup(
+  decide?: CoredClient["decideAgentApproval"],
+  previewEdit?: CoredClient["previewAgentEdit"],
+): Promise<Spied> {
   // The seeded demo company has HDFC Bank; the proposal pays an expense ledger
   // that exists in these books, created here so its id is real.
   const seeded = createMockClient();
@@ -50,6 +54,7 @@ async function setup(decide?: CoredClient["decideAgentApproval"]): Promise<Spied
       return seeded.postPaymentVoucher(c, req);
     },
     ...(decide ? { decideAgentApproval: decide } : {}),
+    ...(previewEdit ? { previewAgentEdit: previewEdit } : {}),
   };
   return { client, base: seeded, posts };
 }
@@ -176,5 +181,48 @@ describe("an agent proposal opened in F5 Payment", () => {
     await waitFor(() => expect(screen.queryByTestId("agent-proposal")).toBeNull());
     expect(mockAgentDecisions(base)).toHaveLength(0);
     expect(posts).toHaveLength(0);
+  });
+
+  it("W2 breadth: an EDIT is previewed by the server BEFORE it is approved, and a refused edit decides nothing", async () => {
+    const order: string[] = [];
+    const { client, base, posts } = await setup(undefined, async () => {
+      order.push("preview");
+      throw new ApiError(422, "double-entry violation: debit 24000.0000 != credit 25000.0000", {
+        code: "EDIT_REFUSED",
+        error: "double-entry violation: debit 24000.0000 != credit 25000.0000",
+      });
+    });
+    renderShell(client);
+    await openProposal();
+    const amount = await screen.findByTestId("single-amount:0");
+    await waitFor(() => expect((amount as HTMLInputElement).value).toBe("25000.0000"));
+    fireEvent.change(amount, { target: { value: "24000" } });
+    ctrlA();
+    expect((await screen.findByText(/refused YOUR edit/)).textContent).toMatch(/nothing was approved/);
+    expect(order).toEqual(["preview"]);
+    expect(mockAgentDecisions(base)).toHaveLength(0);
+    expect(posts).toHaveLength(0);
+    // Still in proposal mode: the fix is keyed here.
+    expect(screen.getByTestId("agent-proposal")).toBeTruthy();
+  });
+
+  it("W2 breadth: an UNEDITED approve needs no re-preview", async () => {
+    // Each setup() mints fresh ledger ids under the same company id, and the
+    // builder's name->id cache would otherwise hand this test the previous
+    // test's Office Rent id — an "edit" nobody keyed.
+    _resetLedgerCache();
+    let previews = 0;
+    const { client, base } = await setup(undefined, async () => {
+      previews++;
+      return { preview: { status: 201, effect: null } };
+    });
+    renderShell(client);
+    await openProposal();
+    await waitFor(() =>
+      expect((screen.getByTestId("single-amount:0") as HTMLInputElement).value).toBe("25000.0000"),
+    );
+    ctrlA();
+    await waitFor(() => expect(mockAgentDecisions(base)).toHaveLength(1));
+    expect(previews).toBe(0);
   });
 });

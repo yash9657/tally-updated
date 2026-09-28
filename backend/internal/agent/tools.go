@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,15 +72,29 @@ func RequestHash(req *llm.Request) string {
 
 // previewable is the set of ActionSpecs whose handlers are known to do their
 // whole write in ONE RunInTx — the property ModePreview's rollback depends on
-// (platform/db TxHook) — and whose effect is postings the preview can read back.
+// (platform/db TxHook) — and whose effect internal/server's readTxEffect can
+// read back from that transaction (postings, versions, stock movements,
+// master_audit rows, order heads, bank ticks).
 //
 // ⛔ AN ALLOWLIST, NOT A PROPERTY OF THE REGISTRY. "This handler writes only
 // through one hooked transaction" is not derivable from a route; a handler that
 // also wrote through Raw(), or called insightd, would commit or send during a
-// preview. Each entry is a claim somebody checked. The four vouchers' routes
-// PLAN-AGENTIC W2 names first live here; the rest of "all voucher classes,
-// masters, orders" is D121's OWED list, one checked handler at a time.
+// preview. Each entry is a claim somebody checked, and the value says which
+// handler it was checked against. Wave 1 had the eight accounting creates; wave
+// 2 (D121 "Wave 2 breadth") adds each family below after reading its handler.
+//
+// NOT HERE, AND WHY (the owed list is D121's):
+//   - a ledger ALTER: the product has no human path for one (only the opening
+//     balance, whose PUT no screen calls), and policy.Structural refuses the
+//     agent a door no person uses;
+//   - delete of anything: structural;
+//   - post.drafts._draftid.accepted and the other insightd proxies: they call
+//     another service, which no rollback can take back;
+//   - groups, units, godowns, price lists, BOMs, budgets, cost centres: each
+//     is one more handler to read, and none is on PLAN-AGENTIC W2's list.
 var previewable = map[string]bool{
+	// The eight accounting voucher creates: postVoucher -> ledger.PostVoucher,
+	// one post() transaction.
 	"post.vouchers.sales":       true,
 	"post.vouchers.purchase":    true,
 	"post.vouchers.receipt":     true,
@@ -88,6 +103,47 @@ var previewable = map[string]bool{
 	"post.vouchers.journal":     true,
 	"post.vouchers.credit-note": true,
 	"post.vouchers.debit-note":  true,
+	// Their ALTERATIONS: alterVoucher -> ledger.AlterVoucher -> the same post()
+	// transaction with op ALTER — a new hash-chained version that supersedes
+	// the head, never an edit of it. (A FrozenError's reconciliation-queue row
+	// is written in a SEPARATE transaction only on refusal, when nothing
+	// commits anyway; under a preview it is rolled back like the rest.)
+	"put.vouchers.sales._voucherid":       true,
+	"put.vouchers.purchase._voucherid":    true,
+	"put.vouchers.receipt._voucherid":     true,
+	"put.vouchers.payment._voucherid":     true,
+	"put.vouchers.contra._voucherid":      true,
+	"put.vouchers.journal._voucherid":     true,
+	"put.vouchers.credit-note._voucherid": true,
+	"put.vouchers.debit-note._voucherid":  true,
+	// The four stock vouchers, create and alter: the same two handlers; the
+	// effect is stock_movement rows, not postings.
+	"post.vouchers.delivery-note":            true,
+	"post.vouchers.receipt-note":             true,
+	"post.vouchers.stock-journal":            true,
+	"post.vouchers.physical-stock":           true,
+	"put.vouchers.delivery-note._voucherid":  true,
+	"put.vouchers.receipt-note._voucherid":   true,
+	"put.vouchers.stock-journal._voucherid":  true,
+	"put.vouchers.physical-stock._voucherid": true,
+	// Masters: handleCreateLedger -> masters.CreateLedger (one RunInTx, a
+	// master_audit CREATE row; an agent's ledger is BORN BLOCKED, 0095);
+	// handleCreateStockItem -> masters.CreateStockItem (one RunInTx, audit
+	// row); the valuation-method setter (one RunInTx, audit ALTER row).
+	"post.ledgers":     true,
+	"post.stock-items": true,
+	"put.stock-items._stockitemid.valuation-method": true,
+	// Orders: postOrder -> orders.Create and putOrderClose -> orders.Close,
+	// one RunInTx each.
+	"post.sales-orders":                  true,
+	"post.purchase-orders":               true,
+	"put.sales-orders._orderid.close":    true,
+	"put.purchase-orders._orderid.close": true,
+	// Bank reconciliation, tick and un-tick: banking.SetBankDate /
+	// SetBankDateFromStatementLine / ClearBankDate, one RunInTx each. The
+	// before-image is read ahead of the handler (the un-tick deletes it).
+	"put.bank-reconciliation._ledgerid._voucherid._legno":    true,
+	"delete.bank-reconciliation._ledgerid._voucherid._legno": true,
 }
 
 // Previewable reports whether spec may be previewed (and therefore committed)
@@ -151,9 +207,12 @@ func (l *loop) search(q string) []searchHit {
 	return hits
 }
 
+// ordinalParams are the path parameters that are an ordinal, not an id.
+var ordinalParams = map[string]bool{"legNo": true}
+
 // concretePath substitutes path params into a spec's route.
 //
-// ⛔ EVERY PARAM MUST BE A UUID. A model-supplied "../members/x" or a value
+// ⛔ EVERY PARAM MUST BE A UUID (or, for ordinalParams, digits). A model-supplied "../members/x" or a value
 // carrying "?" or "/" would otherwise re-route the request to a different
 // door than the spec it claims — and although the router re-derives the ACL
 // key and refuses a mismatch, the cheapest defence is to never build such a
@@ -173,6 +232,17 @@ func concretePath(spec actions.ActionSpec, companyID uuid.UUID, params map[strin
 		v, ok := params[name]
 		if !ok {
 			return "", fmt.Errorf("path parameter %q is required for %s", name, spec.ID)
+		}
+		if ordinalParams[name] {
+			// The one non-id parameter an agent-reachable route carries: a
+			// bank-reconciliation leg's ordinal. Digits only, so it can no
+			// more re-route a request than a uuid can.
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 9999 || strconv.Itoa(n) != v {
+				return "", fmt.Errorf("path parameter %q must be a small non-negative integer", name)
+			}
+			route = route[:i] + v + route[i+j+1:]
+			continue
 		}
 		id, err := uuid.Parse(v)
 		if err != nil {
@@ -259,6 +329,12 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 	case ToolPreview:
 		return l.preview(ctx, prev, d)
 
+	case ToolReverse:
+		return l.reverse(ctx, prev, d)
+
+	case ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile:
+		return l.profile(ctx, d)
+
 	case ToolRead:
 		// actions.read: any RiskRead ActionSpec — a report, a master list —
 		// through the router as the human. ⛔ It is the ONLY generic door the
@@ -277,7 +353,7 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		if !ok {
 			return toolErr(d.Tool, fmt.Sprintf("no action %q; use actions.search", a.ActionID)), nil
 		}
-		if spec.Risk != actions.RiskRead || spec.Method != "GET" {
+		if (spec.Risk != actions.RiskRead && spec.Risk != actions.RiskExport) || spec.Method != "GET" {
 			return toolErr(d.Tool, fmt.Sprintf("%s is not a read (risk %s)", spec.ID, spec.Risk)), nil
 		}
 		if r := policy.EffectiveRights(l.run.Principal(), spec, l.e.now()); !r.Allow {
@@ -298,6 +374,17 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 			Query: q.Encode(), RunID: l.run.ID})
 		if err != nil {
 			return toolOut{}, err
+		}
+		if spec.Risk == actions.RiskExport {
+			// ⛔ AN EXPORT IS PRODUCED, NOT READ. A print is the document a
+			// person would hand over — a voucher's narration, a party's
+			// address — and its bytes are useless to the planner and a
+			// channel for untrusted text into its context. So the model is
+			// told that the document exists (status, type, size, digest) and
+			// never what it says; with nothing of its content in the
+			// context, the result is labelled books. Delivering the file to
+			// a person (WhatsApp, email) is W6's channel, not this tool.
+			return exportOut(d.Tool, res), nil
 		}
 		// ⛔ THE LABEL IS THE SPEC'S, NOT "books" (readsource.go): a bank
 		// statement or a day book read is untrusted text reaching the model.
@@ -422,7 +509,8 @@ func (l *loop) preview(ctx context.Context, prev map[string]json.RawMessage, d M
 	if err != nil {
 		return toolErr(d.Tool, err.Error()), nil
 	}
-	res, err := l.e.Dispatch.Dispatch(ctx, l.caller(l.run.Delegation.StepUp), Request{Mode: ModePreview, Spec: spec, Path: path, Body: a.Body, RunID: l.run.ID})
+	res, err := l.e.Dispatch.Dispatch(ctx, l.caller(l.run.Delegation.StepUp), Request{Mode: ModePreview, Spec: spec, Path: path,
+		Body: a.Body, RunID: l.run.ID, Params: a.PathParams})
 	if err != nil {
 		return toolOut{}, err
 	}
@@ -431,9 +519,9 @@ func (l *loop) preview(ctx context.Context, prev map[string]json.RawMessage, d M
 	if res.OK() {
 		v, _ := json.Marshal(map[string]any{"status": res.Status, "effect": res.Effect, "response": trimBody(res.Body)})
 		out.Result = v
-		if res.Effect == nil || len(res.Effect.Postings) == 0 {
+		if res.Effect.Empty() {
 			out.OK = false
-			out.Error = "the preview produced no ledger effect"
+			out.Error = "the preview produced no effect on the books"
 		}
 		return out, nil
 	}
@@ -670,7 +758,7 @@ func (l *loop) awaitStep(k int) durable.Step {
 			// ⛔ D120 F2 — EXPIRY IS WRITTEN, SO IT IS TERMINAL. The one-
 			// decision UNIQUE then refuses any late approve, and the run's
 			// next step (finish, expired) asks the model nothing.
-			inserted, err := insertDecision(ctx, tx, l.run.CompanyID, approvalID, "expired", nil, "", nil, false, now)
+			inserted, err := insertDecision(ctx, tx, l.run.CompanyID, approvalID, "expired", nil, "", nil, false, now, nil)
 			if err != nil {
 				return err
 			}
@@ -701,6 +789,19 @@ func (l *loop) awaitStep(k int) durable.Step {
 // exec:k — the commit
 // ---------------------------------------------------------------------------
 
+// expectVersions is, per altered voucher, the head version an effect
+// superseded — what a commit of that alteration must still find.
+func expectVersions(e *Effect) map[uuid.UUID]int {
+	if e == nil || len(e.Replaces) == 0 {
+		return nil
+	}
+	m := make(map[uuid.UUID]int, len(e.Replaces))
+	for _, r := range e.Replaces {
+		m[r.VoucherID] = r.VersionNo
+	}
+	return m
+}
+
 // IdempotencyKey is the commit key for step k of a run. Derived, never
 // random: a re-execution of exec:k after a crash must present the SAME key.
 func IdempotencyKey(runID uuid.UUID, k int) string { return fmt.Sprintf("agent:%s:exec:%d", runID, k) }
@@ -721,6 +822,11 @@ func (l *loop) execStep(k int) durable.Step {
 			return nil, fmt.Errorf("agent: exec:%d action %q vanished", k, t.Preview.ActionID)
 		}
 		body := t.Preview.Body
+		// restated is the effect the committing human (or, autonomously, the
+		// tenant's policy) was shown: the preview's, or the approver's
+		// re-preview of their own edit. An ALTER commits only onto the
+		// version that effect superseded.
+		restated := t.Preview.Effect
 		var approvalID uuid.UUID
 		// An autonomous commit carries the delegating human's step-up; one
 		// behind an approval carries the APPROVER's (set below), never the
@@ -743,6 +849,9 @@ func (l *loop) execStep(k int) durable.Step {
 			}
 			if len(a.Decision.EditedArgs) > 0 {
 				body = a.Decision.EditedArgs
+				if a.Decision.EditedPreview != nil && a.Decision.EditedPreview.Effect != nil {
+					restated = a.Decision.EditedPreview.Effect
+				}
 			}
 			webauthn = a.Decision.DecidedWebAuthn
 			approver = *a.Decision.DecidedBy
@@ -756,13 +865,18 @@ func (l *loop) execStep(k int) durable.Step {
 		caller.Approver = approver
 		res, err := l.e.Dispatch.Dispatch(ctx, caller, Request{Mode: ModeCommit, Spec: spec, Path: path,
 			Body: body, IdempotencyKey: key, ApprovalID: approvalID, RunID: l.run.ID,
-			MaxDebitPaise: l.run.Delegation.MaxAmountPaise})
+			MaxDebitPaise: l.run.Delegation.MaxAmountPaise, Params: t.Preview.Params,
+			ExpectVersions: expectVersions(restated)})
 		if err != nil {
 			return nil, err
 		}
-		out := execOut{Status: res.Status, OK: res.OK(), Replayed: res.Replayed, Body: trimBody(res.Body)}
+		out := execOut{Status: res.Status, OK: res.OK(), Replayed: res.Replayed, Body: trimBody(res.Body),
+			ObjectKind: string(res.ObjectKind)}
 		for _, id := range res.VoucherIDs {
 			out.VoucherIDs = append(out.VoucherIDs, id.String())
+		}
+		for _, id := range res.ObjectIDs {
+			out.ObjectIDs = append(out.ObjectIDs, id.String())
 		}
 		kind := intentlog.KindCommit
 		if !res.OK() {
@@ -771,10 +885,26 @@ func (l *loop) execStep(k int) durable.Step {
 		if err := l.e.appendIntentTx(ctx, l.run, intentlog.Event{Kind: kind, ActorKind: intentlog.ActorAgent,
 			ActionID: spec.ID, ACLKey: spec.ACLKey, Payload: map[string]any{
 				"k": k, "status": res.Status, "voucher_ids": out.VoucherIDs, "replayed": res.Replayed,
+				"object_kind": out.ObjectKind, "object_ids": out.ObjectIDs,
 				"idempotency_key": key, "approval_id": g.ApprovalID, "mode": g.Gate.Mode,
 				"body_hash": hashText(string(body))}}); err != nil {
 			return nil, err
 		}
 		return json.Marshal(out)
 	}}
+}
+
+// exportOut is what the model is told about a produced export.
+func exportOut(tool string, res Result) toolOut {
+	sum := sha256.Sum256(res.Body)
+	meta := map[string]any{"status": res.Status, "bytes": len(res.Body), "sha256": hex.EncodeToString(sum[:])}
+	if res.OK() {
+		meta["produced"] = true
+	}
+	b, _ := json.Marshal(meta)
+	out := toolOut{Tool: tool, OK: res.OK(), Result: b, Sources: []policy.Source{policy.SourceBooks}}
+	if !res.OK() {
+		out.Error = fmt.Sprintf("status %d", res.Status)
+	}
+	return out
 }

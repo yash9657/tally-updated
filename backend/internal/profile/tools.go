@@ -175,6 +175,26 @@ func GetTenantProfile(ctx context.Context, r ReadRunner, asOf string) (ToolResul
 	return out, card, nil
 }
 
+// Filter keeps only the facts keep accepts and re-renders the text, so a
+// caller that hides a fact from a reader hides it from the text as well.
+//
+// It exists for W2's agent plane (internal/server's profile reader), which
+// shows an agent only the facts whose reconciling report its human could open:
+// a Data Entry operator whose level refuses the Outstandings report must not
+// learn a customer's receivable through the customer profile. Removing a fact
+// from Facts and leaving it in Text would be the leak with extra steps.
+func (t *ToolResult) Filter(keep func(StoredFact) bool) {
+	kept := t.Facts[:0:0]
+	for _, f := range t.Facts {
+		if keep(f) {
+			kept = append(kept, f)
+		}
+	}
+	t.Facts = kept
+	t.Truncated = false
+	renderTool(t)
+}
+
 // renderTool writes the ≤ToolTokenCap text: one line per fact, labelled from
 // the vocabulary, with the report it reconciles to — so a narrative that
 // quotes the number can also cite where it came from (the number-provenance

@@ -250,6 +250,9 @@ export const SCREEN_GOTO_ENTRIES: Readonly<Record<string, ScreenKind>> = {
   // is the other. ⚠️ Literal rather than APPROVAL_INBOX_LABEL because that const
   // is declared further down this module and a Record initialiser runs at load.
   "Approval Inbox": "approval-inbox",
+  // W2 breadth — AGENT SETTINGS, the owner's half of the agent plane. Literal
+  // for the reason the entry above gives.
+  "Agent Settings": "agent-settings",
 };
 
 /** Case-insensitive index of {@link SCREEN_GOTO_ENTRIES}, built once. */
@@ -611,6 +614,16 @@ export const BOMS_LABEL = "Bills of Materials";
  * the operator makes, not a wrong turn.
  */
 export const APPROVAL_INBOX_LABEL = "Approval Inbox";
+
+/**
+ * AGENT SETTINGS (W2 breadth): the autonomy table, the agent-created ledgers
+ * waiting to be unblocked, and the intent log's verification.
+ *
+ * ⚠️ CHECKED FOR THE SUBSTRING COLLISION like every label above: "Agent
+ * Settings" contains no shipped label or REPORT_NAMES entry and none contains
+ * it. Typing "agent" offers only this; typing "settings" offers only this.
+ */
+export const AGENT_SETTINGS_LABEL = "Agent Settings";
 
 /**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
@@ -1391,6 +1404,15 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "approval-inbox" });
           return { stack };
         }
+        // AGENT SETTINGS (W2 breadth), before the report fallback for the
+        // same reason.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          AGENT_SETTINGS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "agent-settings" });
+          return { stack };
+        }
         // "Display More Reports" opens the second-level report MENU (Tally's
         // own structure: the Trial Balance and Outstandings live one level in).
         // Checked before the report fallback, which would otherwise push a
@@ -2131,6 +2153,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === PAYROLL_REGISTER_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === FORM_138_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === APPROVAL_INBOX_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === AGENT_SETTINGS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;

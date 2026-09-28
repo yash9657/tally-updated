@@ -59,6 +59,9 @@ type previewRecord struct {
 	Body     json.RawMessage   `json:"body"`
 	Status   int               `json:"status"`
 	Effect   *Effect           `json:"effect,omitempty"`
+	// ReversalOf is set when the preview is actions.reverse's: the voucher
+	// the previewed body cancels.
+	ReversalOf string `json:"reversal_of,omitempty"`
 }
 
 type gateOut struct {
@@ -83,6 +86,8 @@ type execOut struct {
 	Status     int             `json:"status"`
 	OK         bool            `json:"ok"`
 	VoucherIDs []string        `json:"voucher_ids,omitempty"`
+	ObjectKind string          `json:"object_kind,omitempty"`
+	ObjectIDs  []string        `json:"object_ids,omitempty"`
 	Replayed   bool            `json:"replayed,omitempty"`
 	Body       json.RawMessage `json:"body,omitempty"`
 }

@@ -258,9 +258,11 @@ import {
   AGENT_UNCONFIGURED,
   runFinished,
   type AgentApproval,
+  type AgentAutonomyRow,
   type AgentDecisionRequest,
   type AgentEvent,
   type AgentRun,
+  type SetAgentAutonomyRequest,
   type StartAgentRunRequest,
 } from "./agent";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
@@ -1358,6 +1360,9 @@ interface MockCompany {
     address?: string;
     city?: string;
     pincode?: string;
+    /** Born blocked (0095): an agent-created ledger no voucher may post to. */
+    blocked?: boolean;
+    blockedReason?: string;
     /**
      * The company's OWN bank account identity (migration 0064). STORED here for
      * the same reason the address row above is: a mock that accepted them on
@@ -2320,6 +2325,10 @@ export interface MockClientOptions {
     runs?: AgentRun[];
     approvals?: AgentApproval[];
     events?: Record<string, AgentEvent[]>;
+    /** W2 breadth: pre-set autonomy rows. */
+    autonomy?: AgentAutonomyRow[];
+    /** Whether the signed-in member is an Owner (default true). */
+    owner?: boolean;
   };
 }
 
@@ -2330,7 +2339,27 @@ interface MockAgentState {
   approvals: AgentApproval[];
   events: Map<string, AgentEvent[]>;
   decisions: ({ approvalID: string } & AgentDecisionRequest)[];
+  /** W2 breadth: the autonomy table, and whether the caller is an Owner. */
+  autonomy: AgentAutonomyRow[];
+  owner: boolean;
+  /** Set by createMockClientWith: marks one of its ledgers blocked (tests). */
+  blockLedger?: (companyID: string, ledgerID: string, reason: string) => void;
 }
+
+/**
+ * The keys the mock offers for autonomy. A SECOND COPY of the server's
+ * autonomyKeys(), trimmed to the ones a screen test needs; the live client
+ * reads the server's list, which is the authority.
+ */
+const MOCK_AUTONOMY_KEYS = [
+  "alter bank-reconciliation",
+  "alter payment",
+  "create journal",
+  "create master",
+  "create payment",
+  "create receipt",
+  "create sales",
+];
 
 const mockAgentStates = new WeakMap<CoredClient, MockAgentState>();
 
@@ -2373,7 +2402,19 @@ function newMockAgentState(opts: MockClientOptions): MockAgentState {
       Object.entries(opts.agent?.events ?? {}).map(([k, v]) => [k, v.slice()]),
     ),
     decisions: [],
+    autonomy: (opts.agent?.autonomy ?? []).map((r) => ({ ...r })),
+    owner: opts.agent?.owner ?? true,
   };
+}
+
+/**
+ * Mark a mock ledger BORN BLOCKED, as an agent's commit would (tests only):
+ * the mock has no agent loop to create one.
+ */
+export function mockBlockLedger(client: CoredClient, companyID: string, ledgerID: string, reason: string): void {
+  const block = mockAgentStates.get(client)?.blockLedger;
+  if (!block) throw new Error("mockBlockLedger: not a mock client");
+  block(companyID, ledgerID, reason);
 }
 
 /** Construct a fresh in-memory CoredClient. State is isolated per instance. */
@@ -3165,6 +3206,13 @@ function createMockClientWith(
       total: mockUnitsToMoney(total),
     };
   }
+
+  agentState.blockLedger = (companyID, ledgerID, reason) => {
+    const l = ensure(companyID).ledgers.find((x) => x.id === ledgerID);
+    if (!l) throw new Error(`mockBlockLedger: no ledger ${ledgerID}`);
+    l.blocked = true;
+    l.blockedReason = reason;
+  };
 
   function ensure(companyID: string): MockCompany {
     let c = companies.get(companyID);
@@ -4940,6 +4988,8 @@ function normalisedName(v: string): string {
           pincode: l.pincode ?? "",
           is_system: l.isSystem ?? false,
           is_bank: isBankLedger(l),
+          blocked: l.blocked ?? false,
+          ...(l.blocked ? { blocked_reason: l.blockedReason ?? "" } : {}),
         })),
       };
     },
@@ -10712,6 +10762,73 @@ function normalisedName(v: string): string {
       a.state =
         req.decision === "approve" ? "approved" : req.decision === "reject" ? "rejected" : "ask_back";
       return { approval: { ...a } };
+    },
+
+    // ---- W2 breadth ------------------------------------------------------
+    async previewAgentEdit(_companyID: string, approvalID: string, _editedBody: Record<string, unknown>) {
+      // ⚠️ THE MOCK HAS NO HANDLER TO DRY-RUN, so it answers with the approval's
+      // own recorded preview — never an effect computed here (the "no money on
+      // this side" rule). A screen test that needs a refusal seeds one.
+      const a = agentState.approvals.find((x) => x.id === approvalID);
+      if (!a) throw new ApiError(404, "not found");
+      if (a.state !== "pending") {
+        throw new ApiError(409, "this approval has already been decided", { code: "ALREADY_DECIDED" });
+      }
+      return { preview: { status: a.preview?.status ?? 201, effect: a.preview?.effect ?? null } };
+    },
+    async listAgentAutonomy(_companyID: string) {
+      if (!agentState.owner) {
+        throw new ApiError(403, "only an Owner may read or change the agent's autonomy");
+      }
+      return { rows: agentState.autonomy.map((r) => ({ ...r })), default_level: 1, keys: MOCK_AUTONOMY_KEYS.slice() };
+    },
+    async setAgentAutonomy(_companyID: string, req: SetAgentAutonomyRequest) {
+      if (!agentState.owner) {
+        throw new ApiError(403, "only an Owner may read or change the agent's autonomy");
+      }
+      if (!MOCK_AUTONOMY_KEYS.includes(req.acl_key)) {
+        throw new ApiError(422, `agent: invalid request: "${req.acl_key}" is not an action an agent can ever commit`);
+      }
+      if (!Number.isInteger(req.level) || req.level < 0 || req.level > 3) {
+        throw new ApiError(422, "agent: invalid request: level must be 0..3");
+      }
+      const same = (r: AgentAutonomyRow) =>
+        r.acl_key === req.acl_key && (r.user_id ?? "") === (req.user_id ?? "") &&
+        (r.amount_max_paise ?? null) === (req.amount_max_paise ?? null);
+      const now = new Date().toISOString();
+      const existing = agentState.autonomy.find(same);
+      if (existing) {
+        existing.level = req.level;
+        existing.updated_at = now;
+      } else {
+        agentState.autonomy.push({
+          id: `mock-autonomy-${agentState.autonomy.length + 1}`,
+          acl_key: req.acl_key,
+          level: req.level,
+          ...(req.amount_max_paise !== undefined ? { amount_max_paise: req.amount_max_paise } : {}),
+          ...(req.user_id ? { user_id: req.user_id } : {}),
+          set_by: "mock-owner",
+          updated_at: now,
+        });
+      }
+      return { rows: agentState.autonomy.map((r) => ({ ...r })), default_level: 1, keys: MOCK_AUTONOMY_KEYS.slice() };
+    },
+    async verifyAgentRun(_companyID: string, runID: string) {
+      const evs = agentState.events.get(runID) ?? [];
+      return { run_id: runID, events: evs.length, ok: true };
+    },
+    async verifyAgentAnchors(_companyID: string) {
+      return { anchors: 0, ok: true };
+    },
+    async unblockLedger(companyID: string, ledgerID: string) {
+      const l = ensure(companyID).ledgers.find((x) => x.id === ledgerID);
+      if (!l) throw new ApiError(404, "ledger not found");
+      if (!l.blocked) {
+        throw new ApiError(409, "this ledger is not blocked", { code: "NOT_BLOCKED" });
+      }
+      l.blocked = false;
+      l.blockedReason = undefined;
+      return { ledger_id: ledgerID, blocked: false as const };
     },
   };
 }

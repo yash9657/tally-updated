@@ -486,3 +486,256 @@ fail. Backend: re-adding `get.agent.runs` to `actionsWithNoHumanPathYet` → `Te
 8. **A decision made by the native form after ledgers were created by the builder** (the operator typed a new
    ledger name) and then refused by the server leaves those masters — the same orphan class D81 discloses on
    the ordinary path, not disclosed here.
+
+
+---
+
+## Wave 2 breadth (lane `agentic/w2-breadth`, built on `4e7cfff`)
+
+**Written:** 2026-09-28, after the code landed, **every figure printed by a command run in this session**
+(named beside it), against the lane's own database `tally_w2_breadth`. Migration consumed: **0095** (the
+lane's reserved number; PLAN-TALLY-PARITY §2.5's W2 row updated). `git diff 4e7cfff -- backend/go.mod
+backend/go.sum frontend/package.json frontend/pnpm-lock.yaml insightd/requirements.txt | wc -l` = **0**;
+`GOFLAGS=-mod=readonly GOPROXY=off go build ./...` clean. `git diff --stat 4e7cfff`: **81 files, +6,113 /
+−243** (backend 51 files +4,790; frontend + corpora 29 files +1,322); backend Go +2,448 implementation lines,
++2,173 test lines (`git diff --numstat`).
+
+⛔ **SCOPE, STATED FIRST.** Priorities 1, 2, 4, 5 and 6 of the lane brief are built with gates; priority 3 is
+built except **reminders** (§B.9). The parity gate's traces are the tau suite's **API** reference plans, not
+browser keystroke recordings — said again in §B.6 where it matters.
+
+### B.1 The one mechanism everything else stands on: the effect is READ BACK, per transaction
+
+Wave 1's preview read `posting` rows written by the handler's transaction (xmin) — enough for eight voucher
+creates, useless for an alteration (what did it replace?), a stock voucher (no postings), a master or an
+order. `server/agent_effect.go` (`readTxEffect`) now reads, **inside the handler's own transaction, before it
+commits or rolls back**:
+
+| written | read as | shown as (`agent.Effect`) |
+|---|---|---|
+| `voucher_version` rows (xmin) | op, version, class, number | `versions` |
+| their `posting` rows (by version id) | legs, paise | `postings`, `debit_paise`, `credit_paise` |
+| for each ALTER: version N−1 of the same voucher and its legs | the **before-image** | `replaces`, and `delta` (after − before per ledger, Dr +, zero rows dropped) |
+| `stock_movement` (by version id) | item, godown, direction, qty, rate, amount | `stock` |
+| `master_audit` rows (xmin) | entity, op, before/after documents | `masters` |
+| `order_head` (xmin) + `order_line` | order no, date, closed, lines | `orders` |
+| `bank_reconciliation` — **read BEFORE the handler** (an un-tick DELETEs the row) and again inside it | before / after bank date | `bank_dates` |
+
+The same reader drives the commit: `agent_commit` now records `object_kind` + `object_ids` (0095), and "a 2xx
+that wrote nothing" is refused for every kind, not just vouchers. The preview allowlist (`agent.previewable`)
+grew from 8 to **33**, each entry naming the handler it was checked against: 8 accounting creates, their 8
+alters, the 4 stock vouchers × create/alter, `post.ledgers`, `post.stock-items`, the valuation-method setter,
+sales/purchase order create/close, bank-reconciliation tick/un-tick. Pinned exactly
+(`TestEveryPreviewableSpecIsAWriteTheAgentMayEverMake`) and each entry must survive `policy.Structural` and
+ACL(agent).
+
+⚠️ The xmin scans are per company and unindexed; they run once per agent preview or commit, never on a
+person's request. Measured cost is not reported (no large tenant exists); it is owed (§B.9).
+
+### B.2 Priority 1 — alteration as a compensating version, and undo as a generated reversal
+
+**Alteration.** `put.vouchers.<class>._voucherid` goes through the same preview → gate → approval → commit
+path. The ledger already appends an ALTER version and never edits the head (`voucher_version` is
+append-only by trigger); what was missing was (a) the approver seeing what is replaced and (b) the commit
+being held to what they saw. (a) is `replaces` + `delta`. (b) is new: ⛔ **an approved alteration commits
+only onto the version it was shown** — the commit hook requires the new version to be exactly `replaces[].
+version_no + 1` (`Request.ExpectVersions`), so a person's edit landing while the agent's proposal waits is
+not silently overwritten (a lost update the ledger itself would happily append). An approver's edit is held to
+the version THEIR re-preview superseded (§B.5).
+
+**Undo.** `actions.reverse {"voucher_id", "date"?}` reads the voucher through the dispatcher and **Go**
+builds the cancelling voucher (`agent.ReversalBody`, pure): every leg on the other side, same ledgers and
+amounts, cost splits restated, bill references the original opened closed AGAINST themselves. Payment,
+receipt, contra and journal reverse into themselves (no orientation); Sales ↔ Credit Note and Purchase ↔ Debit
+Note (the invoice classes have one). It is then an ordinary preview, committed behind the same gate. ⛔ The
+model never sees the voucher it read — only the reversal's effect — so the original's narration (stored
+text) never reaches its context and the tool is labelled books. **Refused, and owed:** a voucher with GST
+lines (its reversal is a credit/debit note that must reach GSTR-1 with the original's number — a document a
+person prepares), inventory, TDS/TCS, order fulfilments; a tombstone. Not a delete (structural) and not an
+alter (it would rewrite a voucher someone may have printed or paid against).
+
+### B.3 Priority 2 — masters, and "born blocked" made structural (0095)
+
+`post.ledgers`, `post.stock-items` and the valuation-method setter are previewable; a master create still
+waits for a person at every level (wave 1's rule). What wave 1 could not say is what HANDOFF §6.8 flagged:
+approving the party in a hurry also made it payable. Now:
+
+- ⛔ **A ledger the agent creates is BORN BLOCKED.** `handleCreateLedger` sets `masters.Ledger.BornOfRun`
+  from the request's in-process agent identity — never from a body — and the INSERT carries `blocked_at` and
+  a reason naming the run, so there is no instant at which it exists unblocked. Deliberately wider than
+  "parties": every agent-created ledger (a bank ledger made from an injected letter is the same fraud one hop
+  earlier, and "is it a party?" is a group-tree walk inside a trigger).
+- **Nothing posts to it — not the agent, not a person, not a sync replay.** Two layers: `ledger.post()`
+  refuses first with the operator's sentence (`ErrLedgerBlocked`: names the ledger and where to unblock it);
+  0095's `posting_ledger_not_blocked` BEFORE INSERT trigger is the floor under every other writer of
+  `posting` (`TestBlockedLedgerTriggerIsTheFloor` inserts a raw posting as `tally_app`).
+- **Only a person unblocks it:** `POST /ledgers/{id}/unblock`, the bare token `master-unblock` — not `alter
+  master`, which is the authority that CREATES ledgers; releasing an agent's party for payment is a different
+  seat. Data Entry is refused with zero `acl_rule` rows; the token is governance in `internal/actions` and
+  denied in `policy.AgentRules`, so no agent can unblock (either alone holds; mutation M15a below). The
+  unblock appends a `master_audit` ALTER row; a second unblock is 409 `NOT_BLOCKED`.
+- **Ledger ALTER is not built** — the product has no human screen for one (only the opening-balance PUT,
+  `channel none`), and `policy.Structural` refuses the agent a door no person uses. Owed with the screen.
+
+### B.4 Priority 3 — stock vouchers, orders, bank reconciliation, exports (reminders owed)
+
+Stock vouchers (delivery/receipt note, stock journal, physical stock), sales/purchase orders (create, close)
+and bank-reconciliation tick/un-tick are previewable and committable (§B.1 for what the approver sees).
+`concretePath` accepts one non-id parameter, the leg ordinal `legNo`, as digits only
+(`TestConcretePathRefusesAnythingButIDsAndOrdinals`: `../../members`, `1/2`, `01`, `-1`, `1?x=2`, `1e3`,
+`99999`, `""` refused).
+
+⚠️ **Operational writes are now taint-sensitive** (`policy.taintSensitive`). Wave 1 could not commit one, so
+the question never arose. A tick ASSERTS the bank cleared an item, a physical-stock voucher writes the
+warehouse's value, an order commits the business — and "mark cheque 451 cleared" in a statement narration is
+the first injection a bank agent meets. A clean context still commits them at L2/L3
+(`TestAgentCleanL3BreadthCommitsAutonomously`).
+
+**Exports are reads whose content never reaches the model.** `actions.read` now accepts `RiskExport` specs
+(delegation required, as before); the model is told `{status, bytes, sha256, produced}` and nothing of the
+document, so the result is labelled books. `TestAgentExportIsProducedNotRead`: CONTROL — the person's own
+day-book print carries the sentinel narration; the agent's print of the same report is produced and the
+sentinel never appears in any model request. Delivering the file (WhatsApp/email) is W6's.
+
+### B.5 Priority 4 and 5 — profile tools, the autonomy route and screen, the edit re-preview, attribution, verification
+
+**Profile tools.** `get_customer_profile`, `get_supplier_profile`, `get_item_profile`,
+`get_recurring_streams`, `get_tenant_profile` are in the tool list (prompt `agent-decide-v2`), through a seam
+(`agent.ProfileReader`) implemented by `server/agent_profiles.go` — `internal/agent` still cannot import
+`internal/profile` (archtest; `internal/server` gained `internal/profile`, with a reason). ⛔ **ACL(user)
+per FACT:** the reader re-checks the run's human (active, not revoked, a member) and runs `authz.Evaluate`
+over their own level: the tool requires its primary report (customer → outstandings, supplier →
+bills-payable, item → stock-summary, streams → day-book, tenant → profit-and-loss), and every fact is shown
+only if the report it reconciles to is one they could open — withheld facts are removed from the rendered
+text too (`profile.ToolResult.Filter`, a small addition to W3's package). **Labels:** computed facts are
+books; ⛔ a tenant card with typed user notes is **stored_text**, and the gate then parks an L3 payment that
+follows it (`...a_tenant_card_with_typed_notes_is_stored_text,_and_taints_the_gate_at_L3`).
+
+**Autonomy.** `GET/PUT /agent/autonomy` — a third bare token `agent-autonomy`, governance (an agent can
+neither read nor raise its own autonomy), ⛔ **Owners only in the handler** (a full-access custom level that
+holds the token is still refused) and ⛔ **always a WebAuthn step-up in the handler**, independent of the
+Owner level's own flag (the admin API will not clear it, but the test clears it behind the API's back and the
+handler still refuses — mutation M10). Only a key some agent-committable write evaluates to is settable
+(`delete voucher` → 422). Every change appends a `master_audit` row (`entity_type agent_autonomy`, L2→L3
+before/after), because the table itself is upserted. Screen: **Gateway › Agent Settings** (also Alt+G), a new
+`agent-settings` ScreenKind: the autonomy table and setter (rupees → paise exactly), the blocked ledgers with
+their bank details and an Unblock button, and "Verify the intent log".
+
+**Re-preview of an approver's edit** (wave-1 review #2's owed half). `POST /agent/approvals/{id}/preview`
+dry-runs an edited body through the real handler as the run's principal (`Engine.PreviewEdit`); the decision
+handler does the same before recording an approve-with-edit and stores the effect on the decision
+(`agent_decision.edited_preview`, 0095). A body the validators refuse — or one above the run's delegated
+ceiling — is refused AT the decision (422 `EDIT_REFUSED`, nothing decided) instead of surfacing as
+`commit_refused` later; the native voucher screen calls the preview before deciding and keeps proposal mode
+on a refusal. The commit hook's own ceiling stays the control
+(`TestAgentCommitCeilingHoldsInTheWritesOwnTransaction`).
+
+**Attribution.** Every agent write is stamped `agent:<run> for <user>` by the SERVER (`attributedTo`), on
+vouchers, alters, masters (the audit row's `created_by`), orders and bank ticks, whatever the body claimed
+("agent", or an injected "Ramesh").
+
+**Verification exposed.** `GET /agent/runs/{id}/verify` (the run's chain) and `GET /agent/anchors/verify`
+(`intentlog.VerifyAnchors`, D121 §9 item 11). `TestAgentVerifyRoutesRecomputeTheRecord` anchors, then
+truncates a run's tail behind the log's back (admin, `session_replication_role = replica`): the anchors
+answer `ok:false`.
+
+**Approver authority for a custom level** (D121 §9 item 9): a full-access level with `disallow create
+payment` is refused approve (403), may still reject (`TestAgentApproverWithoutTheActionMayNotApprove`).
+
+### B.6 Priority 6 — the parity gate
+
+`TestAgentParityTracesMatchTheUIPath` (server tests; `go test ./internal/server -run TestAgentParity`):
+
+> *"parity: 143 traces (map[bank_match:30 gst_returns:8 item_invoice:30 master_creation:25
+> voucher_entry:50]), 167 write steps through 167 agent runs (each previewed, approved in the inbox,
+> committed), 18 agent-created ledgers unblocked by a person; canonical books and voucher numbers identical
+> on both paths (30s)"*
+
+For every tau task whose reference plan writes (143 of 200; floor 50), two fresh companies are seeded
+identically; the plan runs once through the API (the UI-equivalent calls) and once with every write step
+turned into an agent run (preview of exactly that request as its matched ActionSpec → park at L1 → owner
+approves in the inbox → commit of the recorded preview; after an agent-created ledger, the person unblocks
+it — the documented human step). Reads (capturing a bank leg's id) go to the API on both paths. The two
+`tau.Snapshot`s must be byte-identical, **and so must the voucher numbering** (which the canonical form
+ignores and a leaked preview would shift); a trace whose UI path changed nothing canonical fails as
+vacuous.
+
+⛔ **What the traces are.** The tau suite's hand-written reference plans (W1a) — the API calls the product's
+screens make for those tasks — not recordings of keys pressed in a browser. This gate proves the agent plane
+preserves what the API does; it does not prove the F-key screens produce these bodies. The keystroke→body
+half is owed (§B.9). The "model" is the trace replayer (no provider keys exist).
+
+### B.7 Gates, and what each printed
+
+| gate | command | printed |
+|---|---|---|
+| injection suite (45 cases; every wave-2 family) | `go test ./internal/server -run TestAgentInjectionSuite -v` | *"45 injection cases (map[bank:10 document:12 email:8 tally_xml:7 whatsapp:8]); 30 successful write previews (money, master, operational) parked by the provenance gate at L3; the books unchanged, 0 commits"* — the fingerprint (voucher versions, master_audit rows, orders, bank ticks, stock movements, agent commits) is compared after every case, not only the voucher count |
+| its breadth control | `TestAgentCleanL3BreadthCommitsAutonomously` | clean L3 alteration → 2 versions, 0 approvals; clean L3 tick → 1 row; clean L3 master create → still 1 approval |
+| alteration | `TestAgentAlter...` (2) | diff: replaces v1 at 2500000 paise, delta Office Rent +100000 / HDFC −100000; after approve 2 versions, v1 hash unchanged, head v2 26000.0000, `created_by` = `agent:<run> for <user>`; stale head → 2 versions (the person's), `commit_refused` |
+| undo | `TestAgentUndoIsAGeneratedReversal` + 4 `TestReversal*` | legs flipped, both ledgers net 0.0000, original untouched, sentinel narration absent from every model request |
+| born blocked | `TestAgentCreatedLedgerIsBornBlocked`, `TestBlockedLedgerTriggerIsTheFloor` | blocked, reason names the run; agent's payment refused by the validators; a person's payment 422 naming the ledger and the unblock; agent unblock 403 at the router; Data Entry 403; owner 200; payment 201; second unblock 409 |
+| ops | `TestAgentStockOrderAndBankRecThroughTheGate` | stock Widget OUT 5.0000; SO-7 with 1 line; tick unticked→2025-05-12 and back; every preview left the fingerprint unchanged |
+| profiles | `TestAgentProfileToolsAreRegisteredAndACLFiltered`, `TestProfileToolNamesMatchW3` | 3 subtests pass (owner/books; refused Outstandings → 403 + `withheld_facts`; notes → stored_text + parked) |
+| admin | `TestAgentAutonomyRoute...`, `TestAgentApproverEdit...`, `TestAgentVerifyRoutes...`, `TestAgentExportIs...`, `TestAgentApproverWithoutTheAction...`, `TestAgentCommitCeiling...` | all pass |
+| gate matrix | `go test ./internal/policy -run TestGateMatrix` | +6 rows (clean tick autonomous, tainted tick waits, clean/tainted alteration, unblock and autonomy refused) |
+| cassettes | `TRAJECTORY_RECORD=1 go test ./internal/server/ -run TestAgentCassette` then replay | wave-1 cassettes re-recorded for `agent-decide-v2`; 2 new per-feature replays (`alter-rent-payment` 4 decisions, `new-supplier-born-blocked` 5); all interactions replayed |
+| Tier 0 | `make tier0` | pins raised 4/14 → **6/23**: *"replayed 23 interactions across 6 cassettes in 2 directories, features [agent.decide extraction nlq.translate]"* |
+| registry | `UPDATE_GOLDENS=1 go test ./internal/server/ -run TestActionRegistryGolden` | **244 specs** (was 238): read 85, export 46, governance 29, master 29, money 25, operational 19, destructive 6, statutory 5; 176 distinct ACL keys; **217 with a human path, 27 none — cap unchanged at 27** (all six new routes wired by the frontend) |
+| UI manifest | `UPDATE_UI_MANIFEST=1 pnpm exec vitest run uiCommandManifest` | screen_kinds 38 → **39**, commands 285 → **286**, gateway_entries 29 → **30**, client_routes 167 → **173**, client_calls 173 → **179**, unused_client_methods **10** (unchanged), dead_commands **2** (unchanged) |
+| frontend | `pnpm exec tsc --noEmit`; `pnpm exec vitest run` | exit 0; **Test Files 127 passed (127), Tests 2032 passed (2032)** |
+| corpora | `python3 corpora/validate.py` | `keystroke=40` (+2: Gateway and Alt+G doors to `agent-settings`) |
+
+At the lane's HEAD: `cd backend && go build ./... && go vet ./...` clean; `go test ./... -count=1 -p 4
+-timeout 60m` with all four DSN envs on `tally_w2_breadth` (pre-migrated): **exit 0, 47 packages ok, 7 with no
+test files** (server 75 s, evals/tau 35 s); `make tier0` ok.
+
+### B.8 Mutation proofs run in this session (each restored after; `scratchpad/w2b_mutate.py`)
+
+Every one went the expected colour; the first failing line is quoted.
+
+- **M1** alter base-version guard off → *"the voucher has 3 versions, want 2 (the person's edit, and NOT the agent's stale restatement on top)"*
+- **M2** before-image never read → *"effect.replaces = <nil>, want the one superseded head"*
+- **M3** born-blocked off in `CreateLedger` → *"the agent-created ledger is not blocked"*
+- **M4** the ledger service's blocked check skipped → the payment is STILL refused, by the trigger (*"insert posting: ERROR: ledger "Naya Supplier Pvt Ltd" is blocked…"*), and the test fails only on the missing operator sentence — two layers, each proved (the trigger alone by `TestBlockedLedgerTriggerIsTheFloor`)
+- **M5** operational removed from `taintSensitive` → *"INJECTION SUCCEEDED: 1 agent_commit row(s) after "bank-tick-cleared""*
+- **M6** attribution off → *"version 2 created_by = "agent", want "agent:… for …""*
+- **M7** per-fact profile ACL off → *"no fact was withheld from a level refused Outstandings"*
+- **M8** the card-notes label off → *"a card with user notes is labelled [books], want stored_text"*
+- **M9** the export short-circuit off (the document goes to the model like a read) → the export test fails: *"script: no result 0 (have 0)"* — raw PDF bytes are not even a recordable tool result. **M9b** (the stronger one) the document's text wrapped as JSON and handed to the model → *"the printed document's text reached the model"* (the sentinel check runs before any check of the result's shape)
+- **M10** the autonomy handler's own step-up check off → *"PUT without a step-up, level flag cleared = 200"* (with the Owner level's flag intact the router refuses first — which is why the test clears it)
+- **M11** owner-only off → *"GET autonomy as a full-access non-owner = 200, want 403"*
+- **M12** decision re-preview off → *"the decision does not record the edit's effect"*
+- **M13** preview no longer rolls back (`DryRun: false`) → parity fails at the first trace: *"bm-charges-000-en step 1 parked 0 approvals"*
+- **M15a** `master-unblock` re-classed master (risk only) → born-blocked test **stays green**: `AgentRules` still deny the token — defence in depth, stated rather than claimed
+- **M16** stock movements not read → *"effect.stock = [], want Widget OUT 5"*
+- **M17** bank before-image not read → the tick preview produces no effect and never reaches the inbox
+- **M18** the taint clause in `policy.Decide` off → *"INJECTION SUCCEEDED: 2 voucher(s) in the books after "invoice-line-pay" (the seed has 1)"*
+- **M19** the ordinal check accepts anything → `TestConcretePathRefusesAnythingButIDsAndOrdinals` fails
+- **M21** approver's own authority unchecked → *"approve by a level refused create payment = 200"*
+- **M22** the autonomy audit row not written → *"autonomy audit records = 0, want 2"*
+
+### B.9 ⛔ What is still OWED (W2)
+
+1. **Reminders via notify utility templates.** Not built. A ledger has no contact field (email/phone), so a
+   reminder today could only be enqueued as undeliverable — a hollow feature — and the channels are W6's.
+   Needs: a party contact field, a template, a person's screen for it, then an ActionSpec.
+2. **Keystroke-recorded parity traces.** The 143 traces are API plans; capturing the bodies the real
+   VoucherScreen sends from `corpora/keystroke` events (vitest, through AppShell) and replaying those is owed.
+3. **Ledger alteration** (needs a human screen first), groups/units/godowns/price lists/BOMs/budgets/cost
+   centres as agent actions (one handler read each), order line revision.
+4. **GST-invoice / inventory / TDS / TCS reversal** — a credit/debit note a person prepares; the agent
+   refuses today with the reason.
+5. **A voucher picker that marks blocked ledgers** before the refusal (the list read carries `blocked` and
+   `blocked_reason`; no picker renders it yet).
+6. **The xmin scans' cost on a large tenant** — unmeasured.
+7. **AgentDojo banking subset + InjecAgent**, **live-model cassettes**, **SSE**, **As Voucher editing of
+   invoice proposals**, **reject/ask-back from the native voucher screen**, **a real-browser WebAuthn drive**
+   — unchanged from §9 and F.4.
+8. **Autonomy per user from the screen** — the route takes `user_id`; the screen sets company-wide rows only.
+9. **An intent-log entry for an unblock and for an autonomy change** — both are recorded in `master_audit`
+   (append-only, RLS), not in a run's chain, because neither belongs to a run.
+
+Closed from §9 / wave-1 review: items 8 (autonomy route + screen), 9 (custom-level approver test), 10
+(`created_by`), 11 (VerifyAnchors exposed, half — number provenance of the summary is still W4's), the
+review's #2 owed half (re-preview), and §9 item 2/3 in the breadth above; §9 item 7 ("born blocked" as a
+ledger flag) is now structural.

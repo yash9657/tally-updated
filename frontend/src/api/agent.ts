@@ -137,12 +137,89 @@ export interface AgentPosting {
   amount_paise: number;
 }
 
-/** The ledger-effect diff (agent.Effect). Totals are paise, computed by Go. */
+/**
+ * The effect diff (agent.Effect). Totals are paise, computed by Go.
+ *
+ * `postings` are the legs THIS write posts (for an alteration: the new
+ * version's). The optional sections are W2 breadth (D121 "Wave 2 breadth"):
+ * every one is read back from what the server's real handler wrote inside the
+ * transaction it then rolled back — never from the proposed body.
+ */
 export interface AgentEffect {
   postings: AgentPosting[];
   debit_paise: number;
   credit_paise: number;
   vouchers: number;
+  /** Every voucher version the write appended (op CREATE or ALTER). */
+  versions?: AgentVersionWritten[];
+  /** For an ALTER: the head it supersedes — the "before" of the diff. */
+  replaces?: AgentVersionRef[];
+  /** For an ALTER: net change per ledger, after − before, Dr positive. */
+  delta?: AgentLedgerDelta[];
+  /** Stock movements (stock vouchers, item invoices). */
+  stock?: AgentStockMove[];
+  /** master_audit rows: what a master create/alter changed, in the audit's words. */
+  masters?: AgentMasterChange[];
+  /** Order heads created or changed. */
+  orders?: AgentOrderChange[];
+  /** Bank-reconciliation ticks set or cleared. */
+  bank_dates?: AgentBankDateChange[];
+}
+
+export interface AgentVersionWritten {
+  voucher_id: string;
+  version_no: number;
+  op: "CREATE" | "ALTER" | string;
+  class: string;
+  voucher_no?: string;
+  date?: string;
+}
+export interface AgentVersionRef {
+  voucher_id: string;
+  version_no: number;
+  postings: AgentPosting[];
+  debit_paise: number;
+  credit_paise: number;
+}
+export interface AgentLedgerDelta {
+  ledger_id: string;
+  ledger: string;
+  before_paise: number;
+  after_paise: number;
+  change_paise: number;
+}
+export interface AgentStockMove {
+  voucher_id: string;
+  line_no: number;
+  item: string;
+  godown?: string;
+  direction: "IN" | "OUT" | string;
+  qty: string;
+  rate: string;
+  amount: string;
+}
+export interface AgentMasterChange {
+  entity: string;
+  entity_id: string;
+  op: "CREATE" | "ALTER" | string;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+}
+export interface AgentOrderChange {
+  order_id: string;
+  direction: string;
+  order_no: string;
+  date: string;
+  closed: boolean;
+  lines?: { line_no: number; item: string; qty: string; rate: string }[];
+}
+export interface AgentBankDateChange {
+  voucher_id: string;
+  ledger_id: string;
+  leg_no: number;
+  /** Absent = not ticked. */
+  before?: string;
+  after?: string;
 }
 
 /** The voucher body the agent proposed (the preview's recorded args). */
@@ -170,6 +247,58 @@ export interface AgentDecisionView {
   decided_by?: string;
   decided_webauthn: boolean;
   decided_at: string;
+  /** The approver's edit, previewed by the real handler at the decision (0095). */
+  edited_preview?: AgentEditPreview;
+}
+
+/** The dry run of an approver's edited body (agent.EditedPreview). */
+export interface AgentEditPreview {
+  status: number;
+  effect?: AgentEffect | null;
+}
+export interface AgentEditPreviewResponse {
+  preview: AgentEditPreview;
+}
+
+/** One autonomy row (policy.AutonomyRow). No row for a key = the default level. */
+export interface AgentAutonomyRow {
+  id: string;
+  /** Absent = the whole company. */
+  user_id?: string;
+  acl_key: string;
+  /** Absent = any amount. */
+  amount_max_paise?: number;
+  /** 0 may not propose; 1 every commit waits; 2/3 commit within the band on a clean context. */
+  level: 0 | 1 | 2 | 3 | number;
+  set_by: string;
+  updated_at: string;
+}
+export interface AgentAutonomyResponse {
+  rows: AgentAutonomyRow[];
+  default_level: number;
+  /** Every ACL key an agent could ever commit under — the settable ones. */
+  keys: string[];
+}
+export interface SetAgentAutonomyRequest {
+  acl_key: string;
+  level: number;
+  amount_max_paise?: number;
+  user_id?: string;
+}
+export interface AgentVerifyRunResponse {
+  run_id: string;
+  events: number;
+  ok: boolean;
+  error?: string;
+}
+export interface AgentVerifyAnchorsResponse {
+  anchors: number;
+  ok: boolean;
+  error?: string;
+}
+export interface UnblockLedgerResponse {
+  ledger_id: string;
+  blocked: false;
 }
 
 /** An approval-inbox row (agent.Approval). */
@@ -257,8 +386,21 @@ export const AGENT_UNCONFIGURED = "AGENT_UNCONFIGURED";
  */
 export function approvalEffect(a: AgentApproval): AgentEffect | null {
   const e = a.preview?.effect;
-  if (!e || !Array.isArray(e.postings) || e.postings.length === 0) return null;
-  return e;
+  return effectOrNull(e);
+}
+
+/**
+ * An effect with something in it, or null. A master, an order, a stock voucher
+ * or a bank tick posts no legs (W2 breadth), so "has postings" is no longer the
+ * test of "has a diff" — any section the server read back counts.
+ */
+export function effectOrNull(e: AgentEffect | null | undefined): AgentEffect | null {
+  if (!e) return null;
+  const n = (x: unknown[] | undefined | null) => (Array.isArray(x) ? x.length : 0);
+  const any =
+    n(e.postings) + n(e.stock) + n(e.masters) + n(e.orders) + n(e.bank_dates) > 0;
+  if (!any) return null;
+  return { ...e, postings: Array.isArray(e.postings) ? e.postings : [] };
 }
 
 /** Format integer paise as a rupee string with two decimals. Display only. */
@@ -306,7 +448,9 @@ export function describeAgentEvent(ev: AgentEvent): string {
       return `Human decision: ${s("decision")}${d["edited"] === true ? " (edited)" : ""}`;
     case "commit": {
       const replayed = d["replayed"] === true ? " (replayed)" : "";
-      return `Committed ${ev.action_id ?? ""} → ${n("status") ?? "?"}${replayed}`;
+      const kind = s("object_kind");
+      const what = kind && kind !== "voucher" ? ` [${kind.replace("_", " ")}]` : "";
+      return `Committed ${ev.action_id ?? ""}${what} → ${n("status") ?? "?"}${replayed}`;
     }
     case "commit_refused":
       return `Commit REFUSED for ${ev.action_id ?? ""} (${n("status") ?? s("reason") ?? "?"})`;

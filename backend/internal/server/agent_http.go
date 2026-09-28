@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -114,6 +115,13 @@ func (s *Server) agentRoutes(r chi.Router) {
 	r.Get("/agent/approvals", s.handleAgentListApprovals)
 	r.Get("/agent/approvals/{approvalID}", s.handleAgentGetApproval)
 	r.Post("/agent/approvals/{approvalID}/decision", s.handleAgentDecide)
+	// W2 breadth (D121 "Wave 2 breadth"): re-preview an approver's edit, the
+	// autonomy table, and the intent log's verification.
+	r.Post("/agent/approvals/{approvalID}/preview", s.handleAgentPreviewEdit)
+	r.Get("/agent/autonomy", s.handleAgentListAutonomy)
+	r.Put("/agent/autonomy", s.handleAgentSetAutonomy)
+	r.Get("/agent/runs/{runID}/verify", s.handleAgentVerifyRun)
+	r.Get("/agent/anchors/verify", s.handleAgentVerifyAnchors)
 }
 
 func (s *Server) agentScope(w http.ResponseWriter, r *http.Request) (context.Context, uuid.UUID, uuid.UUID, bool) {
@@ -421,8 +429,26 @@ func (s *Server) handleAgentDecide(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// ⛔ AN EDIT IS PREVIEWED BEFORE IT IS APPROVED (agent/edit.go). Only for a
+	// still-pending approval: a decided one is answered 409 by Decide below,
+	// and previewing it would be work for a refusal.
+	var editPreview *agent.EditedPreview
+	if req.Decision == "approve" && len(req.EditedBody) > 0 && a.Decision == nil {
+		ep, err := s.agent.PreviewEdit(ctx, companyID, id, req.EditedBody)
+		var refused *agent.ErrEditRefused
+		switch {
+		case errors.As(err, &refused):
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": refused.Message, "code": "EDIT_REFUSED",
+				"preview": ep})
+			return
+		case err != nil:
+			writeAgentErr(w, err)
+			return
+		}
+		editPreview = &ep
+	}
 	out, err := s.agent.Decide(ctx, companyID, id, agent.DecisionInput{Decision: req.Decision, EditedBody: req.EditedBody,
-		Note: req.Note, DecidedBy: userID, WebAuthn: stepUpFrom(ctx)})
+		Note: req.Note, DecidedBy: userID, WebAuthn: stepUpFrom(ctx), EditedPreview: editPreview})
 	switch {
 	case errors.Is(err, agent.ErrAlreadyDecided):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "this approval has already been decided", "code": "ALREADY_DECIDED", "approval": out})
@@ -477,4 +503,223 @@ func hexEncode(b []byte) string {
 		out[i*2], out[i*2+1] = hexd[c>>4], hexd[c&0x0f]
 	}
 	return string(out)
+}
+
+// ---------------------------------------------------------------------------
+// W2 breadth: the edit re-preview, the autonomy table, verification
+// ---------------------------------------------------------------------------
+
+type agentPreviewEditReq struct {
+	EditedBody json.RawMessage `json:"edited_body"`
+}
+
+// handleAgentPreviewEdit dry-runs an approver's edited body against the
+// approval's action — the effect the approver will be approving, drawn by the
+// real handler — without deciding anything. `alter agent-approval`: it is
+// part of deciding, and the approver must be able to take the action
+// themselves (the same userMayTake the approve is held to).
+//
+// → 200 {"preview": {status, effect}}; 422 {"error", "code":"EDIT_REFUSED",
+// "preview"} when the validators refuse it; 409 when already decided.
+func (s *Server) handleAgentPreviewEdit(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, userID, ok := s.agentScope(w, r)
+	if !ok {
+		return
+	}
+	if agentCallFrom(ctx) != nil {
+		writeError(w, http.StatusForbidden, "an agent may not preview an approval's edit")
+		return
+	}
+	id, ok := pathUUID(w, r, "approvalID", "approval id")
+	if !ok {
+		return
+	}
+	var req agentPreviewEditReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	a, err := s.agent.GetApproval(ctx, companyID, id)
+	if err != nil {
+		writeAgentErr(w, err)
+		return
+	}
+	if a.Decision != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "this approval has already been decided", "code": "ALREADY_DECIDED"})
+		return
+	}
+	if reason, allowed := s.userMayTake(ctx, companyID, userID, a.ActionID, req.EditedBody); !allowed {
+		writeError(w, http.StatusForbidden, "you may not preview an action you may not take yourself: "+reason)
+		return
+	}
+	ep, err := s.agent.PreviewEdit(ctx, companyID, id, req.EditedBody)
+	var refused *agent.ErrEditRefused
+	switch {
+	case errors.As(err, &refused):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": refused.Message, "code": "EDIT_REFUSED", "preview": ep})
+	case err != nil:
+		writeAgentErr(w, err)
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"preview": ep})
+	}
+}
+
+// ownerOnly refuses a request unless its caller is a person whose level in
+// this company is the Owner level.
+//
+// ⛔ THE TOKEN IS NOT ENOUGH FOR THE AUTONOMY TABLE. `agent-autonomy` is a
+// bare token, so only an Owner holds it by default — but an owner can grant
+// any token to a custom level, and "which commits need no human" is the one
+// setting a delegated administrator should never be handed by a rule edit. So
+// the handler asks the level itself.
+func (s *Server) ownerOnly(w http.ResponseWriter, r *http.Request, companyID, userID uuid.UUID) bool {
+	if agentCallFrom(r.Context()) != nil {
+		writeError(w, http.StatusForbidden, "an agent may not read or change the autonomy table")
+		return false
+	}
+	levelID, member, err := s.authStore.Membership(r.Context(), userID, companyID)
+	if err != nil || !member {
+		writeError(w, http.StatusForbidden, "not a member of this company")
+		return false
+	}
+	level, err := s.authStore.Level(r.Context(), companyID, levelID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load level")
+		return false
+	}
+	if !level.IsOwner {
+		writeError(w, http.StatusForbidden, "only an Owner may read or change the agent's autonomy")
+		return false
+	}
+	return true
+}
+
+// handleAgentListAutonomy → 200 {"rows": [AutonomyRow], "default_level": 1,
+// "keys": [every ACL key a level can be set on]}.
+func (s *Server) handleAgentListAutonomy(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, userID, ok := s.agentScope(w, r)
+	if !ok {
+		return
+	}
+	if !s.ownerOnly(w, r, companyID, userID) {
+		return
+	}
+	rows, err := s.agent.ListAutonomy(ctx, companyID)
+	if err != nil {
+		writeAgentErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "default_level": int(policy.DefaultLevel),
+		"keys": autonomyKeys()})
+}
+
+// autonomyKeys is every ACL key an agent could commit under — the keys the
+// settings screen offers. Sorted, deduplicated.
+func autonomyKeys() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range actions.Specs {
+		if !s.IsWrite || policy.Structural(s) != nil || seen[s.ACLKey] {
+			continue
+		}
+		seen[s.ACLKey] = true
+		out = append(out, s.ACLKey)
+	}
+	sort.Strings(out)
+	return out
+}
+
+type agentSetAutonomyReq struct {
+	UserID         string `json:"user_id"`
+	ACLKey         string `json:"acl_key"`
+	AmountMaxPaise *int64 `json:"amount_max_paise"`
+	Level          *int   `json:"level"`
+}
+
+// handleAgentSetAutonomy upserts one row. Owners only, and ⛔ ALWAYS WITH A
+// WebAuthn STEP-UP, whatever the Owner level's own RequiresWebAuthn says:
+// raising a level is the act that removes the human from a class of commits,
+// so it needs the one factor a stolen session token does not carry.
+// → 200 {"rows": [...]}; 403 STEPUP_REQUIRED without a step-up; 422 invalid.
+func (s *Server) handleAgentSetAutonomy(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, userID, ok := s.agentScope(w, r)
+	if !ok {
+		return
+	}
+	if !s.ownerOnly(w, r, companyID, userID) {
+		return
+	}
+	if !stepUpFrom(ctx) {
+		stepUpRequired(w)
+		return
+	}
+	var req agentSetAutonomyReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Level == nil {
+		writeError(w, http.StatusUnprocessableEntity, "level is required (0-3)")
+		return
+	}
+	in := agent.AutonomyInput{ACLKey: req.ACLKey, AmountMaxPaise: req.AmountMaxPaise, Level: policy.Level(*req.Level), SetBy: userID}
+	if req.UserID != "" {
+		uid, err := uuid.Parse(req.UserID)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "user_id must be a uuid, or empty for the whole company")
+			return
+		}
+		if _, member, err := s.authStore.Membership(ctx, uid, companyID); err != nil || !member {
+			writeError(w, http.StatusUnprocessableEntity, "user_id is not a member of this company")
+			return
+		}
+		in.UserID = uid
+	}
+	if err := s.agent.SetAutonomy(ctx, companyID, in); err != nil {
+		writeAgentErr(w, err)
+		return
+	}
+	rows, err := s.agent.ListAutonomy(ctx, companyID)
+	if err != nil {
+		writeAgentErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows, "default_level": int(policy.DefaultLevel), "keys": autonomyKeys()})
+}
+
+// handleAgentVerifyRun recomputes one run's intent chain.
+// → 200 {"run_id", "events": n, "ok": true} or {"ok": false, "error": "..."}.
+func (s *Server) handleAgentVerifyRun(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, _, ok := s.agentScope(w, r)
+	if !ok {
+		return
+	}
+	runID, ok := pathUUID(w, r, "runID", "run id")
+	if !ok {
+		return
+	}
+	if _, err := s.agent.GetRun(ctx, companyID, runID); err != nil {
+		writeAgentErr(w, err)
+		return
+	}
+	n, err := s.agent.VerifyRun(ctx, companyID, runID)
+	out := map[string]any{"run_id": runID, "events": n, "ok": err == nil}
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleAgentVerifyAnchors recomputes every intent-log anchor of the company
+// (D121 §9 item 11: VerifyAnchors existed and nothing called it).
+// → 200 {"anchors": n, "ok": true} or {"ok": false, "error": "..."}.
+func (s *Server) handleAgentVerifyAnchors(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, _, ok := s.agentScope(w, r)
+	if !ok {
+		return
+	}
+	n, err := s.agent.VerifyAnchors(ctx, companyID)
+	out := map[string]any{"anchors": n, "ok": err == nil}
+	if err != nil {
+		out["error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
 }

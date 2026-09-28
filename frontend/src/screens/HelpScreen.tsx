@@ -91,6 +91,8 @@ function screenLabel(screen: NavSnapshot["screen"] | undefined): string {
       return "Ask your books";
     case "approval-inbox":
       return "the Approval Inbox";
+    case "agent-settings":
+      return "Agent Settings";
     case undefined:
       return "the Gateway";
     default:

@@ -706,6 +706,8 @@ describe("W2 — the agent reads Part built, and names its three gaps", () => {
     const note = noteFor(ROW);
     expect(note).toMatch(/LLM_PROVIDER unset/);
     expect(note).toMatch(/'As Voucher' mode is not built/);
-    expect(note).toMatch(/only the eight accounting voucher creates/);
+    expect(note).toMatch(/BORN BLOCKED until a person unblocks it/);
+    expect(note).toMatch(/not ledger alterations/);
+    expect(note).toMatch(/Gateway > Agent Settings \(also Alt\+G\)/);
   });
 });

@@ -15,16 +15,16 @@ package actions
 // Source records which inputs actually contributed to this build. See
 // Provenance for why a partial build must be visible rather than silent.
 var Source = Provenance{
-	RouteArms:         238,
+	RouteArms:         244,
 	UICommandsJoined:  0,
-	ClientCallsJoined: 170,
+	ClientCallsJoined: 176,
 	ClientCallsUnused: 10,
 	UIManifestPresent: true,
 	UIManifestPath:    "frontend/src/api/goldens/ui-commands.json",
 }
 
 // Specs is every governable operation the company-scoped HTTP surface mounts.
-// 238 rows, 173 distinct ACL keys: alter=36, create=56, delete=6, display=94, print=46.
+// 244 rows, 176 distinct ACL keys: alter=39, create=56, delete=6, display=97, print=46.
 var Specs = []ActionSpec{
 	{
 		ID:             "delete.bank-reconciliation._ledgerid._voucherid._legno",
@@ -166,6 +166,20 @@ var Specs = []ActionSpec{
 		Label:          "display company (GET /v1/companies/{companyID}/)",
 	},
 	{
+		ID:             "get.agent.anchors.verify",
+		Method:         "GET",
+		Route:          "/v1/companies/{companyID}/agent/anchors/verify",
+		Action:         "display",
+		Resource:       "agent-run",
+		ACLKey:         "display agent-run",
+		IsWrite:        false,
+		StepUpEligible: false,
+		Risk:           "governance",
+		Channel:        "client",
+		UICommand:      "client.verifyAgentAnchors",
+		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/anchors/verify)",
+	},
+	{
 		ID:             "get.agent.approvals",
 		Method:         "GET",
 		Route:          "/v1/companies/{companyID}/agent/approvals",
@@ -192,6 +206,20 @@ var Specs = []ActionSpec{
 		Channel:        "client",
 		UICommand:      "client.getAgentApproval",
 		Label:          "display agent-approval (GET /v1/companies/{companyID}/agent/approvals/{approvalID})",
+	},
+	{
+		ID:             "get.agent.autonomy",
+		Method:         "GET",
+		Route:          "/v1/companies/{companyID}/agent/autonomy",
+		Action:         "display",
+		Resource:       "agent-autonomy",
+		ACLKey:         "display agent-autonomy",
+		IsWrite:        false,
+		StepUpEligible: false,
+		Risk:           "governance",
+		Channel:        "client",
+		UICommand:      "client.listAgentAutonomy",
+		Label:          "display agent-autonomy (GET /v1/companies/{companyID}/agent/autonomy)",
 	},
 	{
 		ID:             "get.agent.runs",
@@ -234,6 +262,20 @@ var Specs = []ActionSpec{
 		Channel:        "client",
 		UICommand:      "client.agentRunEvents",
 		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/runs/{runID}/events)",
+	},
+	{
+		ID:             "get.agent.runs._runid.verify",
+		Method:         "GET",
+		Route:          "/v1/companies/{companyID}/agent/runs/{runID}/verify",
+		Action:         "display",
+		Resource:       "agent-run",
+		ACLKey:         "display agent-run",
+		IsWrite:        false,
+		StepUpEligible: false,
+		Risk:           "governance",
+		Channel:        "client",
+		UICommand:      "client.verifyAgentRun",
+		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/runs/{runID}/verify)",
 	},
 	{
 		ID:             "get.anomalies",
@@ -2168,6 +2210,20 @@ var Specs = []ActionSpec{
 		Label:          "alter agent-approval (POST /v1/companies/{companyID}/agent/approvals/{approvalID}/decision)",
 	},
 	{
+		ID:             "post.agent.approvals._approvalid.preview",
+		Method:         "POST",
+		Route:          "/v1/companies/{companyID}/agent/approvals/{approvalID}/preview",
+		Action:         "alter",
+		Resource:       "agent-approval",
+		ACLKey:         "alter agent-approval",
+		IsWrite:        true,
+		StepUpEligible: true,
+		Risk:           "governance",
+		Channel:        "client",
+		UICommand:      "client.previewAgentEdit",
+		Label:          "alter agent-approval (POST /v1/companies/{companyID}/agent/approvals/{approvalID}/preview)",
+	},
+	{
 		ID:             "post.agent.runs",
 		Method:         "POST",
 		Route:          "/v1/companies/{companyID}/agent/runs",
@@ -2594,6 +2650,20 @@ var Specs = []ActionSpec{
 		Channel:        "client",
 		UICommand:      "client.createLedger",
 		Label:          "create master (POST /v1/companies/{companyID}/ledgers)",
+	},
+	{
+		ID:             "post.ledgers._ledgerid.unblock",
+		Method:         "POST",
+		Route:          "/v1/companies/{companyID}/ledgers/{ledgerID}/unblock",
+		Action:         "alter",
+		Resource:       "master-unblock",
+		ACLKey:         "alter master-unblock",
+		IsWrite:        true,
+		StepUpEligible: true,
+		Risk:           "governance",
+		Channel:        "client",
+		UICommand:      "client.unblockLedger",
+		Label:          "alter master-unblock (POST /v1/companies/{companyID}/ledgers/{ledgerID}/unblock)",
 	},
 	{
 		ID:             "post.members.invites",
@@ -3026,6 +3096,20 @@ var Specs = []ActionSpec{
 		Channel:        "client",
 		UICommand:      "client.setCompanyFeatures",
 		Label:          "alter company (PUT /v1/companies/{companyID}/)",
+	},
+	{
+		ID:             "put.agent.autonomy",
+		Method:         "PUT",
+		Route:          "/v1/companies/{companyID}/agent/autonomy",
+		Action:         "alter",
+		Resource:       "agent-autonomy",
+		ACLKey:         "alter agent-autonomy",
+		IsWrite:        true,
+		StepUpEligible: true,
+		Risk:           "governance",
+		Channel:        "client",
+		UICommand:      "client.setAgentAutonomy",
+		Label:          "alter agent-autonomy (PUT /v1/companies/{companyID}/agent/autonomy)",
 	},
 	{
 		ID:             "put.bank-reconciliation._ledgerid._voucherid._legno",

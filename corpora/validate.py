@@ -134,6 +134,7 @@ KNOWN_SCREENS = {
     # ScreenKind under the bare `agent-approval` token, and it carries writes
     # (the decisions), which no report frame does.
     "approval-inbox",
+    "agent-settings",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.

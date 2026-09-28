@@ -5,6 +5,7 @@ import type { HttpClient } from "./http";
 import type { VoucherRequest } from "./types";
 import {
   approvalEffect,
+  effectOrNull,
   describeAgentEvent,
   formatPaise,
   type AgentEvent,
@@ -123,6 +124,16 @@ describe("display helpers", () => {
         preview: { status: 201, effect: { postings: [], debit_paise: 0, credit_paise: 0, vouchers: 0 } },
       }),
     ).toBeNull();
+  });
+
+  it("W2 breadth: an effect with no legs but a master, an order, stock or a bank tick is still a diff", () => {
+    const empty = { postings: [], debit_paise: 0, credit_paise: 0, vouchers: 0 };
+    expect(effectOrNull({ ...empty, masters: [{ entity: "ledger", entity_id: "x", op: "CREATE" }] })).not.toBeNull();
+    expect(effectOrNull({ ...empty, bank_dates: [{ voucher_id: "v", ledger_id: "l", leg_no: 0, after: "2026-05-01" }] })).not.toBeNull();
+    // A null postings list from the server is read as none, never crashes the table.
+    const e = effectOrNull({ ...empty, postings: null as unknown as [], orders: [{ order_id: "o", direction: "SALES", order_no: "SO-1", date: "", closed: false }] });
+    expect(e?.postings).toEqual([]);
+    expect(effectOrNull(empty)).toBeNull();
   });
 
   it("describes an event from its documented data and never prints a hash", () => {

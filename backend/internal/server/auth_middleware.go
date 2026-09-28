@@ -1398,6 +1398,20 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 			return authz.Display, "agent-approval", "", true
 		case len(seg) == 4 && seg[1] == "approvals" && seg[3] == "decision" && method == http.MethodPost:
 			return authz.Alter, "agent-approval", "", true
+		// W2 breadth. Re-previewing an approver's edit is part of deciding
+		// (the checker's seat, and an Alter so a WebAuthn level steps up).
+		case len(seg) == 4 && seg[1] == "approvals" && seg[3] == "preview" && method == http.MethodPost:
+			return authz.Alter, "agent-approval", "", true
+		// Verifying a run's chain, and the anchors over every chain, are
+		// reads of the agent's record: the `agent-run` reader's.
+		case len(seg) == 4 && seg[1] == "runs" && seg[3] == "verify" && method == http.MethodGet,
+			len(seg) == 3 && seg[1] == "anchors" && seg[2] == "verify" && method == http.MethodGet:
+			return authz.Display, "agent-run", "", true
+		// The autonomy table: a third bare token (authz/vocabulary.go).
+		case len(seg) == 2 && seg[1] == "autonomy" && method == http.MethodGet:
+			return authz.Display, "agent-autonomy", "", true
+		case len(seg) == 2 && seg[1] == "autonomy" && method == http.MethodPut:
+			return authz.Alter, "agent-autonomy", "", true
 		}
 
 	// PER-COMPANY PRINT TEMPLATES (track C): what this company's own documents
@@ -1469,6 +1483,20 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// TestDataEntryReadsTheCompanyAndMastersAndNothingWider pins that width.
 	case method == http.MethodGet && isMasterPath(rest):
 		return authz.Display, "master", "", true
+
+	// UNBLOCK an agent-created ledger (W2 breadth, migration 0095): an Alter
+	// of the BARE token `master-unblock` — not `alter master`, which is the
+	// authority that creates ledgers, and releasing an agent's party for
+	// payment is a different seat (handler_ledger_unblock.go). Bare, so Data
+	// Entry is refused with zero acl_rule rows; an Alter, so it inherits the
+	// step-up. The shape is exact; anything else under POST /ledgers/... is
+	// unmapped and default-denies.
+	case method == http.MethodPost && strings.HasPrefix(rest, "/ledgers/"):
+		segs := splitPath(rest)
+		if len(segs) == 3 && segs[0] == "ledgers" && segs[2] == "unblock" {
+			return authz.Alter, "master-unblock", "", true
+		}
+		return "", "", "", false
 
 	// Set a ledger's opening balance: an ALTER of a master. It IS a write, so it
 	// correctly inherits the back-dated cutoff and step-up rules.

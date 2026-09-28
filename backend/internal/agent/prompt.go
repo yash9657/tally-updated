@@ -14,7 +14,7 @@ import (
 // prompt — and re-record the cassettes, whose keys hash the prompt.
 const (
 	Feature       = "agent.decide"
-	PromptVersion = "agent-decide-v1"
+	PromptVersion = "agent-decide-v2"
 	// DecideTool is the one tool the model is forced to call on every
 	// decision step (ToolChoiceNamed): structured output on every decision.
 	DecideTool = "decide"
@@ -32,9 +32,12 @@ const (
 	ToolGetDraft    = "get_draft"
 	ToolListPending = "list_pending"
 	ToolFinish      = "finish"
+	// ToolReverse is undo as a generated reversal (reverse.go).
+	ToolReverse = "actions.reverse"
 )
 
-var toolNames = []string{ToolSearch, ToolRead, ToolPreview, ToolCommit, ToolStatus, ToolQueryBooks, ToolGetDraft, ToolListPending, ToolFinish}
+var toolNames = []string{ToolSearch, ToolRead, ToolPreview, ToolCommit, ToolReverse, ToolStatus, ToolQueryBooks, ToolGetDraft,
+	ToolListPending, ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile, ToolFinish}
 
 func validTool(n string) bool {
 	for _, t := range toolNames {
@@ -55,16 +58,29 @@ by the same validators and access rules the user's own keystrokes go through.
 On every turn you call the tool "decide" exactly once, choosing ONE tool:
   actions.search   {"query": "..."}                         find the action for a task (e.g. "payment voucher")
   actions.read     {"action_id": "...", "path_params": {}, "query": {}}
-                                                            run a READ action (a report, a list of ledgers)
+                                                            run a READ action (a report, a list of ledgers);
+                                                            a PRINT action produces the document and returns
+                                                            only its size and type
   actions.preview  {"action_id": "...", "path_params": {}, "body": {...}}
-                                                            run the action WITHOUT saving; returns the ledger
-                                                            effect or the validator's error
+                                                            run the action WITHOUT saving; returns its effect
+                                                            on the books (legs, stock, masters, orders) or the
+                                                            validator's error. To change a voucher, preview its
+                                                            ALTER action with the full restated body: a new
+                                                            version replaces the old one, never an edit of it
   actions.commit   {"preview": "tool:N"}                    commit EXACTLY what preview step tool:N showed;
                                                             may wait for a human approval
+  actions.reverse  {"voucher_id": "...", "date": "YYYY-MM-DD"}
+                                                            UNDO a posted voucher: previews the voucher that
+                                                            cancels it (commit it like any preview)
   actions.status   {}                                       approvals and commits of this run so far
   query_books      {"question": "..."}                      ask the books a read-only question
   get_draft        {"draft_id": "..."}                      read an extracted bill draft
   list_pending     {}                                       this run's approvals still waiting
+  get_customer_profile  {"name": "...", "as_of": "YYYY-MM-DD"}   what the books say about a customer
+  get_supplier_profile  {"name": "...", "as_of": "..."}          ... about a supplier
+  get_item_profile      {"name": "...", "as_of": "..."}          ... about a stock item
+  get_recurring_streams {"as_of": "..."}                         rent, salaries and other repeating payments
+  get_tenant_profile    {"as_of": "..."}                         the company's own profile card
   finish           {}  with "final": "..."                  stop, with a one-paragraph summary for the user
 
 Rules:
@@ -76,7 +92,9 @@ Rules:
    with other work; do not try to route around it.
 4. If a preview returns a validator error, correct the body once and preview again; if it fails twice,
    finish and explain.
-5. Money is always a decimal string in rupees, e.g. "1180.00".`
+5. Money is always a decimal string in rupees, e.g. "1180.00".
+6. A party or ledger you create is BLOCKED until a person unblocks it: nothing can be posted to it
+   in this run. Say so in your summary rather than trying to pay it.`
 
 // decideSchema is the JSON Schema of the forced tool's arguments.
 //
@@ -87,7 +105,7 @@ Rules:
 var decideSchema = json.RawMessage(`{"type":"object","additionalProperties":false,` +
 	`"required":["tool","args"],"properties":{` +
 	`"plan":{"type":"array","items":{"type":"string"},"description":"on the first turn: the steps you intend"},` +
-	`"tool":{"type":"string","enum":["actions.search","actions.read","actions.preview","actions.commit","actions.status","query_books","get_draft","list_pending","finish"]},` +
+	`"tool":{"type":"string","enum":["actions.search","actions.read","actions.preview","actions.commit","actions.reverse","actions.status","query_books","get_draft","list_pending","get_customer_profile","get_supplier_profile","get_item_profile","get_recurring_streams","get_tenant_profile","finish"]},` +
 	`"args":{"type":"object"},` +
 	`"final":{"type":"string","description":"only with tool=finish"}}}`)
 

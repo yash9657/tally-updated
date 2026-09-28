@@ -107,20 +107,24 @@ func TestAgentInboxVerbs(t *testing.T) {
 		_ = runID
 	})
 
-	t.Run("an edit the validators refuse is refused at commit, not smuggled", func(t *testing.T) {
+	// W2 breadth: an edited body is re-previewed at the decision, so a body
+	// the validators refuse is refused THERE (422 EDIT_REFUSED, nothing
+	// decided) — earlier than wave 1's commit_refused, and never smuggled.
+	t.Run("an edit the validators refuse is refused at the decision, not smuggled", func(t *testing.T) {
 		b := newAgentBooks(t, srv)
 		runID, id, _ := parkPayment(t, srv, b, nil)
 		bad := voucherBody("2025-05-10", "unbalanced",
 			[3]string{b.ledgers["Office Rent"], "D", "26000.00"}, [3]string{b.ledgers["HDFC Bank"], "C", "1.00"})
-		if code, _ := decide(t, srv, b, id, map[string]any{"decision": "approve", "edited_body": bad}); code != 200 {
-			t.Fatalf("approve: %d", code)
+		code, resp := decide(t, srv, b, id, map[string]any{"decision": "approve", "edited_body": bad})
+		if code != http.StatusUnprocessableEntity || resp["code"] != "EDIT_REFUSED" {
+			t.Fatalf("approve an unbalanced edit: %d %v, want 422 EDIT_REFUSED", code, resp)
 		}
 		pollUntilQuiet(t, srv)
 		if countVouchers(t, b.companyID) != 0 {
 			t.Fatal("an unbalanced edited body was committed")
 		}
-		if !strings.Contains(intentKinds(t, b.companyID, runID), "commit_refused") {
-			t.Fatal("the refused commit is not in the intent log")
+		if p := pendingApprovals(t, srv, b, runID); len(p) != 1 {
+			t.Fatalf("the refused edit decided the approval (pending %d)", len(p))
 		}
 	})
 

@@ -433,6 +433,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 func (s *Server) initAgent(model *llm.Client) {
 	s.agent = &agent.Engine{Pool: s.pool, LLM: model}
 	s.agent.Dispatch = agentDispatcher{s: s, now: s.agent.Clock}
+	s.agent.Profiles = agentProfiles{s: s}
 	s.agentPoller = &agent.Poller{Engine: s.agent}
 	s.agentKick = make(chan struct{}, 1)
 }
@@ -1363,6 +1364,9 @@ func (s *Server) routes() {
 		// ledgers seeded with every company — Cash, Profit & Loss A/c — an
 		// opening balance, since those are created before any client can speak.
 		r.Put("/ledgers/{ledgerID}/opening", s.handleSetLedgerOpening)
+		// Release an agent-created ledger for posting (0095, the bare token
+		// master-unblock). See handler_ledger_unblock.go.
+		r.Post("/ledgers/{ledgerID}/unblock", s.handleUnblockLedger)
 		r.Post("/voucher-types", s.handleCreateVoucherType)
 		r.Post("/units", s.handleCreateUnit)
 		r.Post("/stock-items", s.handleCreateStockItem)
@@ -2509,7 +2513,10 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		BankAccountNumber:  req.BankAccountNumber,
 		BankIFSC:           req.BankIFSC,
 		OpeningBills:       openingBills,
-	}, req.CreatedBy)
+		// ⛔ BORN BLOCKED WHEN THE AGENT MAKES IT (0095). From the request's
+		// in-process agent identity, which no body can set or omit.
+		BornOfRun: agentRunOf(r),
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -2657,7 +2664,7 @@ func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
 		OpeningRate:     openRate,
 		ValuationMethod: strings.TrimSpace(req.ValuationMethod),
 		StockGroupName:  strings.TrimSpace(req.StockGroupName),
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -2990,6 +2997,7 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 			}
 			req.IdempotencyKey = h
 		}
+		req.CreatedBy = attributedTo(r, req.CreatedBy)
 		in, ok := buildVoucherInput(w, class, req)
 		if !ok {
 			return
@@ -3058,6 +3066,7 @@ func (s *Server) alterVoucher(class ledger.Class) http.HandlerFunc {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
+		req.CreatedBy = attributedTo(r, req.CreatedBy)
 		in, ok := buildVoucherInput(w, class, req)
 		if !ok {
 			return

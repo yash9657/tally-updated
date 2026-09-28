@@ -317,6 +317,12 @@ export interface LedgerListItem {
    * be drawn", not "this is an asset".
    */
   is_bank: boolean;
+  /**
+   * BORN BLOCKED (migration 0095): a ledger the AGENT created, which no voucher
+   * may post to until a person unblocks it. Absent on a server older than 0095.
+   */
+  blocked?: boolean;
+  blocked_reason?: string;
 }
 
 export interface ListLedgersResponse {

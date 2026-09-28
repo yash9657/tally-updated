@@ -47,6 +47,9 @@ type Engine struct {
 	Pool     *db.Pool
 	LLM      *llm.Client
 	Dispatch Dispatcher
+	// Profiles is W3's profile tools behind internal/server's ACL filter
+	// (profiles.go). Nil means the tools answer "not available".
+	Profiles ProfileReader
 	// Now is the one clock: step deadlines, the poller's due query and the
 	// intent log all read it, so the 72-hour test can drive it.
 	Now            func() time.Time
@@ -519,6 +522,11 @@ type DecisionInput struct {
 	Note       string
 	DecidedBy  uuid.UUID
 	WebAuthn   bool
+	// EditedPreview is the dry run of EditedBody the caller made before
+	// deciding (internal/server's decision handler), recorded with the
+	// decision so the effect the approver saw is the one on record — and the
+	// one an ALTER's commit is held to.
+	EditedPreview *EditedPreview
 }
 
 // Decide records a human decision and nudges the run so the poller picks it
@@ -571,7 +579,11 @@ func (e *Engine) Decide(ctx context.Context, companyID, approvalID uuid.UUID, in
 			decision, edited, note, by = "expired", nil, "", nil
 			outcome = ErrApprovalExpired
 		}
-		ok, err := insertDecision(ctx, tx, companyID, approvalID, decision, edited, note, by, in.WebAuthn && decision == "approve", now)
+		preview := in.EditedPreview
+		if decision != "approve" {
+			preview = nil
+		}
+		ok, err := insertDecision(ctx, tx, companyID, approvalID, decision, edited, note, by, in.WebAuthn && decision == "approve", now, preview)
 		if err != nil {
 			return err
 		}
