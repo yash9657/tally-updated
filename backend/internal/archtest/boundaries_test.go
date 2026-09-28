@@ -242,6 +242,13 @@ var allowedDeps = map[string]map[string]bool{
 	// files and does not follow transitive imports. THIS LINE, in the entry
 	// above, is the real proof of the invariant.
 	"internal/nlq": {"internal/query": true, "internal/llm": true},
+	// W3's semantic catalogue: report metadata keyed by authz's vocabulary,
+	// example DSL re-validated by query.Compile, display routes resolved from
+	// the generated actions registry. All three edges are READS of constant
+	// data; none is a database or network edge, and it is the reason the
+	// catalogue is NOT inside internal/query (whose set must stay
+	// {platform/db} — see the ⛔ note on internal/nlq above).
+	"internal/catalogue": {"internal/authz": true, "internal/query": true, "internal/actions": true},
 	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
 	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
 	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in
