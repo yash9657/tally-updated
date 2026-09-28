@@ -15,7 +15,7 @@ package actions
 // Source records which inputs actually contributed to this build. See
 // Provenance for why a partial build must be visible rather than silent.
 var Source = Provenance{
-	RouteArms:         238,
+	RouteArms:         243,
 	UICommandsJoined:  0,
 	ClientCallsJoined: 170,
 	ClientCallsUnused: 10,
@@ -24,8 +24,21 @@ var Source = Provenance{
 }
 
 // Specs is every governable operation the company-scoped HTTP surface mounts.
-// 238 rows, 173 distinct ACL keys: alter=36, create=56, delete=6, display=94, print=46.
+// 243 rows, 176 distinct ACL keys: alter=37, create=57, delete=6, display=97, print=46.
 var Specs = []ActionSpec{
+	{
+		ID:             "delete.agent.mcp._grantid",
+		Method:         "DELETE",
+		Route:          "/v1/companies/{companyID}/agent/mcp/{grantID}",
+		Action:         "display",
+		Resource:       "agent-mcp",
+		ACLKey:         "display agent-mcp",
+		IsWrite:        false,
+		StepUpEligible: false,
+		Risk:           "governance",
+		Channel:        "none",
+		Label:          "display agent-mcp (DELETE /v1/companies/{companyID}/agent/mcp/{grantID})",
+	},
 	{
 		ID:             "delete.bank-reconciliation._ledgerid._voucherid._legno",
 		Method:         "DELETE",
@@ -192,6 +205,19 @@ var Specs = []ActionSpec{
 		Channel:        "client",
 		UICommand:      "client.getAgentApproval",
 		Label:          "display agent-approval (GET /v1/companies/{companyID}/agent/approvals/{approvalID})",
+	},
+	{
+		ID:             "get.agent.mcp.grants",
+		Method:         "GET",
+		Route:          "/v1/companies/{companyID}/agent/mcp/grants",
+		Action:         "display",
+		Resource:       "agent-mcp",
+		ACLKey:         "display agent-mcp",
+		IsWrite:        false,
+		StepUpEligible: false,
+		Risk:           "governance",
+		Channel:        "none",
+		Label:          "display agent-mcp (GET /v1/companies/{companyID}/agent/mcp/grants)",
 	},
 	{
 		ID:             "get.agent.runs",
@@ -2166,6 +2192,45 @@ var Specs = []ActionSpec{
 		Channel:        "client",
 		UICommand:      "client.decideAgentApproval",
 		Label:          "alter agent-approval (POST /v1/companies/{companyID}/agent/approvals/{approvalID}/decision)",
+	},
+	{
+		ID:             "post.agent.mcp._grantid",
+		Method:         "POST",
+		Route:          "/v1/companies/{companyID}/agent/mcp/{grantID}",
+		Action:         "display",
+		Resource:       "agent-mcp",
+		ACLKey:         "display agent-mcp",
+		IsWrite:        false,
+		StepUpEligible: false,
+		Risk:           "governance",
+		Channel:        "none",
+		Label:          "display agent-mcp (POST /v1/companies/{companyID}/agent/mcp/{grantID})",
+	},
+	{
+		ID:             "post.agent.mcp.grants",
+		Method:         "POST",
+		Route:          "/v1/companies/{companyID}/agent/mcp/grants",
+		Action:         "create",
+		Resource:       "agent-mcp",
+		ACLKey:         "create agent-mcp",
+		IsWrite:        true,
+		StepUpEligible: true,
+		Risk:           "governance",
+		Channel:        "none",
+		Label:          "create agent-mcp (POST /v1/companies/{companyID}/agent/mcp/grants)",
+	},
+	{
+		ID:             "post.agent.mcp.grants._grantid.revoke",
+		Method:         "POST",
+		Route:          "/v1/companies/{companyID}/agent/mcp/grants/{grantID}/revoke",
+		Action:         "alter",
+		Resource:       "agent-mcp",
+		ACLKey:         "alter agent-mcp",
+		IsWrite:        true,
+		StepUpEligible: true,
+		Risk:           "governance",
+		Channel:        "none",
+		Label:          "alter agent-mcp (POST /v1/companies/{companyID}/agent/mcp/grants/{grantID}/revoke)",
 	},
 	{
 		ID:             "post.agent.runs",

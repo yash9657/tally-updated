@@ -137,6 +137,9 @@ var AgentRules = []authz.Rule{
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "sync"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "agent-run"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "agent-approval"},
+	// W6 (D126): the MCP grants and transport. A token that did not exist
+	// before W6, so this narrows nothing that was allowed.
+	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "agent-mcp"},
 }
 
 var agentLevel = authz.Level{Name: "agent:" + AgentID, DefaultAccess: "none"}
@@ -222,6 +225,14 @@ const (
 	// for: typed by a user, imported from Tally XML, pasted from a message.
 	// Being stored in the tenant's own database does not make it trusted.
 	SourceStoredText Source = "stored_text"
+	// SourceMCPClient is the planner's OWN context when the planner is an
+	// outside MCP client (W6, D126). Claude Desktop, ChatGPT or an IDE holds
+	// whatever its user pasted and whatever its other tools fetched — web
+	// pages, mail, files — none of which this server saw or can label. So an
+	// MCP run is born with this source in its context, and every money,
+	// master and statutory commit it proposes waits for a human at every
+	// autonomy level, exactly as a run handed a bank narration does.
+	SourceMCPClient Source = "mcp_client"
 )
 
 // Trusted reports whether a value from s may by itself authorise anything.
@@ -230,7 +241,7 @@ func (s Source) Trusted() bool { return s == SourceUser || s == SourceBooks }
 // ValidSource is the closed vocabulary.
 func ValidSource(s Source) bool {
 	switch s {
-	case SourceUser, SourceBooks, SourceDocument, SourceBank, SourceWhatsApp, SourceTallyXML, SourceEmail, SourceStoredText:
+	case SourceUser, SourceBooks, SourceDocument, SourceBank, SourceWhatsApp, SourceTallyXML, SourceEmail, SourceStoredText, SourceMCPClient:
 		return true
 	}
 	return false

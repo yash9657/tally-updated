@@ -34,6 +34,13 @@ func TestDataEntryIsRefusedTheAgentPlane(t *testing.T) {
 		{http.MethodGet, base + "/agent/approvals"},
 		{http.MethodGet, base + "/agent/approvals/" + someID},
 		{http.MethodPost, base + "/agent/approvals/" + someID + "/decision"},
+		// W6 (D126): the third bare token, `agent-mcp` — grants and the
+		// transport alike.
+		{http.MethodPost, base + "/agent/mcp/grants"},
+		{http.MethodGet, base + "/agent/mcp/grants"},
+		{http.MethodPost, base + "/agent/mcp/grants/" + someID + "/revoke"},
+		{http.MethodPost, base + "/agent/mcp/" + someID},
+		{http.MethodDelete, base + "/agent/mcp/" + someID},
 	} {
 		if rec, _ := aclRequest(t, s, c.method, c.path, dataEntry, map[string]any{}); rec.Code != http.StatusForbidden {
 			t.Errorf("Data Entry %s %s = %d, want 403", c.method, c.path, rec.Code)
@@ -46,5 +53,8 @@ func TestDataEntryIsRefusedTheAgentPlane(t *testing.T) {
 	}
 	if rec, _ := aclRequest(t, s, http.MethodGet, base+"/agent/runs/"+someID, ownerTok, nil); rec.Code != http.StatusNotFound {
 		t.Errorf("Owner GET an unknown run = %d, want 404", rec.Code)
+	}
+	if rec, _ := aclRequest(t, s, http.MethodGet, base+"/agent/mcp/grants", ownerTok, nil); rec.Code != http.StatusOK {
+		t.Errorf("Owner GET /agent/mcp/grants = %d, want 200", rec.Code)
 	}
 }
