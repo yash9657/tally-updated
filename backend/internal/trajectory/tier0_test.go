@@ -77,8 +77,11 @@ const (
 	// W2 (D121) added internal/server/testdata/cassettes/agent.decide/: the
 	// payment run (5 decisions) and the sales run with its verifier retry (6),
 	// taking the corpus from 2 files / 3 interactions to 4 / 14.
-	tier0MinInteractions = 14
-	tier0MinCassettes    = 4
+	// W2 breadth (D121 "Wave 2 breadth") added two more agent.decide runs —
+	// an alteration as a compensating version (4 decisions) and a supplier
+	// born blocked whose payment the validators then refuse (5) — to 6 / 23.
+	tier0MinInteractions = 23
+	tier0MinCassettes    = 6
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way
