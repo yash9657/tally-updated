@@ -815,6 +815,10 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"releases is a separate in-process request to the voucher route, judged by the cutoff there",
 	"POST /v1/companies/{companyID}/agent/runs/{runID}/cancel": "" +
 		"cancelling a run writes the run's status only; it commits nothing and carries no date",
+	// W6 (D126): revoking an MCP grant stamps revoked_at on the grant, closes
+	// its sessions and cancels their runs — the cancel above, for each.
+	"POST /v1/companies/{companyID}/agent/mcp/grants/{grantID}/revoke": "" +
+		"revoking an MCP grant writes the grant's revocation and cancels its runs; it commits nothing and carries no date",
 
 	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
 	//

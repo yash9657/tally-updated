@@ -156,6 +156,25 @@ func TestManifestIsTheRegistryFilteredByPolicy(t *testing.T) {
 	if _, ok := ro.bindings[ToolCommit]; ok {
 		t.Fatal("a grant with no delegated write lists commit_preview")
 	}
+	// Every previewable write, all delegated: eight previews.
+	var all []string
+	for _, s := range actions.Specs {
+		if agent.Previewable(s.ID) {
+			all = append(all, s.ACLKey)
+		}
+	}
+	full := BuildManifest(actions.Specs, grantPrincipal(all, now.Add(time.Hour)), now)
+	fullPreviews := 0
+	for _, b := range full.bindings {
+		if b.kind == bindPreview {
+			fullPreviews++
+		}
+	}
+	if fullPreviews != 8 {
+		t.Fatalf("all eight voucher creates delegated, %d preview tools", fullPreviews)
+	}
+	t.Logf("registry %d specs; payment+master grant: %d tools (%d reads, %d preview, 5 meta); read-only grant: %d tools; all-voucher grant: %d tools (%d previews)",
+		len(actions.Specs), len(m.Tools), reads, previews, len(ro.Tools), len(full.Tools), fullPreviews)
 }
 
 // TestManifestHashPinsContent: the hash is a function of the content — stable
