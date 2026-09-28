@@ -15,13 +15,16 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/actions"
 	"github.com/khata/cored/internal/agent"
+	"github.com/khata/cored/internal/policy"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -116,5 +119,71 @@ func TestAgentPreviewLeavesNoTrace(t *testing.T) {
 	}
 	if shown.VoucherNo == "" || human["voucher_no"] != shown.VoucherNo {
 		t.Fatalf("the preview showed voucher_no %q but the next real voucher took %v: the counter did not roll back", shown.VoucherNo, human["voucher_no"])
+	}
+}
+
+// TestAgentCommitBookkeepingFailureIsRetriedNotReplayed: the agent_commit
+// INSERT fails for a reason that is NOT a duplicate key (a trigger raising
+// serialization_failure stands in for a deadlock or a statement timeout). The
+// voucher's transaction rolls back — and the run must NOT record a replayed
+// success with no voucher behind it (the wave-1 review's finding against
+// agent_dispatch.go's dupKey=true-on-any-error). The step is left unrecorded,
+// and a retry once the fault clears commits exactly one voucher.
+func TestAgentCommitBookkeepingFailureIsRetriedNotReplayed(t *testing.T) {
+	srv := newAgentServer(t)
+	b := newAgentBooks(t, srv)
+	setAutonomy(t, b.companyID, "create payment", policy.L3)
+	ctx := context.Background()
+	admin, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	fn := "agent_commit_fault_" + strings.ReplaceAll(b.companyID, "-", "")[:12]
+	if _, err := admin.Exec(ctx, `CREATE FUNCTION `+fn+`() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.company_id = '`+b.companyID+`'::uuid THEN
+				RAISE EXCEPTION 'injected fault' USING ERRCODE = '40001';
+			END IF;
+			RETURN NEW;
+		END $$ LANGUAGE plpgsql`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE TRIGGER `+fn+` BEFORE INSERT ON agent_commit FOR EACH ROW EXECUTE FUNCTION `+fn+`()`); err != nil {
+		t.Fatal(err)
+	}
+	dropped := false
+	drop := func() {
+		if !dropped {
+			_, _ = admin.Exec(ctx, `DROP TRIGGER IF EXISTS `+fn+` ON agent_commit`)
+			_, _ = admin.Exec(ctx, `DROP FUNCTION IF EXISTS `+fn+`()`)
+			dropped = true
+		}
+	}
+	defer drop()
+
+	model := scriptedModel(t, paymentScript)
+	srv.ConfigureAgent(server.AgentOptions{LLM: model.client(t)})
+	runID := startRun(t, srv, b, map[string]any{"instruction": cassetteCases[0].instruction, "delegate": []string{"create payment"}})
+	pollUntilQuiet(t, srv)
+	if n := countVouchers(t, b.companyID); n != 0 {
+		t.Fatalf("%d voucher(s) survived a failed commit record", n)
+	}
+	kinds := intentKinds(t, b.companyID, runID)
+	if strings.Contains(kinds, ",commit") || getRun(t, srv, b, runID)["status"] == "completed" {
+		t.Fatalf("a rolled-back commit was recorded as a success: status %v, intents %s", getRun(t, srv, b, runID)["status"], kinds)
+	}
+
+	// The fault clears; the retry (same idempotency key) commits exactly once.
+	drop()
+	if _, err := admin.Exec(ctx, `UPDATE agent_run SET next_poll_at = now() - interval '1 second' WHERE id = $1`, runID); err != nil {
+		t.Fatal(err)
+	}
+	pollUntilQuiet(t, srv)
+	if n := countVouchers(t, b.companyID); n != 1 {
+		t.Fatalf("after the fault cleared: %d voucher(s), want 1", n)
+	}
+	if st := getRun(t, srv, b, runID)["status"]; st != "completed" {
+		t.Fatalf("status %v", st)
 	}
 }

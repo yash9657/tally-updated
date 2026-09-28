@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/actions"
@@ -152,6 +153,7 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 		dupKey     bool
 		overCeil   string
 		runEnded   bool
+		hookErr    error
 	)
 	var hook *db.TxHook
 	switch req.Mode {
@@ -291,7 +293,17 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 				`INSERT INTO agent_commit (company_id, idempotency_key, run_id, approval_id, action_id, voucher_ids)
 				 VALUES ($1, $2, $3, $4, $5, $6)`,
 				companyID, req.IdempotencyKey, req.RunID, approval, req.Spec.ID, ids); err != nil {
-				dupKey = true
+				// ⛔ ONLY A UNIQUE VIOLATION IS "LOST THE RACE". Any other
+				// failure — a deadlock, a serialization failure, a statement
+				// timeout, the run FK — also rolls the voucher back, but there
+				// is no winner's record to answer from; treating it as a replay
+				// once recorded an approved payment as posted when nothing was.
+				var pgErr *pgconn.PgError
+				if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+					dupKey = true
+				} else {
+					hookErr = err
+				}
 				return fmt.Errorf("agent: commit idempotency: %w", err)
 			}
 			fired = true
@@ -347,15 +359,27 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 		if overCeil != "" {
 			return agent.Result{Status: http.StatusForbidden, Body: jsonError("agent: " + overCeil)}, nil
 		}
+		if hookErr != nil {
+			// TRANSIENT: returned as an error so exec:k records nothing and is
+			// retried with the SAME idempotency key.
+			return agent.Result{}, fmt.Errorf("agent: recording the commit of %s failed; the voucher was rolled back: %w", req.Spec.ID, hookErr)
+		}
 		if dupKey {
 			// Lost the race to a concurrent dispatch of the same key: answer
-			// from the winner's record.
+			// from the winner's record — which must exist; if it cannot be
+			// read, that is a transient failure, never an empty "replayed".
 			var recorded []uuid.UUID
-			_ = d.s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
+			var found bool
+			if err := d.s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
 				var err error
-				recorded, _, err = agent.LookupCommit(ctx, tx, req.IdempotencyKey)
+				recorded, found, err = agent.LookupCommit(ctx, tx, req.IdempotencyKey)
 				return err
-			})
+			}); err != nil {
+				return agent.Result{}, fmt.Errorf("agent: reading the winning commit of %s: %w", req.IdempotencyKey, err)
+			}
+			if !found {
+				return agent.Result{}, fmt.Errorf("agent: commit key %s collided but no record of it is visible", req.IdempotencyKey)
+			}
 			return agent.Result{Status: http.StatusOK, Replayed: true, VoucherIDs: recorded,
 				Body: jsonBody(map[string]any{"replayed": true, "voucher_ids": recorded})}, nil
 		}
