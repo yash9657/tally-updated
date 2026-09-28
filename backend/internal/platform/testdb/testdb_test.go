@@ -116,6 +116,10 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// T8 — the currency the rate below is quoted for (migration 0080).
 		currencyID = id()
 
+		// W2 — the agent run and approval the agent_* children hang off.
+		agentRunID      = id()
+		agentApprovalID = id()
+
 		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
 		statementID = id()
 		inwardDocID = id()
@@ -636,6 +640,45 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			 prompt_tokens, cached_prompt_tokens, completion_tokens, calls, released)
 			VALUES ($1, $2, DATE '2026-09-01', 'fixture.feature', 1000000, 0, 1200, 800, 300, 4, 1)`,
 			[]any{id(), cid}},
+
+		// W2 — the agent plane (migrations 0092–0094). Parents before
+		// children in the order the FKs point: agent_run, then its steps,
+		// approvals, decisions and commits. ⛔ FIVE OF THESE EIGHT TABLES ARE
+		// APPEND-ONLY BY TRIGGER (and by grant), so the teardown can only
+		// remove them under session_replication_role = replica — which is the
+		// point of seeding them: a plan that tried a plain DELETE would fail
+		// here, loudly, rather than leak an agent's intent log per test run.
+		{"agent_run", `INSERT INTO agent_run
+			(id, company_id, created_by, agent_id, channel, instruction, delegation, status, next_poll_at)
+			VALUES ($1, $2, $3, 'khata-agent', 'panel', 'fixture', '{}'::jsonb, 'parked', now())`,
+			[]any{agentRunID, cid, id()}},
+		{"agent_run_step", `INSERT INTO agent_run_step (company_id, run_id, step_name, output)
+			VALUES ($1, $2, 'decide:0', '{}'::jsonb)`,
+			[]any{cid, agentRunID}},
+		{"agent_approval", `INSERT INTO agent_approval
+			(id, company_id, run_id, step_key, action_id, acl_key, risk, args, preview, reasons,
+			 provenance, on_behalf_of, requested_at, deadline_at)
+			VALUES ($1, $2, $3, 'gate:1', 'post.vouchers.payment', 'create payment', 'money',
+			        '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, $4, now(), now() + interval '72 hours')`,
+			[]any{agentApprovalID, cid, agentRunID, id()}},
+		{"agent_decision", `INSERT INTO agent_decision (id, company_id, approval_id, decision, decided_at)
+			VALUES ($1, $2, $3, 'expired', now())`,
+			[]any{id(), cid, agentApprovalID}},
+		{"agent_commit", `INSERT INTO agent_commit (company_id, idempotency_key, run_id, action_id, voucher_ids)
+			VALUES ($1, 'fixture:commit', $2, 'post.vouchers.payment', ARRAY[]::uuid[])`,
+			[]any{cid, agentRunID}},
+		{"agent_intent_log", `INSERT INTO agent_intent_log
+			(id, company_id, run_id, seq, kind, actor_kind, actor_id, payload, hash, created_at)
+			VALUES ($1, $2, $3, 1, 'run_started', 'system', 'fixture', '{}'::jsonb,
+			        decode(repeat('00', 32), 'hex'), now())`,
+			[]any{id(), cid, agentRunID}},
+		{"agent_intent_anchor", `INSERT INTO agent_intent_anchor
+			(id, company_id, anchored_at, run_count, event_count, root)
+			VALUES ($1, $2, now(), 1, 1, decode(repeat('00', 32), 'hex'))`,
+			[]any{id(), cid}},
+		{"agent_autonomy", `INSERT INTO agent_autonomy (id, company_id, acl_key, level, set_by)
+			VALUES ($1, $2, 'create payment', 1, $3)`,
+			[]any{id(), cid, id()}},
 
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter

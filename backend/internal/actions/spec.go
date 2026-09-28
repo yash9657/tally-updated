@@ -127,6 +127,12 @@ type ActionSpec struct {
 	// the W2 autonomy table that reads it sharpens without a change here.
 	StepUpEligible bool `json:"step_up_eligible"`
 
+	// Risk is ClassifyRisk(Action, Resource) — the class internal/policy keys
+	// autonomy and the structural rules on (W2, D121). Recorded per row so the
+	// class of every door is in the reviewed diff; re-derived by
+	// registry_test.go so the column cannot drift from the rule. See risk.go.
+	Risk Risk `json:"risk"`
+
 	// ⛔ THERE IS NO CutoffJudged FIELD, AND ITS ABSENCE IS THE HONEST ANSWER.
 	// One shipped here, documented as "measured by running the real date
 	// oracles", and it carried no information: the generator sent every route a

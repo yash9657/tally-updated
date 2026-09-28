@@ -34,6 +34,7 @@
       "acl_key": "alter bank-reconciliation",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "date_subject": "bank date",
       "channel": "client",
       "ui_command": "client.clearBankDate",
@@ -48,6 +49,7 @@
       "acl_key": "alter company",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.reopenBooks",
       "label": "alter company (DELETE /v1/companies/{companyID}/books-closure)"
@@ -61,6 +63,7 @@
       "acl_key": "delete budget",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "destructive",
       "channel": "none",
       "label": "delete budget (DELETE /v1/companies/{companyID}/budgets/{budgetID})"
     },
@@ -73,6 +76,7 @@
       "acl_key": "delete budget",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "destructive",
       "channel": "none",
       "label": "delete budget (DELETE /v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID})"
     },
@@ -85,6 +89,7 @@
       "acl_key": "delete security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "destructive",
       "channel": "client",
       "ui_command": "client.removeMember",
       "label": "delete security (DELETE /v1/companies/{companyID}/members/{userID})"
@@ -98,6 +103,7 @@
       "acl_key": "delete security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "destructive",
       "channel": "client",
       "ui_command": "client.revokeInvite",
       "label": "delete security (DELETE /v1/companies/{companyID}/members/invites/{inviteID})"
@@ -111,6 +117,7 @@
       "acl_key": "alter company",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.clearPrintTemplate",
       "label": "alter company (DELETE /v1/companies/{companyID}/print-templates/{docKind})"
@@ -124,6 +131,7 @@
       "acl_key": "delete security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "destructive",
       "channel": "client",
       "ui_command": "client.deleteSecurityLevel",
       "label": "delete security (DELETE /v1/companies/{companyID}/security-levels/{levelID})"
@@ -137,6 +145,7 @@
       "acl_key": "delete voucher",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "destructive",
       "channel": "client",
       "ui_command": "client.deleteVoucher",
       "label": "delete voucher (DELETE /v1/companies/{companyID}/vouchers/{voucherID})"
@@ -150,6 +159,7 @@
       "acl_key": "display company",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getCompany",
       "label": "display company (GET /v1/companies/{companyID}/)"
@@ -164,6 +174,7 @@
       "acl_key": "display report:anomalies",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.anomalies",
       "label": "display anomalies report (GET /v1/companies/{companyID}/anomalies)"
@@ -177,6 +188,7 @@
       "acl_key": "display backup",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.backupCompany",
       "label": "display backup (GET /v1/companies/{companyID}/backup)"
@@ -191,6 +203,7 @@
       "acl_key": "display report:balance-sheet",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getBalanceSheet",
       "label": "display balance-sheet report (GET /v1/companies/{companyID}/balance-sheet)"
@@ -205,6 +218,7 @@
       "acl_key": "display report:bank-reconciliation",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.bankReconciliation",
       "label": "display bank-reconciliation report (GET /v1/companies/{companyID}/bank-reconciliation/{ledgerID})"
@@ -219,6 +233,7 @@
       "acl_key": "display report:bank-statement",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.importedStatement",
       "label": "display bank-statement report (GET /v1/companies/{companyID}/bank-statement/{ledgerID})"
@@ -233,6 +248,7 @@
       "acl_key": "display report:bank-statement",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.bankStatementMatches",
       "label": "display bank-statement report (GET /v1/companies/{companyID}/bank-statement/{ledgerID}/matches)"
@@ -247,6 +263,7 @@
       "acl_key": "display report:batch-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display batch-summary report (GET /v1/companies/{companyID}/batch-summary)"
     },
@@ -259,6 +276,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display master (GET /v1/companies/{companyID}/batches)"
     },
@@ -272,6 +290,7 @@
       "acl_key": "display report:bills-payable",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getBillsPayable",
       "label": "display bills-payable report (GET /v1/companies/{companyID}/bills-payable)"
@@ -285,6 +304,7 @@
       "acl_key": "display bom",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listBoms",
       "label": "display bom (GET /v1/companies/{companyID}/boms)"
@@ -298,6 +318,7 @@
       "acl_key": "display bom",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getBom",
       "label": "display bom (GET /v1/companies/{companyID}/boms/{bomID})"
@@ -311,6 +332,7 @@
       "acl_key": "display bom",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.explodeBom",
       "label": "display bom (GET /v1/companies/{companyID}/boms/{bomID}/explode)"
@@ -324,6 +346,7 @@
       "acl_key": "display company",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.booksClosure",
       "label": "display company (GET /v1/companies/{companyID}/books-closure)"
@@ -338,6 +361,7 @@
       "acl_key": "display report:budget-variance",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.budgetVariance",
       "label": "display budget-variance report (GET /v1/companies/{companyID}/budget-variance)"
@@ -351,6 +375,7 @@
       "acl_key": "display budget",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listBudgets",
       "label": "display budget (GET /v1/companies/{companyID}/budgets)"
@@ -364,6 +389,7 @@
       "acl_key": "display budget",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listBudgetLines",
       "label": "display budget (GET /v1/companies/{companyID}/budgets/{budgetID}/lines)"
@@ -378,6 +404,7 @@
       "acl_key": "display report:cash-flow",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.cashFlow",
       "label": "display cash-flow report (GET /v1/companies/{companyID}/cash-flow)"
@@ -391,6 +418,7 @@
       "acl_key": "display cost-centre",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listCostCategories",
       "label": "display cost-centre (GET /v1/companies/{companyID}/cost-categories)"
@@ -405,6 +433,7 @@
       "acl_key": "display report:cost-category-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.costCategorySummary",
       "label": "display cost-category-summary report (GET /v1/companies/{companyID}/cost-category-summary)"
@@ -419,6 +448,7 @@
       "acl_key": "display report:cost-centre-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.costCentreSummary",
       "label": "display cost-centre-summary report (GET /v1/companies/{companyID}/cost-centre-summary)"
@@ -432,6 +462,7 @@
       "acl_key": "display cost-centre",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listCostCentres",
       "label": "display cost-centre (GET /v1/companies/{companyID}/cost-centres)"
@@ -445,6 +476,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listCurrencies",
       "label": "display master (GET /v1/companies/{companyID}/currencies)"
@@ -459,6 +491,7 @@
       "acl_key": "display report:day-book",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getDayBook",
       "label": "display day-book report (GET /v1/companies/{companyID}/day-book)"
@@ -472,6 +505,7 @@
       "acl_key": "display deductor-status",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listDeductorStatus",
       "label": "display deductor-status (GET /v1/companies/{companyID}/deductor-status)"
@@ -485,6 +519,7 @@
       "acl_key": "display purchase",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listDrafts",
       "label": "display purchase voucher (GET /v1/companies/{companyID}/drafts)"
@@ -498,6 +533,7 @@
       "acl_key": "display purchase",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getDraft",
       "label": "display purchase voucher (GET /v1/companies/{companyID}/drafts/{draftID})"
@@ -511,6 +547,7 @@
       "acl_key": "display e-invoice",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getEInvoice",
       "label": "display e-invoice (GET /v1/companies/{companyID}/e-invoices/{voucherID})"
@@ -524,6 +561,7 @@
       "acl_key": "display e-way-bill",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getEWayBill",
       "label": "display e-way-bill (GET /v1/companies/{companyID}/e-way-bills/{voucherID})"
@@ -537,6 +575,7 @@
       "acl_key": "display employee",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listEmployees",
       "label": "display employee (GET /v1/companies/{companyID}/employees)"
@@ -550,6 +589,7 @@
       "acl_key": "display employee",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listSalaryComponents",
       "label": "display employee (GET /v1/companies/{companyID}/employees/{employeeID}/salary-components)"
@@ -563,6 +603,7 @@
       "acl_key": "display employee",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listStatutoryElections",
       "label": "display employee (GET /v1/companies/{companyID}/employees/{employeeID}/statutory-elections)"
@@ -576,6 +617,7 @@
       "acl_key": "display forex-settings",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.forexSettings",
       "label": "display forex-settings (GET /v1/companies/{companyID}/forex-settings)"
@@ -590,6 +632,7 @@
       "acl_key": "display report:godown-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display godown-summary report (GET /v1/companies/{companyID}/godown-summary)"
     },
@@ -602,6 +645,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listGodowns",
       "label": "display master (GET /v1/companies/{companyID}/godowns)"
@@ -615,6 +659,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listGroups",
       "label": "display master (GET /v1/companies/{companyID}/groups)"
@@ -629,6 +674,7 @@
       "acl_key": "display report:gstr1",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display gstr1 report (GET /v1/companies/{companyID}/gstr1)"
     },
@@ -642,6 +688,7 @@
       "acl_key": "display report:gstr3b",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display gstr3b report (GET /v1/companies/{companyID}/gstr3b)"
     },
@@ -655,6 +702,7 @@
       "acl_key": "display report:gstr9",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.gstr9",
       "label": "display gstr9 report (GET /v1/companies/{companyID}/gstr9)"
@@ -669,6 +717,7 @@
       "acl_key": "display report:ims-inbox",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display ims-inbox report (GET /v1/companies/{companyID}/ims-inbox)"
     },
@@ -681,6 +730,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.inventoryVocabulary",
       "label": "display master (GET /v1/companies/{companyID}/inventory-vocabulary)"
@@ -695,6 +745,7 @@
       "acl_key": "display report:itc-reconciliation",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display itc-reconciliation report (GET /v1/companies/{companyID}/itc-reconciliation)"
     },
@@ -707,6 +758,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listLedgers",
       "label": "display master (GET /v1/companies/{companyID}/ledgers)"
@@ -720,6 +772,7 @@
       "acl_key": "display security",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.listMembers",
       "label": "display security (GET /v1/companies/{companyID}/members)"
@@ -734,6 +787,7 @@
       "acl_key": "display report:outstandings",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getOutstandings",
       "label": "display outstandings report (GET /v1/companies/{companyID}/outstandings)"
@@ -748,6 +802,7 @@
       "acl_key": "display report:payroll-esi-return",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.payrollESIReturn",
       "label": "display payroll-esi-return report (GET /v1/companies/{companyID}/payroll-esi-return)"
@@ -762,6 +817,7 @@
       "acl_key": "display report:payroll-form-138",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.payrollForm138",
       "label": "display payroll-form-138 report (GET /v1/companies/{companyID}/payroll-form-138)"
@@ -776,6 +832,7 @@
       "acl_key": "display report:payroll-payslip",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.payslip",
       "label": "display payroll-payslip report (GET /v1/companies/{companyID}/payroll-payslip)"
@@ -790,6 +847,7 @@
       "acl_key": "display report:payroll-pf-ecr",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.payrollPFECR",
       "label": "display payroll-pf-ecr report (GET /v1/companies/{companyID}/payroll-pf-ecr)"
@@ -804,6 +862,7 @@
       "acl_key": "display report:payroll-register",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.payrollRegister",
       "label": "display payroll-register report (GET /v1/companies/{companyID}/payroll-register)"
@@ -817,6 +876,7 @@
       "acl_key": "display employee",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.payrollVocabulary",
       "label": "display employee (GET /v1/companies/{companyID}/payroll-vocabulary)"
@@ -830,6 +890,7 @@
       "acl_key": "display price-list",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display price-list (GET /v1/companies/{companyID}/price-lists/{priceListID})"
     },
@@ -842,6 +903,7 @@
       "acl_key": "display price-list",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display price-list (GET /v1/companies/{companyID}/price-lists/quote)"
     },
@@ -854,6 +916,7 @@
       "acl_key": "display company",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPrintTemplate",
       "label": "display company (GET /v1/companies/{companyID}/print-templates/{docKind})"
@@ -868,6 +931,7 @@
       "acl_key": "print report:anomalies",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print anomalies report (GET /v1/companies/{companyID}/print/reports/anomalies)"
@@ -882,6 +946,7 @@
       "acl_key": "print report:balance-sheet",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print balance-sheet report (GET /v1/companies/{companyID}/print/reports/balance-sheet)"
@@ -896,6 +961,7 @@
       "acl_key": "print report:bank-reconciliation",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print bank-reconciliation report (GET /v1/companies/{companyID}/print/reports/bank-reconciliation)"
@@ -910,6 +976,7 @@
       "acl_key": "print report:bank-statement",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print bank-statement report (GET /v1/companies/{companyID}/print/reports/bank-statement)"
@@ -924,6 +991,7 @@
       "acl_key": "print report:batch-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print batch-summary report (GET /v1/companies/{companyID}/print/reports/batch-summary)"
@@ -938,6 +1006,7 @@
       "acl_key": "print report:bills-payable",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print bills-payable report (GET /v1/companies/{companyID}/print/reports/bills-payable)"
@@ -952,6 +1021,7 @@
       "acl_key": "print report:budget-variance",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print budget-variance report (GET /v1/companies/{companyID}/print/reports/budget-variance)"
@@ -966,6 +1036,7 @@
       "acl_key": "print report:cash-flow",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print cash-flow report (GET /v1/companies/{companyID}/print/reports/cash-flow)"
@@ -980,6 +1051,7 @@
       "acl_key": "print report:cost-category-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print cost-category-summary report (GET /v1/companies/{companyID}/print/reports/cost-category-summary)"
@@ -994,6 +1066,7 @@
       "acl_key": "print report:cost-centre-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print cost-centre-summary report (GET /v1/companies/{companyID}/print/reports/cost-centre-summary)"
@@ -1008,6 +1081,7 @@
       "acl_key": "print report:day-book",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print day-book report (GET /v1/companies/{companyID}/print/reports/day-book)"
@@ -1022,6 +1096,7 @@
       "acl_key": "print report:godown-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print godown-summary report (GET /v1/companies/{companyID}/print/reports/godown-summary)"
@@ -1036,6 +1111,7 @@
       "acl_key": "print report:gstr1",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print gstr1 report (GET /v1/companies/{companyID}/print/reports/gstr1)"
@@ -1050,6 +1126,7 @@
       "acl_key": "print report:gstr3b",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print gstr3b report (GET /v1/companies/{companyID}/print/reports/gstr3b)"
@@ -1064,6 +1141,7 @@
       "acl_key": "print report:gstr9",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print gstr9 report (GET /v1/companies/{companyID}/print/reports/gstr9)"
@@ -1078,6 +1156,7 @@
       "acl_key": "print report:ims-inbox",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print ims-inbox report (GET /v1/companies/{companyID}/print/reports/ims-inbox)"
@@ -1092,6 +1171,7 @@
       "acl_key": "print report:itc-reconciliation",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print itc-reconciliation report (GET /v1/companies/{companyID}/print/reports/itc-reconciliation)"
@@ -1106,6 +1186,7 @@
       "acl_key": "print report:outstandings",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print outstandings report (GET /v1/companies/{companyID}/print/reports/outstandings)"
@@ -1120,6 +1201,7 @@
       "acl_key": "print report:payroll-esi-return",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print payroll-esi-return report (GET /v1/companies/{companyID}/print/reports/payroll-esi-return)"
@@ -1134,6 +1216,7 @@
       "acl_key": "print report:payroll-form-138",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print payroll-form-138 report (GET /v1/companies/{companyID}/print/reports/payroll-form-138)"
@@ -1148,6 +1231,7 @@
       "acl_key": "print report:payroll-payslip",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print payroll-payslip report (GET /v1/companies/{companyID}/print/reports/payroll-payslip)"
@@ -1162,6 +1246,7 @@
       "acl_key": "print report:payroll-pf-ecr",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print payroll-pf-ecr report (GET /v1/companies/{companyID}/print/reports/payroll-pf-ecr)"
@@ -1176,6 +1261,7 @@
       "acl_key": "print report:payroll-register",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print payroll-register report (GET /v1/companies/{companyID}/print/reports/payroll-register)"
@@ -1190,6 +1276,7 @@
       "acl_key": "print report:profit-and-loss",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print profit-and-loss report (GET /v1/companies/{companyID}/print/reports/profit-and-loss)"
@@ -1204,6 +1291,7 @@
       "acl_key": "print report:purchase-order-book",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print purchase-order-book report (GET /v1/companies/{companyID}/print/reports/purchase-order-book)"
@@ -1218,6 +1306,7 @@
       "acl_key": "print report:reconciliation-queue",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print reconciliation-queue report (GET /v1/companies/{companyID}/print/reports/reconciliation-queue)"
@@ -1232,6 +1321,7 @@
       "acl_key": "print report:sales-order-book",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print sales-order-book report (GET /v1/companies/{companyID}/print/reports/sales-order-book)"
@@ -1246,6 +1336,7 @@
       "acl_key": "print report:stock-item-vouchers",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print stock-item-vouchers report (GET /v1/companies/{companyID}/print/reports/stock-item-vouchers)"
@@ -1260,6 +1351,7 @@
       "acl_key": "print report:stock-movement",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print stock-movement report (GET /v1/companies/{companyID}/print/reports/stock-movement)"
@@ -1274,6 +1366,7 @@
       "acl_key": "print report:stock-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print stock-summary report (GET /v1/companies/{companyID}/print/reports/stock-summary)"
@@ -1288,6 +1381,7 @@
       "acl_key": "print report:tds-register",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print tds-register report (GET /v1/companies/{companyID}/print/reports/tds-register)"
@@ -1302,6 +1396,7 @@
       "acl_key": "print report:trial-balance",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print trial-balance report (GET /v1/companies/{companyID}/print/reports/trial-balance)"
@@ -1316,6 +1411,7 @@
       "acl_key": "print report:unadjusted-forex",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printReport",
       "label": "print unadjusted-forex report (GET /v1/companies/{companyID}/print/reports/unadjusted-forex)"
@@ -1329,6 +1425,7 @@
       "acl_key": "print contra",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print contra voucher (GET /v1/companies/{companyID}/print/vouchers/contra/{voucherID})"
@@ -1342,6 +1439,7 @@
       "acl_key": "print credit-note",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print credit-note voucher (GET /v1/companies/{companyID}/print/vouchers/credit-note/{voucherID})"
@@ -1355,6 +1453,7 @@
       "acl_key": "print debit-note",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print debit-note voucher (GET /v1/companies/{companyID}/print/vouchers/debit-note/{voucherID})"
@@ -1368,6 +1467,7 @@
       "acl_key": "print delivery-note",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print delivery-note voucher (GET /v1/companies/{companyID}/print/vouchers/delivery-note/{voucherID})"
@@ -1381,6 +1481,7 @@
       "acl_key": "print journal",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print journal voucher (GET /v1/companies/{companyID}/print/vouchers/journal/{voucherID})"
@@ -1394,6 +1495,7 @@
       "acl_key": "print payment",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print payment voucher (GET /v1/companies/{companyID}/print/vouchers/payment/{voucherID})"
@@ -1407,6 +1509,7 @@
       "acl_key": "print payroll",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print payroll voucher (GET /v1/companies/{companyID}/print/vouchers/payroll/{voucherID})"
@@ -1420,6 +1523,7 @@
       "acl_key": "print physical-stock",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print physical-stock voucher (GET /v1/companies/{companyID}/print/vouchers/physical-stock/{voucherID})"
@@ -1433,6 +1537,7 @@
       "acl_key": "print purchase",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print purchase voucher (GET /v1/companies/{companyID}/print/vouchers/purchase/{voucherID})"
@@ -1446,6 +1551,7 @@
       "acl_key": "print receipt-note",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print receipt-note voucher (GET /v1/companies/{companyID}/print/vouchers/receipt-note/{voucherID})"
@@ -1459,6 +1565,7 @@
       "acl_key": "print receipt",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print receipt voucher (GET /v1/companies/{companyID}/print/vouchers/receipt/{voucherID})"
@@ -1472,6 +1579,7 @@
       "acl_key": "print sales",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print sales voucher (GET /v1/companies/{companyID}/print/vouchers/sales/{voucherID})"
@@ -1485,6 +1593,7 @@
       "acl_key": "print stock-journal",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "export",
       "channel": "client",
       "ui_command": "client.printVoucher",
       "label": "print stock-journal voucher (GET /v1/companies/{companyID}/print/vouchers/stock-journal/{voucherID})"
@@ -1499,6 +1608,7 @@
       "acl_key": "display report:profit-and-loss",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getProfitLoss",
       "label": "display profit-and-loss report (GET /v1/companies/{companyID}/profit-and-loss)"
@@ -1513,6 +1623,7 @@
       "acl_key": "display report:purchase-order-book",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.purchaseOrderBook",
       "label": "display purchase-order-book report (GET /v1/companies/{companyID}/purchase-order-book)"
@@ -1526,6 +1637,7 @@
       "acl_key": "display purchase-order",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listPurchaseOrders",
       "label": "display purchase-order (GET /v1/companies/{companyID}/purchase-orders)"
@@ -1539,6 +1651,7 @@
       "acl_key": "display purchase-order",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPurchaseOrder",
       "label": "display purchase-order (GET /v1/companies/{companyID}/purchase-orders/{orderID})"
@@ -1553,6 +1666,7 @@
       "acl_key": "display report:reconciliation-queue",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.reconciliationQueue",
       "label": "display reconciliation-queue report (GET /v1/companies/{companyID}/reconciliation-queue)"
@@ -1566,6 +1680,7 @@
       "acl_key": "display reconciliation",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.reconciliationPayload",
       "label": "display reconciliation (GET /v1/companies/{companyID}/reconciliation-queue/{reconID}/payload)"
@@ -1580,6 +1695,7 @@
       "acl_key": "display report:sales-order-book",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.salesOrderBook",
       "label": "display sales-order-book report (GET /v1/companies/{companyID}/sales-order-book)"
@@ -1593,6 +1709,7 @@
       "acl_key": "display sales-order",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listSalesOrders",
       "label": "display sales-order (GET /v1/companies/{companyID}/sales-orders)"
@@ -1606,6 +1723,7 @@
       "acl_key": "display sales-order",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getSalesOrder",
       "label": "display sales-order (GET /v1/companies/{companyID}/sales-orders/{orderID})"
@@ -1619,6 +1737,7 @@
       "acl_key": "display security",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.listSecurityLevels",
       "label": "display security (GET /v1/companies/{companyID}/security-levels)"
@@ -1632,6 +1751,7 @@
       "acl_key": "display security",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.getSecurityVocabulary",
       "label": "display security (GET /v1/companies/{companyID}/security-levels/vocabulary)"
@@ -1645,6 +1765,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listStockGroups",
       "label": "display master (GET /v1/companies/{companyID}/stock-groups)"
@@ -1659,6 +1780,7 @@
       "acl_key": "display report:stock-item-vouchers",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display stock-item-vouchers report (GET /v1/companies/{companyID}/stock-item-vouchers)"
     },
@@ -1671,6 +1793,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listStockItems",
       "label": "display master (GET /v1/companies/{companyID}/stock-items)"
@@ -1685,6 +1808,7 @@
       "acl_key": "display report:stock-movement",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "none",
       "label": "display stock-movement report (GET /v1/companies/{companyID}/stock-movement)"
     },
@@ -1698,6 +1822,7 @@
       "acl_key": "display report:stock-summary",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getStockSummary",
       "label": "display stock-summary report (GET /v1/companies/{companyID}/stock-summary)"
@@ -1711,6 +1836,7 @@
       "acl_key": "display tcs-declaration",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listTCSDeclarations",
       "label": "display tcs-declaration (GET /v1/companies/{companyID}/tcs-declarations)"
@@ -1724,6 +1850,7 @@
       "acl_key": "display tds-challan",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listTDSChallans",
       "label": "display tds-challan (GET /v1/companies/{companyID}/tds-challans)"
@@ -1737,6 +1864,7 @@
       "acl_key": "display tds-profile",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getTDSProfile",
       "label": "display tds-profile (GET /v1/companies/{companyID}/tds-profile)"
@@ -1751,6 +1879,7 @@
       "acl_key": "display report:tds-register",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.tdsRegister",
       "label": "display tds-register report (GET /v1/companies/{companyID}/tds-register)"
@@ -1764,6 +1893,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.taxSections",
       "label": "display master (GET /v1/companies/{companyID}/tds-sections)"
@@ -1778,6 +1908,7 @@
       "acl_key": "display report:trial-balance",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getTrialBalance",
       "label": "display trial-balance report (GET /v1/companies/{companyID}/trial-balance)"
@@ -1792,6 +1923,7 @@
       "acl_key": "display report:unadjusted-forex",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getUnadjustedForex",
       "label": "display unadjusted-forex report (GET /v1/companies/{companyID}/unadjusted-forex)"
@@ -1805,6 +1937,7 @@
       "acl_key": "display master",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.listUnits",
       "label": "display master (GET /v1/companies/{companyID}/units)"
@@ -1818,6 +1951,7 @@
       "acl_key": "display voucher",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getVoucher",
       "label": "display voucher (GET /v1/companies/{companyID}/vouchers/{voucherID})"
@@ -1831,6 +1965,7 @@
       "acl_key": "display voucher",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getVoucherHistory",
       "label": "display voucher (GET /v1/companies/{companyID}/vouchers/{voucherID}/history)"
@@ -1844,6 +1979,7 @@
       "acl_key": "display contra",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display contra voucher (GET /v1/companies/{companyID}/vouchers/contra/open-bills/{ledgerID})"
@@ -1857,6 +1993,7 @@
       "acl_key": "display credit-note",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display credit-note voucher (GET /v1/companies/{companyID}/vouchers/credit-note/open-bills/{ledgerID})"
@@ -1870,6 +2007,7 @@
       "acl_key": "display debit-note",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display debit-note voucher (GET /v1/companies/{companyID}/vouchers/debit-note/open-bills/{ledgerID})"
@@ -1883,6 +2021,7 @@
       "acl_key": "display journal",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display journal voucher (GET /v1/companies/{companyID}/vouchers/journal/open-bills/{ledgerID})"
@@ -1896,6 +2035,7 @@
       "acl_key": "display payment",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display payment voucher (GET /v1/companies/{companyID}/vouchers/payment/open-bills/{ledgerID})"
@@ -1909,6 +2049,7 @@
       "acl_key": "display purchase",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display purchase voucher (GET /v1/companies/{companyID}/vouchers/purchase/open-bills/{ledgerID})"
@@ -1922,6 +2063,7 @@
       "acl_key": "display receipt",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display receipt voucher (GET /v1/companies/{companyID}/vouchers/receipt/open-bills/{ledgerID})"
@@ -1935,6 +2077,7 @@
       "acl_key": "display sales",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.getPartyOpenBills",
       "label": "display sales voucher (GET /v1/companies/{companyID}/vouchers/sales/open-bills/{ledgerID})"
@@ -1948,6 +2091,7 @@
       "acl_key": "create bank-statement",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.importBankStatement",
       "label": "create bank-statement (POST /v1/companies/{companyID}/bank-statement/{ledgerID}/import)"
@@ -1961,6 +2105,7 @@
       "acl_key": "create bank-statement",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.restoreStatementLine",
       "label": "create bank-statement (POST /v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/restore)"
@@ -1974,6 +2119,7 @@
       "acl_key": "create bank-statement",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.setAsideStatementLine",
       "label": "create bank-statement (POST /v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/set-aside)"
@@ -1987,6 +2133,7 @@
       "acl_key": "create bank-statement",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.previewBankStatement",
       "label": "create bank-statement (POST /v1/companies/{companyID}/bank-statement/{ledgerID}/preview)"
@@ -2000,6 +2147,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "create master (POST /v1/companies/{companyID}/batches)"
     },
@@ -2012,6 +2160,7 @@
       "acl_key": "create bom",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createBom",
       "label": "create bom (POST /v1/companies/{companyID}/boms)"
@@ -2025,6 +2174,7 @@
       "acl_key": "alter company",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.closeBooks",
       "label": "alter company (POST /v1/companies/{companyID}/books-closure)"
@@ -2038,6 +2188,7 @@
       "acl_key": "create budget",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createBudget",
       "label": "create budget (POST /v1/companies/{companyID}/budgets)"
@@ -2051,6 +2202,7 @@
       "acl_key": "create budget",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.addBudgetLine",
       "label": "create budget (POST /v1/companies/{companyID}/budgets/{budgetID}/lines)"
@@ -2064,6 +2216,7 @@
       "acl_key": "create cost-centre",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createCostCategory",
       "label": "create cost-centre (POST /v1/companies/{companyID}/cost-categories)"
@@ -2077,6 +2230,7 @@
       "acl_key": "create cost-centre",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createCostCentre",
       "label": "create cost-centre (POST /v1/companies/{companyID}/cost-centres)"
@@ -2090,6 +2244,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createCurrency",
       "label": "create master (POST /v1/companies/{companyID}/currencies)"
@@ -2103,6 +2258,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "create master (POST /v1/companies/{companyID}/currencies/rates)"
     },
@@ -2115,6 +2271,7 @@
       "acl_key": "create purchase",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.createDraft",
       "label": "create purchase voucher (POST /v1/companies/{companyID}/drafts)"
@@ -2128,6 +2285,7 @@
       "acl_key": "create purchase",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.recordAccepted",
       "label": "create purchase voucher (POST /v1/companies/{companyID}/drafts/{draftID}/accepted)"
@@ -2141,6 +2299,7 @@
       "acl_key": "create purchase",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.claim",
       "label": "create purchase voucher (POST /v1/companies/{companyID}/drafts/{draftID}/claim)"
@@ -2154,6 +2313,7 @@
       "acl_key": "create purchase",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.releaseClaim",
       "label": "create purchase voucher (POST /v1/companies/{companyID}/drafts/{draftID}/claim/release)"
@@ -2167,6 +2327,7 @@
       "acl_key": "create e-invoice",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "statutory",
       "channel": "client",
       "ui_command": "client.raiseEInvoice",
       "label": "create e-invoice (POST /v1/companies/{companyID}/e-invoices)"
@@ -2180,6 +2341,7 @@
       "acl_key": "create e-way-bill",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "statutory",
       "channel": "client",
       "ui_command": "client.raiseEWayBill",
       "label": "create e-way-bill (POST /v1/companies/{companyID}/e-way-bills)"
@@ -2193,6 +2355,7 @@
       "acl_key": "create employee",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createEmployee",
       "label": "create employee (POST /v1/companies/{companyID}/employees)"
@@ -2206,6 +2369,7 @@
       "acl_key": "create employee",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.setSalaryComponent",
       "label": "create employee (POST /v1/companies/{companyID}/employees/{employeeID}/salary-components)"
@@ -2219,6 +2383,7 @@
       "acl_key": "create employee",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.setStatutoryElection",
       "label": "create employee (POST /v1/companies/{companyID}/employees/{employeeID}/statutory-elections)"
@@ -2232,6 +2397,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "create master (POST /v1/companies/{companyID}/godowns)"
     },
@@ -2244,6 +2410,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createGroup",
       "label": "create master (POST /v1/companies/{companyID}/groups)"
@@ -2257,6 +2424,7 @@
       "acl_key": "create gst-filing",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "statutory",
       "channel": "none",
       "label": "create gst-filing (POST /v1/companies/{companyID}/gst-filings)"
     },
@@ -2269,6 +2437,7 @@
       "acl_key": "create inward-statement",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "statutory",
       "channel": "none",
       "label": "create inward-statement (POST /v1/companies/{companyID}/gstr2b-import)"
     },
@@ -2281,6 +2450,7 @@
       "acl_key": "create import",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.importTallyXML",
       "label": "create import (POST /v1/companies/{companyID}/import/tally-xml)"
@@ -2294,6 +2464,7 @@
       "acl_key": "create ims-action",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "statutory",
       "channel": "none",
       "label": "create ims-action (POST /v1/companies/{companyID}/ims-actions)"
     },
@@ -2306,6 +2477,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createLedger",
       "label": "create master (POST /v1/companies/{companyID}/ledgers)"
@@ -2319,6 +2491,7 @@
       "acl_key": "create security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.inviteMember",
       "label": "create security (POST /v1/companies/{companyID}/members/invites)"
@@ -2332,6 +2505,7 @@
       "acl_key": "create price-list",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "create price-list (POST /v1/companies/{companyID}/price-lists)"
     },
@@ -2344,6 +2518,7 @@
       "acl_key": "create purchase-order",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.createPurchaseOrder",
       "label": "create purchase-order (POST /v1/companies/{companyID}/purchase-orders)"
@@ -2357,6 +2532,7 @@
       "acl_key": "display query",
       "is_write": false,
       "step_up_eligible": false,
+      "risk": "read",
       "channel": "client",
       "ui_command": "client.query",
       "label": "display query (POST /v1/companies/{companyID}/query)"
@@ -2370,6 +2546,7 @@
       "acl_key": "alter reconciliation",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.resolveReconciliation",
       "label": "alter reconciliation (POST /v1/companies/{companyID}/reconciliation-queue/{reconID}/resolve)"
@@ -2383,6 +2560,7 @@
       "acl_key": "create sales",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "none",
       "label": "create sales voucher (POST /v1/companies/{companyID}/sales)"
     },
@@ -2395,6 +2573,7 @@
       "acl_key": "create sales-order",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.createSalesOrder",
       "label": "create sales-order (POST /v1/companies/{companyID}/sales-orders)"
@@ -2408,6 +2587,7 @@
       "acl_key": "create security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.createSecurityLevel",
       "label": "create security (POST /v1/companies/{companyID}/security-levels)"
@@ -2421,6 +2601,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createStockGroup",
       "label": "create master (POST /v1/companies/{companyID}/stock-groups)"
@@ -2434,6 +2615,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createStockItem",
       "label": "create master (POST /v1/companies/{companyID}/stock-items)"
@@ -2447,6 +2629,7 @@
       "acl_key": "create sync",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.syncCommit",
       "label": "create sync (POST /v1/companies/{companyID}/sync/commit)"
@@ -2460,6 +2643,7 @@
       "acl_key": "create tcs-declaration",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createTCSDeclaration",
       "label": "create tcs-declaration (POST /v1/companies/{companyID}/tcs-declarations)"
@@ -2473,6 +2657,7 @@
       "acl_key": "create tds-challan",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.createTDSChallan",
       "label": "create tds-challan (POST /v1/companies/{companyID}/tds-challans)"
@@ -2486,6 +2671,7 @@
       "acl_key": "create tds-challan",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "date_subject": "deposit date",
       "channel": "client",
       "ui_command": "client.allocateToTDSChallan",
@@ -2500,6 +2686,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createUnit",
       "label": "create master (POST /v1/companies/{companyID}/units)"
@@ -2513,6 +2700,7 @@
       "acl_key": "create master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.createVoucherType",
       "label": "create master (POST /v1/companies/{companyID}/voucher-types)"
@@ -2526,6 +2714,7 @@
       "acl_key": "alter voucher",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "none",
       "label": "alter voucher (POST /v1/companies/{companyID}/vouchers/{voucherID}/external-reference)"
     },
@@ -2538,6 +2727,7 @@
       "acl_key": "create contra",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postContraVoucher",
       "label": "create contra voucher (POST /v1/companies/{companyID}/vouchers/contra)"
@@ -2551,6 +2741,7 @@
       "acl_key": "create credit-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postCreditNoteVoucher",
       "label": "create credit-note voucher (POST /v1/companies/{companyID}/vouchers/credit-note)"
@@ -2564,6 +2755,7 @@
       "acl_key": "create debit-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postDebitNoteVoucher",
       "label": "create debit-note voucher (POST /v1/companies/{companyID}/vouchers/debit-note)"
@@ -2577,6 +2769,7 @@
       "acl_key": "create delivery-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.postDeliveryNoteVoucher",
       "label": "create delivery-note voucher (POST /v1/companies/{companyID}/vouchers/delivery-note)"
@@ -2590,6 +2783,7 @@
       "acl_key": "create journal",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postJournalVoucher",
       "label": "create journal voucher (POST /v1/companies/{companyID}/vouchers/journal)"
@@ -2603,6 +2797,7 @@
       "acl_key": "create payment",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postPaymentVoucher",
       "label": "create payment voucher (POST /v1/companies/{companyID}/vouchers/payment)"
@@ -2616,6 +2811,7 @@
       "acl_key": "create payroll",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.runPayroll",
       "label": "create payroll voucher (POST /v1/companies/{companyID}/vouchers/payroll)"
@@ -2629,6 +2825,7 @@
       "acl_key": "create physical-stock",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.postPhysicalStockVoucher",
       "label": "create physical-stock voucher (POST /v1/companies/{companyID}/vouchers/physical-stock)"
@@ -2642,6 +2839,7 @@
       "acl_key": "create purchase",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postPurchaseVoucher",
       "label": "create purchase voucher (POST /v1/companies/{companyID}/vouchers/purchase)"
@@ -2655,6 +2853,7 @@
       "acl_key": "create receipt",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postReceiptVoucher",
       "label": "create receipt voucher (POST /v1/companies/{companyID}/vouchers/receipt)"
@@ -2668,6 +2867,7 @@
       "acl_key": "create receipt-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.postReceiptNoteVoucher",
       "label": "create receipt-note voucher (POST /v1/companies/{companyID}/vouchers/receipt-note)"
@@ -2681,6 +2881,7 @@
       "acl_key": "create sales",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.postSalesVoucher",
       "label": "create sales voucher (POST /v1/companies/{companyID}/vouchers/sales)"
@@ -2694,6 +2895,7 @@
       "acl_key": "create stock-journal",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.postStockJournalVoucher",
       "label": "create stock-journal voucher (POST /v1/companies/{companyID}/vouchers/stock-journal)"
@@ -2707,6 +2909,7 @@
       "acl_key": "alter company",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.setCompanyFeatures",
       "label": "alter company (PUT /v1/companies/{companyID}/)"
@@ -2720,6 +2923,7 @@
       "acl_key": "alter bank-reconciliation",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "date_subject": "bank date",
       "channel": "client",
       "ui_command": "client.setBankDate",
@@ -2734,6 +2938,7 @@
       "acl_key": "alter budget",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "alter budget (PUT /v1/companies/{companyID}/budgets/{budgetID})"
     },
@@ -2746,6 +2951,7 @@
       "acl_key": "alter budget",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "alter budget (PUT /v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID})"
     },
@@ -2758,6 +2964,7 @@
       "acl_key": "alter cost-centre",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "alter cost-centre (PUT /v1/companies/{companyID}/cost-categories/{categoryID})"
     },
@@ -2770,6 +2977,7 @@
       "acl_key": "alter cost-centre",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "alter cost-centre (PUT /v1/companies/{companyID}/cost-centres/{centreID})"
     },
@@ -2782,6 +2990,7 @@
       "acl_key": "alter deductor-status",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.setDeductorStatus",
       "label": "alter deductor-status (PUT /v1/companies/{companyID}/deductor-status/{taxYear})"
@@ -2795,6 +3004,7 @@
       "acl_key": "alter forex-settings",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.setForexSettings",
       "label": "alter forex-settings (PUT /v1/companies/{companyID}/forex-settings)"
@@ -2808,6 +3018,7 @@
       "acl_key": "alter master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "none",
       "label": "alter master (PUT /v1/companies/{companyID}/ledgers/{ledgerID}/opening)"
     },
@@ -2820,6 +3031,7 @@
       "acl_key": "alter security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.updateMember",
       "label": "alter security (PUT /v1/companies/{companyID}/members/{userID})"
@@ -2833,6 +3045,7 @@
       "acl_key": "alter company",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.savePrintTemplate",
       "label": "alter company (PUT /v1/companies/{companyID}/print-templates/{docKind})"
@@ -2846,6 +3059,7 @@
       "acl_key": "alter purchase-order",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.closePurchaseOrder",
       "label": "alter purchase-order (PUT /v1/companies/{companyID}/purchase-orders/{orderID}/close)"
@@ -2859,6 +3073,7 @@
       "acl_key": "alter sales-order",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.closeSalesOrder",
       "label": "alter sales-order (PUT /v1/companies/{companyID}/sales-orders/{orderID}/close)"
@@ -2872,6 +3087,7 @@
       "acl_key": "alter security",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "governance",
       "channel": "client",
       "ui_command": "client.updateSecurityLevel",
       "label": "alter security (PUT /v1/companies/{companyID}/security-levels/{levelID})"
@@ -2885,6 +3101,7 @@
       "acl_key": "alter master",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.setStockItemValuationMethod",
       "label": "alter master (PUT /v1/companies/{companyID}/stock-items/{stockItemID}/valuation-method)"
@@ -2898,6 +3115,7 @@
       "acl_key": "alter tds-profile",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "master",
       "channel": "client",
       "ui_command": "client.setTDSProfile",
       "label": "alter tds-profile (PUT /v1/companies/{companyID}/tds-profile)"
@@ -2911,6 +3129,7 @@
       "acl_key": "alter contra",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterContraVoucher",
       "label": "alter contra voucher (PUT /v1/companies/{companyID}/vouchers/contra/{voucherID})"
@@ -2924,6 +3143,7 @@
       "acl_key": "alter credit-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterCreditNoteVoucher",
       "label": "alter credit-note voucher (PUT /v1/companies/{companyID}/vouchers/credit-note/{voucherID})"
@@ -2937,6 +3157,7 @@
       "acl_key": "alter debit-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterDebitNoteVoucher",
       "label": "alter debit-note voucher (PUT /v1/companies/{companyID}/vouchers/debit-note/{voucherID})"
@@ -2950,6 +3171,7 @@
       "acl_key": "alter delivery-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.alterDeliveryNoteVoucher",
       "label": "alter delivery-note voucher (PUT /v1/companies/{companyID}/vouchers/delivery-note/{voucherID})"
@@ -2963,6 +3185,7 @@
       "acl_key": "alter journal",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterJournalVoucher",
       "label": "alter journal voucher (PUT /v1/companies/{companyID}/vouchers/journal/{voucherID})"
@@ -2976,6 +3199,7 @@
       "acl_key": "alter payment",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterPaymentVoucher",
       "label": "alter payment voucher (PUT /v1/companies/{companyID}/vouchers/payment/{voucherID})"
@@ -2989,6 +3213,7 @@
       "acl_key": "alter physical-stock",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.alterPhysicalStockVoucher",
       "label": "alter physical-stock voucher (PUT /v1/companies/{companyID}/vouchers/physical-stock/{voucherID})"
@@ -3002,6 +3227,7 @@
       "acl_key": "alter purchase",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterPurchaseVoucher",
       "label": "alter purchase voucher (PUT /v1/companies/{companyID}/vouchers/purchase/{voucherID})"
@@ -3015,6 +3241,7 @@
       "acl_key": "alter receipt-note",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.alterReceiptNoteVoucher",
       "label": "alter receipt-note voucher (PUT /v1/companies/{companyID}/vouchers/receipt-note/{voucherID})"
@@ -3028,6 +3255,7 @@
       "acl_key": "alter receipt",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterReceiptVoucher",
       "label": "alter receipt voucher (PUT /v1/companies/{companyID}/vouchers/receipt/{voucherID})"
@@ -3041,6 +3269,7 @@
       "acl_key": "alter sales",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "money",
       "channel": "client",
       "ui_command": "client.alterSalesVoucher",
       "label": "alter sales voucher (PUT /v1/companies/{companyID}/vouchers/sales/{voucherID})"
@@ -3054,6 +3283,7 @@
       "acl_key": "alter stock-journal",
       "is_write": true,
       "step_up_eligible": true,
+      "risk": "operational",
       "channel": "client",
       "ui_command": "client.alterStockJournalVoucher",
       "label": "alter stock-journal voucher (PUT /v1/companies/{companyID}/vouchers/stock-journal/{voucherID})"

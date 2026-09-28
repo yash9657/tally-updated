@@ -350,6 +350,11 @@ var allowedDeps = map[string]map[string]bool{
 	// GUC"), which would drag tenancy into statutoryd. Tenant-scoped stores
 	// live with their callers (internal/agent's run store), not here.
 	"internal/durable": {},
+	// intentlog (W2, D121) is the agent intent log: append, verify, anchor
+	// over a caller's pgx.Tx. ⛔ EMPTY SET: it takes the transaction it is
+	// handed and reaches no sibling, so the hash-chain code can be read and
+	// re-implemented by an auditor without reading anything else in the tree.
+	"internal/intentlog": {},
 	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
 	// load-bearing in BOTH directions.
 	//
