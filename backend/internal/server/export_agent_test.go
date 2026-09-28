@@ -46,3 +46,19 @@ func ProbeAgentRouterGate(ctx context.Context, s *Server, companyID, subject, ac
 }
 
 var _ = http.MethodGet
+
+// AgentDispatch exposes the server's agent dispatcher to tests, so the commit
+// idempotency can be driven directly (a crash between the voucher commit and
+// the durable step's record is otherwise hard to reproduce on demand).
+func AgentDispatch(ctx context.Context, s *Server, c agent.Caller, req agent.Request) (agent.Result, error) {
+	return s.agent.Dispatch.Dispatch(ctx, c, req)
+}
+
+// AgentCaller builds the Caller a run would dispatch as.
+func AgentCaller(companyID, runID, userID uuid.UUID, subject string, keys []string) agent.Caller {
+	return agent.Caller{
+		Principal: policy.Principal{AgentID: policy.AgentID, OnBehalfOf: userID, CompanyID: companyID, RunID: runID,
+			Delegation: policy.Delegation{ACLKeys: keys, ExpiresAt: time.Now().Add(time.Hour)}},
+		Subject: subject, IssuedAt: time.Now(), WebAuthn: true,
+	}
+}
