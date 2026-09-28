@@ -5,6 +5,16 @@ export const GATEWAY_MENU = [
   "Vouchers",
   "Bill Inbox",
   "Query",
+  // Approval Inbox (W2) — the agent's proposals waiting for a human. Beside the
+  // two AI-native doors above because it is the third: the Bill Inbox is where a
+  // bill becomes a draft, Query is where the books answer, and this is where an
+  // agent's work is approved, edited, rejected or sent back. Also in Alt+G (see
+  // SCREEN_GOTO_ENTRIES), and the Ctrl+K side panel opens the same proposals.
+  //
+  // ⚠️ CHECKED FOR THE SUBSTRING COLLISION — see APPROVAL_INBOX_LABEL: typing
+  // "inbox" offers both inboxes, Bill Inbox first; neither label contains the
+  // other.
+  "Approval Inbox",
   "Day Book",
   "Balance Sheet",
   "Profit & Loss A/c",

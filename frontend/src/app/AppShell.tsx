@@ -19,6 +19,8 @@ import { LoadedVoucherProvider } from "./LoadedVoucher";
 import { OfflineOutboxProvider } from "../offline/OfflineOutbox";
 import { VOUCHER_CONFIGS } from "../screens/vouchers/voucherConfig";
 import { LoadedDraftProvider } from "./LoadedDraft";
+import { LoadedProposalProvider } from "./LoadedProposal";
+import { AgentPanel } from "./AgentPanel";
 import { Chrome } from "./Chrome";
 import { ScreenRegistry } from "./screenRegistry";
 import { createDefaultRegistry } from "./defaultScreens";
@@ -135,6 +137,11 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // company === null — this set is consulted only then, and every screen test
   // passes an initialCompany. OfflineOutboxScreen.test.tsx has that case.
   "offline-outbox",
+  // THE APPROVAL INBOX (W2). Every route it drives is company-scoped
+  // (/agent/approvals), so omit it and useCompanyID() THROWS during render —
+  // taking the whole shell down over the one screen that decides what an agent
+  // may put in these books.
+  "approval-inbox",
 ]);
 
 /**
@@ -276,6 +283,12 @@ export const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKi
   // operator can re-value an item created before T9 — which is every item in
   // every existing company.
   setValuationMethod: "setValuationMethod",
+  // ---- THE AGENT PLANE (W2). The Alt+O lesson a fifth time: without these three
+  // lines Ctrl+K, and Alt+X / Alt+B on the approval inbox, resolve, find no screen
+  // action, and are forwarded to a machine that deliberately does not move.
+  agentPanel: "agentPanel",
+  rejectApproval: "rejectApproval",
+  askBackApproval: "askBackApproval",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -340,6 +353,12 @@ export function AppShell({
     <ScreenActionsProvider>
       <LoadedVoucherProvider>
         <LoadedDraftProvider>
+          {/* THE AGENT PROPOSAL SLOT (W2). ⚠️ useLoadedProposal is INERT outside
+              this provider — on purpose, see LoadedProposal.tsx — so a shell
+              without it would render every proposal as an ordinary empty
+              voucher and nothing would throw. AgentPanel.test.tsx drives the
+              prefill through THIS shell, which is what can see it missing. */}
+          <LoadedProposalProvider>
           {/* ⛔⛔ THE OFFLINE QUEUE'S ONLY MOUNT POINT, AND THE ONE PLACE THE
               WHOLE TRACK CAN GO SILENTLY MISSING. `useOfflineOutbox()` returns
               null outside a provider and the accept path then REFUSES to queue —
@@ -352,6 +371,7 @@ export function AppShell({
           <OfflineOutboxProvider>
             <AppShellInner registry={registry} />
           </OfflineOutboxProvider>
+          </LoadedProposalProvider>
         </LoadedDraftProvider>
       </LoadedVoucherProvider>
     </ScreenActionsProvider>
@@ -577,6 +597,17 @@ function AppShellInner({
           onConfig={onConfig}
           onClose={() => pressCombo("Esc")}
         />
+        {/* THE AGENT SIDE PANEL (W2), Ctrl+K. Mounted beside the screen rather
+            than as a frame because it must survive screen changes; it renders
+            nothing while closed. It gets the machine's `onSelect` for exactly
+            one purpose — opening a proposal in its native voucher screen — and
+            hands focus back to this root when it closes, so the next key drives
+            the screen again. */}
+        <AgentPanel
+          snapshot={snapshot}
+          onSelect={onSelect}
+          onClose={() => rootRef.current?.focus({ preventScroll: true })}
+        />
       </Chrome>
     </div>
   );
@@ -753,6 +784,10 @@ function screenTitle(snap: NavSnapshot): string {
       return "Form 138 — Salary TDS (Annexure I)";
     case "edit-log":
       return "Edit Log";
+    // W2. Without it the chrome reads "Tally" over the screen that decides what
+    // an agent may put in these books.
+    case "approval-inbox":
+      return "Approval Inbox";
     default:
       return "Tally";
   }
@@ -879,6 +914,18 @@ function hintsFor(snap: NavSnapshot): string[] {
     // operator was given here was the one thing that does not work.
     case "edit-log":
       return ["Esc: Back", "F1: Help"];
+    // W2 — every decision key, spelled as what it does. "Approve", never
+    // "Accept": nothing on this screen posts a voucher.
+    case "approval-inbox":
+      return [
+        "↑/↓: Proposal",
+        "Enter: Open to edit",
+        "Ctrl+A: Approve",
+        "Alt+X: Reject",
+        "Alt+B: Ask back",
+        "Ctrl+K: Agent",
+        ...common,
+      ];
     default:
       return ["Enter: Open", ...common];
   }

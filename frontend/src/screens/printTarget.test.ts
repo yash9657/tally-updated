@@ -76,6 +76,9 @@ const ALL_SCREENS: NavSnapshot["screen"][] = [
   "payroll-register",
   "payroll-payslip",
   "payroll-form-138",
+  // W2. The inbox prints nothing (a proposal is not a document until the agent
+  // commits it), so Ctrl+P must resolve to a sentence — and be BOUND.
+  "approval-inbox",
 ];
 
 /** A bare snapshot for a screen, with only the fields the resolver reads. */

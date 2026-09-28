@@ -107,6 +107,10 @@ const GATEWAY_BAR: readonly ButtonBarItem[] = [
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
   item("Ctrl+N", "Calculator"),
+  // W2: the agent side panel. On the Gateway's bar because the Gateway is where
+  // an operator who has never heard of Ctrl+K will look; the key works on every
+  // screen.
+  item("Ctrl+K", "Agent"),
 ];
 
 const REPORT_BAR: readonly ButtonBarItem[] = [
@@ -546,6 +550,24 @@ const AI_BAR: readonly ButtonBarItem[] = [
 ];
 
 /**
+ * THE APPROVAL INBOX (W2). Every decision key is on the bar because the inbox
+ * is where a person commits the business to what an agent proposed, and a key
+ * that has to be remembered rather than read is a key somebody presses by
+ * mistake. "Approve" and not "Accept": Ctrl+A here records a decision and posts
+ * nothing — the agent commits afterwards — and "Accept (save)" would say it did.
+ */
+const APPROVAL_INBOX_BAR: readonly ButtonBarItem[] = [
+  item("Enter", "Open to edit"),
+  item("Ctrl+A", "Approve"),
+  item("Alt+X", "Reject"),
+  item("Alt+B", "Ask back"),
+  item("Ctrl+K", "Agent"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("F1", "Help"),
+];
+
+/**
  * Resolve the visible button bar for a given screen. Voucher type is accepted
  * for forward-compatibility (e.g. enabling Credit/Debit Note buttons) though
  * the core six are constant across voucher types in Phase 0.
@@ -634,6 +656,11 @@ export function buttonBarFor(
       return PRINT_TEMPLATES_BAR;
     case "offline-outbox":
       return OFFLINE_OUTBOX_BAR;
+    // W2, for the reason every case here exists: without it the inbox falls
+    // through to GATEWAY_BAR and advertises F3 Company over a list of proposals
+    // while saying nothing about the three decision keys.
+    case "approval-inbox":
+      return APPROVAL_INBOX_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;

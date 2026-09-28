@@ -108,6 +108,7 @@ const SCREEN_KIND_MEMBERS: Readonly<Record<ScreenKind, true>> = {
   "tally-import": true,
   reconciliation: true,
   "offline-outbox": true,
+  "approval-inbox": true,
 };
 
 /** Every ScreenKind, sorted, as runtime data. */

@@ -85,3 +85,34 @@ export {
   resolveDraftLedgers,
   acceptPurchaseDraft,
 } from "../screens/vouchers/draftAccept";
+
+// The AGENT PLANE (W2, D121 §8): runs, the AG-UI-shaped event stream and the
+// approval inbox. Types plus the pure display helpers the panel and inbox share.
+export type {
+  AgentProvenanceSource,
+  AgentInput,
+  AgentDelegation,
+  AgentRunStatus,
+  AgentRun,
+  AgentEvent,
+  AgentEventsResponse,
+  AgentPosting,
+  AgentEffect,
+  AgentProposalBody,
+  AgentApprovalState,
+  AgentDecisionView,
+  AgentApproval,
+  StartAgentRunRequest,
+  AgentDecisionRequest,
+  AgentRunResponse,
+  AgentRunsResponse,
+  AgentApprovalsResponse,
+  AgentApprovalResponse,
+} from "./agent";
+export {
+  AGENT_UNCONFIGURED,
+  approvalEffect,
+  describeAgentEvent,
+  formatPaise,
+  runFinished,
+} from "./agent";

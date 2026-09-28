@@ -134,6 +134,11 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // binding in this product was once found dead on macOS while every browser
   // test passed (HANDOFF rule 6).
   "Alt+Q": { kind: "offlineOutbox" },
+  // Ctrl+K — the AGENT SIDE PANEL (W2). ⚠️ NOT Alt+K: that is TallyPrime's
+  // `K: Company` top-menu key (RESEARCH.md:361, :415). RESEARCH documents no
+  // Ctrl+K, and no screen in this build binds it. The panel is the SHELL's
+  // (AgentPanel.tsx registers the handler), because it survives screen changes.
+  "Ctrl+K": { kind: "agentPanel" },
   F12: { kind: "configure" }, // Configure (screen/report settings)
   // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
   // The default master is a ledger, the by-far most common inline create; the
@@ -967,6 +972,20 @@ const RAW_SCREEN_BINDINGS: Partial<
   voucher: {
     "Alt+L": { kind: "editLog" },
   },
+  // THE APPROVAL INBOX (W2). Ctrl+A (approve as previewed) and Enter (open the
+  // proposal in its native voucher screen) are the GLOBAL keys and mean here what
+  // they mean everywhere — accept, and drill into the highlighted row — so they
+  // are not restated. Only the two decisions Tally has no word for are scoped.
+  "approval-inbox": {
+    // Alt+X — REJECT. The global Alt+X is `cancelVoucher` ("cancel the voucher
+    // being entered"); a proposal IS a voucher nobody has accepted, so this is the
+    // same key with the same meaning, scoped to the one screen where the thing
+    // being cancelled is somebody else's.
+    "Alt+X": { kind: "rejectApproval" },
+    // Alt+B — ASK BACK. Not a Tally key (Tally has no agent to ask); Alt+B is
+    // unbound globally in this build, so nothing is shadowed. See the KeymapAction.
+    "Alt+B": { kind: "askBackApproval" },
+  },
 };
 
 function buildBindings(
@@ -1117,6 +1136,15 @@ export function actionLabel(action: KeymapAction): string {
       // the only description of this screen an operator sees before opening it. A
       // bare "Outbox" reads like a sent-items folder — the opposite of the truth.
       return "Offline Outbox (queued, not posted)";
+    // ⛔ "Reject the agent's proposal" AND NOT "Reject". This is what the F1
+    // help and the status line say, and a bare "Reject" beside a list of
+    // vouchers reads as "refuse a voucher already in the books".
+    case "agentPanel":
+      return "Agent panel (runs and proposals)";
+    case "rejectApproval":
+      return "Reject the agent's proposal";
+    case "askBackApproval":
+      return "Ask the agent back (with a note)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":

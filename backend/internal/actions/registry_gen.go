@@ -17,7 +17,7 @@ package actions
 var Source = Provenance{
 	RouteArms:         238,
 	UICommandsJoined:  0,
-	ClientCallsJoined: 162,
+	ClientCallsJoined: 170,
 	ClientCallsUnused: 10,
 	UIManifestPresent: true,
 	UIManifestPath:    "frontend/src/api/goldens/ui-commands.json",
@@ -175,7 +175,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.listAgentApprovals",
 		Label:          "display agent-approval (GET /v1/companies/{companyID}/agent/approvals)",
 	},
 	{
@@ -188,7 +189,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.getAgentApproval",
 		Label:          "display agent-approval (GET /v1/companies/{companyID}/agent/approvals/{approvalID})",
 	},
 	{
@@ -201,7 +203,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.listAgentRuns",
 		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/runs)",
 	},
 	{
@@ -214,7 +217,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.getAgentRun",
 		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/runs/{runID})",
 	},
 	{
@@ -227,7 +231,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.agentRunEvents",
 		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/runs/{runID}/events)",
 	},
 	{
@@ -2158,7 +2163,8 @@ var Specs = []ActionSpec{
 		IsWrite:        true,
 		StepUpEligible: true,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.decideAgentApproval",
 		Label:          "alter agent-approval (POST /v1/companies/{companyID}/agent/approvals/{approvalID}/decision)",
 	},
 	{
@@ -2171,7 +2177,8 @@ var Specs = []ActionSpec{
 		IsWrite:        true,
 		StepUpEligible: true,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.startAgentRun",
 		Label:          "create agent-run (POST /v1/companies/{companyID}/agent/runs)",
 	},
 	{
@@ -2184,7 +2191,8 @@ var Specs = []ActionSpec{
 		IsWrite:        true,
 		StepUpEligible: true,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.cancelAgentRun",
 		Label:          "alter agent-run (POST /v1/companies/{companyID}/agent/runs/{runID}/cancel)",
 	},
 	{

@@ -58,6 +58,16 @@ const keymap = resolveKeymap("tallyprime");
 const SCREEN_PATHS: { screen: NavSnapshot["screen"]; events: Ev[] }[] = [
   { screen: "gateway", events: [] },
   { screen: "voucher", events: [{ type: "KEY", combo: "F8" }] },
+  // W2 — the APPROVAL INBOX by its Gateway door, with a proposal HIGHLIGHTED:
+  // the bar's "Enter Open to edit" must drill, and it can only drill a row.
+  {
+    screen: "approval-inbox",
+    events: [
+      { type: "SELECT", menuItem: "Approval Inbox" },
+      { type: "KEY", combo: "Enter" },
+      { type: "SELECT", menuItem: "proposal:payment:single:appr-1" },
+    ],
+  },
   {
     screen: "report",
     events: [
@@ -232,6 +242,12 @@ describe("no advertised button is decorative", () => {
           // AppShell.
           "orderRegister",
           "date",
+          // W2. Ctrl+K toggles the SHELL's side panel, which is not a frame, and
+          // Alt+X / Alt+B on the approval inbox record a decision about the
+          // highlighted proposal — none of the three moves the stack, by design.
+          "agentPanel",
+          "rejectApproval",
+          "askBackApproval",
         ].includes(action?.kind ?? "");
         expect(
           sideEffect || acts(events, combo),

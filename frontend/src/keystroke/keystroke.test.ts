@@ -86,6 +86,12 @@ function assertExpect(snap: NavSnapshot, exp: Record<string, unknown>): void {
       case "screenStackDepth":
         expect(snap.screenStackDepth).toBe(want);
         break;
+      case "detailOf":
+        // W2: the approval a proposal-review voucher frame is BOUND to. The
+        // prefill is live only while the frame names it, which is what stops a
+        // later plain F5 reopening the same proposal (navMachine's proposalFrame).
+        expect(snap.detailOf).toBe(want);
+        break;
       case "canReturnToVoucher":
         expect(snap.canReturnToVoucher).toBe(want);
         break;
