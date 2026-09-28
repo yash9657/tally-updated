@@ -13,6 +13,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -444,6 +445,26 @@ func setAutonomy(t *testing.T, companyID string, key string, lvl policy.Level) {
 	if err != nil {
 		t.Fatalf("set autonomy: %v", err)
 	}
+}
+
+// ownerSubject is the subject inside the per-server owner token.
+func ownerSubject(t *testing.T, srv *server.Server) string {
+	t.Helper()
+	parts := strings.Split(ownerToken(t, srv), ".")
+	if len(parts) != 3 {
+		t.Fatal("owner token is not a JWS")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil || c.Sub == "" {
+		t.Fatalf("owner token has no subject: %v", err)
+	}
+	return c.Sub
 }
 
 // fixedClock is a settable engine clock.
