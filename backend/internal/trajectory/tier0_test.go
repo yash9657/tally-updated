@@ -77,8 +77,13 @@ const (
 	// W2 (D121) added internal/server/testdata/cassettes/agent.decide/: the
 	// payment run (5 decisions) and the sales run with its verifier retry (6),
 	// taking the corpus from 2 files / 3 interactions to 4 / 14.
-	tier0MinInteractions = 14
-	tier0MinCassettes    = 4
+	//
+	// W4 (d125) added internal/insights/narrate/testdata/cassettes/
+	// insight.narrate/three-findings.jsonl: one digest narration (keys only,
+	// no tenant values), replayed from its input by TestNarrateCassette —
+	// 5 files / 15 interactions.
+	tier0MinInteractions = 15
+	tier0MinCassettes    = 5
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way

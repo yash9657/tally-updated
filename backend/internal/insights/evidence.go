@@ -62,7 +62,14 @@ type Candidate struct {
 func Canonical(u Unit, v decimal.Decimal) string {
 	switch u {
 	case UnitINR, UnitPct:
-		return v.StringFixed(2)
+		// Two places, unless the value carries more (a purchase RATE of
+		// 52.3456 is legal at NUMERIC(19,4)): rounding it to 52.35 here would
+		// make the payload disagree with the books by design, and the evidence
+		// gate would — rightly — refuse it.
+		if r := v.Round(2); r.Equal(v) {
+			return r.StringFixed(2)
+		}
+		return v.Round(4).String()
 	case UnitQty:
 		return v.Round(4).String()
 	case UnitDays, UnitCount:

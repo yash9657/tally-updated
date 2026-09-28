@@ -37,7 +37,7 @@ import (
 type Unit string
 
 const (
-	UnitINR   Unit = "inr"   // money, fixed 2 decimals ("12500.00")
+	UnitINR   Unit = "inr"   // money, 2 decimals ("12500.00"), 4 when it carries them (a rate)
 	UnitPct   Unit = "pct"   // a percentage, fixed 2 decimals
 	UnitQty   Unit = "qty"   // a stock quantity, up to 4 decimals, trailing zeros trimmed
 	UnitDays  Unit = "days"  // whole days
@@ -172,7 +172,7 @@ var Types = []TypeDef{
 			{"invoice_value", UnitINR, "invoice value"}, {"threshold", UnitINR, "Rule 138 threshold"},
 			{"penalty_floor", UnitINR, "minimum penalty if the goods move without one"},
 		},
-		Template: "Invoice {{voucher_no}} to {{party}} is Rs {{invoice_value}}, at or above the Rs {{threshold}} threshold, and has no e-way bill yet; moving goods without one risks a penalty of at least Rs {{penalty_floor}}."},
+		Template: "Invoice {{voucher_no}} to {{party}} is Rs {{invoice_value}}, at or above the Rs {{threshold}} threshold, and has no e-way bill yet; moving the goods without it risks a penalty of at least Rs {{penalty_floor}}."},
 
 	// ---- nightly -----------------------------------------------------------
 	{Code: TypeCustomerSlower, Title: "Customer paying slower than their own norm", Cadence: Nightly, EntityKind: "party",
