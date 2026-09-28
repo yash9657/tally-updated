@@ -58,6 +58,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -144,6 +145,15 @@ func newEInvoiceStack(t *testing.T) *einvStack {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("the e-invoice stack needs Postgres and two HTTP servers")
+	}
+	// ⛔ CORED_SKIP_DB WAS NOT HONOURED HERE, and this is the one test in the
+	// package that APPLIES MIGRATIONS without checking it — so a "hermetic"
+	// `CORED_SKIP_DB=1 go test ./...` still migrated the database behind
+	// adminDSN. Measured in the W3 lane on 2026-09-28: 0096/0097 landed in the
+	// shared `tally` database from a CORED_SKIP_DB=1 run and were dropped by
+	// hand.
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("CORED_SKIP_DB is set")
 	}
 	ctx := context.Background()
 

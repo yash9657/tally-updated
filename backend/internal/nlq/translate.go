@@ -117,7 +117,10 @@ const translatorFeature = "nlq.translate"
 // shape changed and a score measured against one shape should not be silently
 // credited to the other. llm.SpanStart also records a hash of the static half,
 // which is the evidence when somebody edits a prompt and forgets this line.
-const translatorPromptVersion = "nlq-dsl-v2"
+// v3 (W3) is v2 plus three catalogue entities (stock_movements,
+// bank_statement_lines, profile_facts) and rules 9-10: the text the model reads
+// changed, so a v2 score must not be credited to it.
+const translatorPromptVersion = "nlq-dsl-v3"
 
 // emitQueryTool is the single tool the model is forced to call. The name is
 // referenced by the schema comment, the prompt text and the response decoder;

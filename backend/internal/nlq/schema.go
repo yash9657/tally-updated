@@ -30,7 +30,7 @@ const emitQuerySchema = `{
   "additionalProperties": false,
   "required": ["entity", "metrics", "dimensions", "filters", "date_range", "order_by", "limit"],
   "properties": {
-    "entity": {"type": "string", "enum": ["ledger_balances", "vouchers", "postings", "outstandings", ""]},
+    "entity": {"type": "string", "enum": ["ledger_balances", "vouchers", "postings", "outstandings", "stock_movements", "bank_statement_lines", "profile_facts", ""]},
     "metrics": {
       "type": "array",
       "items": {
@@ -195,13 +195,15 @@ func staticPrompt() string {
 	b.WriteString(`
 RULES (the compiler rejects violations; obey them so the query is answerable):
 1. Aliases (a metric's "as", and any order_by column) must be lowercase snake_case, and an order_by column must spell an emitted dimension or metric alias IDENTICALLY.
-2. ledger_balances accepts NO date_range. Only vouchers/postings (voucher_date) and outstandings (due_date) do.
+2. ledger_balances accepts NO date_range. Only vouchers/postings/stock_movements (voucher_date), outstandings (due_date), bank_statement_lines (value_date) and profile_facts (as_of) do.
 3. The metrics "net", "natural_net" and "pending" accept only func "sum". count uses column "*".
 4. On vouchers, filter by party name using the filter column "party", but GROUP BY the dimension "party_name" — they are different keys.
 5. outstandings "nature" accepts only op "eq" (values ASSET for receivables, LIABILITY for payables).
 6. A SALES OR PURCHASE TOTAL IS MEASURED ON postings, NEVER ON vouchers. Use entity "postings", metric sum(natural_net), and filter pl_group eq "Sales Accounts" (or "Purchase Accounts"); that is the figure the Profit & Loss prints, for the same books. The vouchers metric taxable_value is the GST TAXABLE BASE of the invoice register: it EXCLUDES the GST charged on every invoice, EXCLUDES credit notes and debit notes (a sales return is a voucher of a different type, so it would never reduce the total), and is EMPTY on a book where no GST was derived. Summing it for a "total sales" question answers a number that agrees with no report in the product. Use taxable_value only when the question explicitly asks for taxable value or the GST base.
 7. PERIODS: copy a window from RESOLVED PERIOD WINDOWS below, VERBATIM. Never compute one yourself and never carry one over from an example. A period word with NO this/last qualifier ("sales by month", "monthly sales") names no window at all: emit NO date_range and group by the month dimension instead. A period the user states in full ("April 2026", "1 April 2026 to 30 June 2026") may be emitted directly.
 8. outstandings is an AS-AT-TODAY position, always. Its due_date range filters WHEN BILLS FALL DUE; it does not move the as-on date, and there is no way to ask it for a past position.
+9. stock_movements amount is the line value AS ENTERED (a sale's selling value), never the cost of goods issued; a stock VALUE question cannot be answered here. Its in_qty/out_qty/net_qty are exact.
+10. bank_statement_lines: deposits are money INTO the bank account and withdrawals money out; description is a FILTER only (use op like with % wildcards) and can never be grouped by.
 
 REFUSE — call emit_query with entity "" (and empty metrics/dimensions/filters/order_by, null date_range, limit 0) when:
 R1. The question names a scope other than the signed-in company: another company/tenant/organisation/firm by name, "all companies", "every tenant", "across all books", or a raw company UUID. Every answer is scoped to the signed-in company by the server and no other scope is reachable. Answering such a question with this company's figures would put the caller's own number under someone else's question, which is worse than a refusal.
