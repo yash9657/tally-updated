@@ -45,8 +45,8 @@ Resource Metadata, Client ID Metadata Documents) is **not** built; §4 says what
 | `internal/server/mcp_http.go` (NEW) | 5 routes, test seam `ConfigureMCP` | + `internal/mcp` |
 | `migrations/0105_…` (NEW) | `agent_mcp_grant`, `agent_mcp_session` | — |
 
-Size (`wc -l`): internal/mcp 1,381 lines of which 310 are its test; external.go 407; mcp_http.go 153;
-server-side MCP tests 1,127; 0105 160. `git diff 4e7cfff -- backend/go.mod backend/go.sum
+Size (`wc -l`): internal/mcp 1,691 lines (310 of them its test); external.go 407; mcp_http.go 153;
+server-side MCP tests 1,127 (harness 204, conformance 308, gates 615); 0105 160. `git diff 4e7cfff -- backend/go.mod backend/go.sum
 frontend/package.json frontend/pnpm-lock.yaml insightd/requirements.txt | wc -l` = **0**.
 
 ---
@@ -312,7 +312,20 @@ the refusal is **403 naming the ceiling** and that a within-ceiling commit posts
 
 ---
 
-## 10. Migrations and registry (PLAN-TALLY-PARITY §2.5 updated)
+## 10. Gates at the lane's HEAD (private database `tally_w2_w6mcp`, all four DSN envs set)
+
+- `cd backend && go build ./... && go vet ./...`: clean. `GOFLAGS=-mod=readonly GOPROXY=off go build ./...`:
+  clean. Dependency diff against `4e7cfff` (go.mod, go.sum, package.json, pnpm-lock.yaml,
+  insightd/requirements.txt): **0 lines**.
+- `go test ./... -count=1 -p 4 -timeout 60m`: **exit 0, 48 packages ok, 7 with no test files** (47 + the
+  new `internal/mcp`). server 45.5 s, evals/tau 37.7 s.
+- `make tier0`: ok; *"Tier 0: replayed 14 interactions across 4 cassettes in 2 directories, features
+  [agent.decide extraction nlq.translate]"* — no cassette added (nothing here calls a model), pins unchanged.
+- `cd frontend && pnpm exec tsc --noEmit`: exit 0. `pnpm exec vitest run`: **Test Files 126 passed (126),
+  Tests 2019 passed (2019)** (only `AgentProvenanceSource` and the regenerated registry golden changed).
+- insightd: not touched, not run.
+
+## 11. Migrations and registry (PLAN-TALLY-PARITY §2.5 updated)
 
 - **0105** `agent_mcp_grant`, `agent_mcp_session`: ENABLE + FORCE RLS, USING + WITH CHECK, company-scope
   UNIQUEs, composite FKs to the grant and `agent_run`, named CHECKs, a narrowing UPDATE/DELETE trigger,
