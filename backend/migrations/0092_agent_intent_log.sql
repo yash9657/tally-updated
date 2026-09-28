@@ -20,8 +20,11 @@
 -- Every append would have to read the tenant's head and write the next link
 -- under a lock on it, so two agent runs in one company — one reconciling the
 -- bank, one drafting a sales invoice — would queue behind each other on an
--- audit table. Chained per run, an append contends only with its own run, which
--- is already serialised by the run's advisory lock (internal/durable). The
+-- audit table. Chained per run, an append contends only with its own run:
+-- intentlog.Append takes a transaction-scoped advisory lock on the run for the
+-- head read and the insert. (The run's durable lock does NOT cover it — an
+-- approval decision and a cancel append from the HTTP path without that lock;
+-- the first cut of this comment claimed otherwise and was wrong.) The
 -- tenant-level tamper evidence comes from the ANCHOR table below: a periodic row
 -- that commits to every run head, chained to the previous anchor.
 --

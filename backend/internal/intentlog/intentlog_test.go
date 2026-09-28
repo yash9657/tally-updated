@@ -272,3 +272,42 @@ func TestRLSHidesAnotherTenantsLog(t *testing.T) {
 		t.Fatalf("company B listed %d of company A's intent rows (err %v), want 0", n, lerr)
 	}
 }
+
+// TestConcurrentAppendsToOneRunSerialise: appends from several transactions at
+// once — the poller's step, an approval decision, a cancel — must each get the
+// next seq. Before the per-run transaction lock, two of them read the same head
+// and one failed on agent_intent_log_one_seq_per_run.
+func TestConcurrentAppendsToOneRunSerialise(t *testing.T) {
+	pool, _, cid := harness(t)
+	run := uuid.New()
+	const writers = 8
+	errs := make(chan error, writers)
+	start := make(chan struct{})
+	for w := 0; w < writers; w++ {
+		go func(w int) {
+			<-start
+			errs <- pool.RunInTx(db.WithCompany(context.Background(), cid), func(ctx context.Context, tx pgx.Tx) error {
+				if _, err := Append(ctx, tx, cid, Event{RunID: run, Kind: KindApprovalDecided, ActorKind: ActorUser,
+					ActorID: uuid.NewString(), Payload: map[string]any{"w": w}}, time.Now()); err != nil {
+					return err
+				}
+				// Hold the transaction open a moment so the writers overlap.
+				_, err := tx.Exec(ctx, `SELECT pg_sleep(0.02)`)
+				return err
+			})
+		}(w)
+	}
+	close(start)
+	var failed []error
+	for w := 0; w < writers; w++ {
+		if err := <-errs; err != nil {
+			failed = append(failed, err)
+		}
+	}
+	if len(failed) > 0 {
+		t.Fatalf("%d of %d concurrent appends failed: %v", len(failed), writers, failed[0])
+	}
+	if n, err := verify(t, pool, cid, run); err != nil || n != writers {
+		t.Fatalf("Verify = (%d, %v), want (%d, nil)", n, err, writers)
+	}
+}

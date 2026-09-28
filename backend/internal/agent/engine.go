@@ -492,12 +492,15 @@ func (e *Engine) Cancel(ctx context.Context, companyID, runID, by uuid.UUID) (Ru
 		if run.Status.Finished() {
 			return nil
 		}
-		out, _ := json.Marshal(finishOut{Status: string(StatusCancelled), Reason: "cancelled by the user"})
-		if err := setRunState(ctx, tx, runID, StatusCancelled, out, "", run.Attempts, nil, now); err != nil {
-			return err
-		}
+		// ⚠️ THE INTENT APPEND FIRST, THEN THE ROW UPDATE — the same order
+		// Decide takes them (intentlog's per-run lock, then agent_run), so a
+		// cancel and a decision on one run cannot deadlock each other.
 		if _, err := intentlog.Append(ctx, tx, companyID, intentlog.Event{RunID: runID, Kind: intentlog.KindRunFailed,
 			ActorKind: intentlog.ActorUser, ActorID: by.String(), Payload: map[string]any{"status": "cancelled"}}, now); err != nil {
+			return err
+		}
+		out, _ := json.Marshal(finishOut{Status: string(StatusCancelled), Reason: "cancelled by the user"})
+		if err := setRunState(ctx, tx, runID, StatusCancelled, out, "", run.Attempts, nil, now); err != nil {
 			return err
 		}
 		run, err = loadRun(ctx, tx, companyID, runID)

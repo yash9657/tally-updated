@@ -217,15 +217,29 @@ func computeHash(e Entry, canonPayload []byte) []byte {
 	return sum[:]
 }
 
+// appendLockClass is the first key of the two-int4 advisory lock Append takes.
+// The two-key space never overlaps the single-bigint space internal/durable's
+// run lock uses, so this cannot collide with (or deadlock against) that lock;
+// two runs whose ids share a hashtext merely serialise their appends.
+const appendLockClass int32 = 0x1A7E
+
 // Append adds one event to its run's chain, inside the caller's transaction
 // (which must be company-scoped: RLS decides the tenant, and companyID must be
 // the tenant in scope or the INSERT's WITH CHECK refuses it).
 //
-// ⚠️ IT DOES NOT LOCK THE HEAD ROW, BECAUSE IT CANNOT AND NEED NOT. SELECT ...
-// FOR UPDATE needs UPDATE privilege, which 0092 deliberately withholds. Appends
-// to one run are serialised by the run's advisory lock (internal/durable);
-// the (company, run, seq) UNIQUE turns any append that raced past it into a
-// loud unique violation rather than a fork in the chain.
+// ⚠️ IT DOES NOT LOCK THE HEAD ROW, BECAUSE IT CANNOT: SELECT ... FOR UPDATE
+// needs UPDATE privilege, which 0092 deliberately withholds. It takes a
+// TRANSACTION-scoped advisory lock on the run instead (appendLockClass), held
+// until the caller's transaction ends, so the head read and the insert are one
+// critical section per run.
+//
+// ⛔ THE RUN'S DURABLE LOCK IS NOT ENOUGH, and the first cut assumed it was.
+// The poller appends under internal/durable's session lock, but an approval
+// decision and a cancel append from the HTTP path without it (they must not
+// wait for an in-flight model call), so two appends computed the same seq and
+// the approver's POST failed with a 500 on the UNIQUE. The UNIQUE remains the
+// backstop that turns any append that raced past this lock into a loud error
+// rather than a fork in the chain.
 func Append(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, ev Event, now time.Time) (Entry, error) {
 	if ev.RunID == uuid.Nil {
 		return Entry{}, errors.New("intentlog: event has no run id")
@@ -256,6 +270,9 @@ func Append(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, ev Event, now t
 		// covers the stored value: a nanosecond in the hash would be lost on
 		// the way in and every row would fail to verify.
 		CreatedAt: now.UTC().Truncate(time.Microsecond),
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, appendLockClass, ev.RunID.String()); err != nil {
+		return Entry{}, fmt.Errorf("intentlog: lock run chain: %w", err)
 	}
 	var lastSeq int
 	var lastHash []byte
