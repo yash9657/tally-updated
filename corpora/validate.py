@@ -3488,6 +3488,470 @@ def validate_payroll(path: Path, case: dict) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# tau/ — the W1a state-based agent task suite (d124)
+# ---------------------------------------------------------------------------
+#
+# WHAT IS RE-DERIVED HERE, INDEPENDENTLY OF BOTH THE GENERATOR'S BOOKKEEPING AND
+# THE GO ENGINE:
+#   - every expected voucher balances (sum Dr == sum Cr, to the paisa);
+#   - every GST-bearing POST in a seed or a reference plan: the tax legs the
+#     fixture expects equal derive_tax() over the step's own lines (accounting
+#     mode) or over qty x rate at the ITEM MASTER's rate (item invoice);
+#   - every question's stated figures: a trial-balance question's figure is the
+#     ledger's opening plus every expected leg on it; a GSTR-3B 3.1(a) figure
+#     is the sum over June's expected SALES; a GSTR-1 HSN row is the sum over
+#     the seed's lines carrying that HSN;
+#   - every GSTIN carries a valid checksum, every fixture says SYNTHETIC, and
+#     Hindi utterances are Devanagari while English/Hinglish are not.
+# And, separately, check_tau_generator_drift(): the committed fixtures are
+# byte-identical to what corpora/tau/generate.py produces, so a hand edit to
+# one fixture (the way an oracle gets "fixed" to agree with a bug) fails.
+
+TAU_FAMILIES = {"voucher_entry", "item_invoice", "bank_match", "gst_returns", "nl_query",
+                "master_creation", "guard"}
+_GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+
+
+def gstin_valid(g: str) -> bool:
+    if not _GSTIN_RE.match(g):
+        return False
+    total = 0
+    for i, c in enumerate(g[:14]):
+        v = _GSTIN_CHARS.index(c) * (1 if i % 2 == 0 else 2)
+        total += v // 36 + v % 36
+    return _GSTIN_CHARS[(36 - total % 36) % 36] == g[14]
+
+
+def _has_devanagari(s: str) -> bool:
+    return any("ऀ" <= ch <= "ॿ" for ch in s)
+
+
+def _tau_ref_name(value: Any) -> str | None:
+    if isinstance(value, str) and value.startswith("{@") and value.endswith("}"):
+        return value[2:-1].split(":", 1)[1]
+    return None
+
+
+def _tau_steps(case: dict) -> list[dict]:
+    return list(case.get("seed", {}).get("steps", [])) + list(case.get("reference_plan", []))
+
+
+def _tau_item_rates(case: dict) -> dict[str, Decimal]:
+    rates = {}
+    for st in _tau_steps(case):
+        if st.get("method") == "POST" and st.get("path") == "/stock-items":
+            b = st.get("body", {})
+            rates[b.get("name")] = Decimal(b.get("gst_rate_pct", "0"))
+    return rates
+
+
+def _tau_legs(v: dict, ledger: str, side: str) -> Decimal:
+    return sum((Decimal(p["amount"]) for p in v.get("postings", [])
+                if p["ledger"] == ledger and p["dr_cr"] == side), Decimal(0))
+
+
+def _tau_check_gst_step(path: Path, case: dict, st: dict, vouchers: list[dict]) -> None:
+    body = st.get("body") or {}
+    gst = body.get("gst")
+    if not gst:
+        return
+    cls = st["path"].rsplit("/", 1)[-1]
+    side = "C" if cls == "sales" else "D"
+    if body.get("inventory"):
+        rates = _tau_item_rates(case)
+        lines = []
+        for ln in body["inventory"]:
+            item = _tau_ref_name(ln.get("stock_item_id"))
+            if item not in rates:
+                fail(path, f"item invoice line names item {item!r} with no stock-item master in the task")
+                return
+            lines.append({"taxableValue": str(Decimal(ln["qty"]) * Decimal(ln["rate"])),
+                          "gstRatePct": str(rates[item])})
+    else:
+        lines = [{"taxableValue": ln["taxable_value"], "gstRatePct": ln["gst_rate_pct"]} for ln in gst.get("lines", [])]
+    want = derive_tax({"supplierStateCode": gst["supplier_state_code"],
+                       "placeOfSupplyStateCode": gst["place_of_supply_state_code"], "lines": lines})
+    heads = {"cgst": _tau_ref_name(gst.get("cgst_ledger_id")), "sgst": _tau_ref_name(gst.get("sgst_ledger_id")),
+             "igst": _tau_ref_name(gst.get("igst_ledger_id"))}
+    date = body.get("voucher_date")
+    cands = [v for v in vouchers if v["class"] == cls and v["date"] == date]
+    if body.get("inventory"):
+        items = sorted(_tau_ref_name(ln["stock_item_id"]) for ln in body["inventory"])
+        cands = [v for v in cands if sorted(x["item"] for x in v.get("inventory", [])) == items]
+    else:
+        # Matched on the LEDGERS the step names, never on its amounts: matching
+        # on amounts would make a fixture whose expected tax leg was edited
+        # "match nothing" and fail for the wrong reason.
+        named = sorted(_tau_ref_name(q["ledger_id"]) for q in body.get("postings", []))
+        cands = [v for v in cands if sorted(p["ledger"] for p in v["postings"]) == named]
+    if len(cands) != 1:
+        if case.get("family") == "guard":
+            return  # a guard's naive write is, by design, absent from the expected state
+        fail(path, f"GST {cls} step dated {date}: {len(cands)} matching expected vouchers, want exactly 1")
+        return
+    v = cands[0]
+    for head in ("cgst", "sgst", "igst"):
+        led = heads[head]
+        got = _tau_legs(v, led, side) if led else Decimal(0)
+        if got != want[head]:
+            fail(path, f"{cls} {date}: expected {head.upper()} leg {got} but derive_tax gives {want[head]}")
+
+
+def _tau_balance(case: dict, ledger: str) -> Decimal:
+    exp = case["expected"]
+    bal = Decimal(0)
+    for l in exp["ledgers"]:
+        if l["name"] == ledger:
+            sign = Decimal(1) if l["opening_dc"] in ("D", "") else Decimal(-1)
+            bal = sign * Decimal(l["opening_balance"])
+    for v in exp["vouchers"]:
+        for p in v["postings"]:
+            if p["ledger"] == ledger:
+                bal += Decimal(p["amount"]) if p["dr_cr"] == "D" else -Decimal(p["amount"])
+    return bal
+
+
+def _tau_check_outputs(path: Path, case: dict) -> None:
+    """Re-derive every figure a question's answer must state, from the books.
+
+    Keyed on WHAT THE REFERENCE PLAN READS (its capture selectors), not on the
+    task id, so a renamed or copied task is re-derived exactly the same way.
+    """
+    exp = case["expected"]
+    outs = [Decimal(o) for o in exp.get("outputs", [])]
+    derived: list[Decimal] = []
+    june = [v for v in exp["vouchers"] if v["class"] == "sales" and v["date"].startswith("2025-06")]
+    heads = {"txval": ("Sales @18%",), "iamt": ("Output IGST",), "camt": ("Output CGST",),
+             "samt": ("Output SGST",)}
+    for st in case.get("reference_plan", []):
+        for sel in (st.get("capture") or {}).values():
+            m = re.match(r"rows\[ledger=(.+)\]\.(debit|credit)$", sel)
+            if m:
+                derived.append(abs(_tau_balance(case, m.group(1))))
+                continue
+            m = re.match(r"sup_details\.osup_det\.(txval|iamt|camt|samt)$", sel)
+            if m:
+                derived.append(sum((_tau_legs(v, led, "C") for v in june for led in heads[m.group(1)]), Decimal(0)))
+                continue
+            m = re.match(r"hsn\.data\[hsn_sc=(\w+)\]\.(txval|tot_val)$", sel)
+            if m:
+                tot = Decimal(0)
+                for gst_st in _tau_steps(case):
+                    body = gst_st.get("body") or {}
+                    gst = body.get("gst") or {}
+                    for ln in gst.get("lines", []):
+                        if ln["hsn"] != m.group(1) or not str(body.get("voucher_date", "")).startswith("2025-06"):
+                            continue
+                        t = derive_tax({"supplierStateCode": gst["supplier_state_code"],
+                                        "placeOfSupplyStateCode": gst["place_of_supply_state_code"],
+                                        "lines": [{"taxableValue": ln["taxable_value"],
+                                                   "gstRatePct": ln["gst_rate_pct"]}]})
+                        tot += Decimal(ln["taxable_value"]) if m.group(2) == "txval" else t["invoiceTotal"]
+                derived.append(tot)
+                continue
+            if sel.endswith((".voucher_id", ".leg_no")):
+                continue  # plumbing for a later step, not a stated figure
+            fail(path, f"capture selector {sel!r}: this validator cannot re-derive what it reads")
+    # A MULTISET compare: CGST and SGST are usually the same figure, and a set
+    # would let a fixture state it once and still "match" both heads.
+    q = Decimal("0.01")
+    if sorted(d.quantize(q) for d in derived) != sorted(o.quantize(q) for o in outs):
+        fail(path, f"re-derived figures {sorted(str(d.quantize(q)) for d in derived)} != expected outputs "
+                   f"{sorted(str(o.quantize(q)) for o in outs)}")
+
+
+def validate_tau(path: Path, case: dict) -> None:
+    if not require(path, case, ["id", "family", "language", "synthetic", "provenance", "today", "seed",
+                                "utterance", "reference_plan", "expected"]):
+        return
+    if case["synthetic"] is not True or "SYNTHETIC" not in case["provenance"]:
+        fail(path, "must declare synthetic: true and a SYNTHETIC provenance line")
+    if case["family"] not in TAU_FAMILIES:
+        fail(path, f"unknown family {case['family']!r}")
+    if path.stem != case["id"]:
+        fail(path, f"file name must equal id {case['id']!r}")
+    lang, utt = case["language"], case["utterance"]
+    if lang not in ("en", "hi", "hinglish"):
+        fail(path, f"unknown language {lang!r}")
+    elif (lang == "hi") != _has_devanagari(utt):
+        fail(path, f"language {lang} but Devanagari present={_has_devanagari(utt)}")
+    if (case["family"] == "guard") != bool(case.get("naive_plan")):
+        fail(path, "naive_plan is required on, and only on, guard tasks")
+    exp = case["expected"]
+    for v in exp["vouchers"]:
+        dr = sum((Decimal(p["amount"]) for p in v["postings"] if p["dr_cr"] == "D"), Decimal(0))
+        cr = sum((Decimal(p["amount"]) for p in v["postings"] if p["dr_cr"] == "C"), Decimal(0))
+        if dr != cr or dr == 0:
+            fail(path, f"expected {v['class']} {v['date']} does not balance: Dr {dr} Cr {cr}")
+        for p in v["postings"]:
+            money(path, f"voucher posting {p['ledger']}", p["amount"])
+        for ln in v.get("inventory", []):
+            if Decimal(ln["qty"]) * Decimal(ln["rate"]) != Decimal(ln["amount"]):
+                fail(path, f"inventory line {ln['item']}: qty x rate != amount")
+    for l in exp["ledgers"]:
+        if l["gstin"]:
+            if not gstin_valid(l["gstin"]):
+                fail(path, f"ledger {l['name']}: GSTIN {l['gstin']} fails its checksum")
+            elif l["state_code"] != l["gstin"][:2]:
+                fail(path, f"ledger {l['name']}: state {l['state_code']} disagrees with GSTIN {l['gstin']}")
+    for st in _tau_steps(case):
+        if st.get("method") == "POST" and st.get("path") in ("/vouchers/sales", "/vouchers/purchase"):
+            _tau_check_gst_step(path, case, st, exp["vouchers"])
+    _tau_check_outputs(path, case)
+
+
+def _load_generator(family: str):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(f"{family}_generate", ROOT / family / "generate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_generator_drift() -> None:
+    """The committed W1a fixtures must be byte-identical to what their
+    generators emit. A generated set is edited by editing its generator; a
+    hand-edit to one fixture is how an oracle gets "fixed" to agree with a bug,
+    and this is what turns that into a red build naming the file."""
+    tau = _load_generator("tau")
+    ext = _load_generator("extraction")
+    emb = _load_generator("embedding")
+    produced = {
+        "tau": {f"{t['id']}.json": tau.render(t) for t in tau.build()},
+        "extraction": {f"{d['id']}.json": ext.render(d) for d in ext.build()},
+        "embedding": {name: emb.dump(obj) for name, obj in emb.files().items()},
+    }
+    for family, want in produced.items():
+        have = {p.name: p.read_text(encoding="utf-8") for p in (ROOT / family).glob("*.json")}
+        for name in sorted(set(want) | set(have)):
+            if name not in have:
+                _errors.append(f"{family}/{name}: produced by generate.py but not committed")
+            elif name not in want:
+                _errors.append(f"{family}/{name}: committed but not produced by generate.py (hand-written?)")
+            elif want[name] != have[name]:
+                _errors.append(f"{family}/{name}: differs from generate.py's output — re-run the generator "
+                               f"rather than editing a fixture")
+
+
+# ---------------------------------------------------------------------------
+# extraction/ — the W1a invoice + bank-statement extraction set (d124)
+# ---------------------------------------------------------------------------
+#
+# Two properties, both INDEPENDENT of the generator's own bookkeeping:
+#   GROUNDED — every non-empty header label is backed by an evidence string
+#     that OCCURS in the document text and that normalises back to the label
+#     (after undoing exactly the three OCR confusions for fields the fixture
+#     declares damaged). A label the text does not support is a label no
+#     extractor can hit, and it would silently cap every model's recall.
+#   CONSISTENT — invoice lines are qty x rate, sum to the taxable value, and
+#     the tax re-derived line by line (derive_tax) equals the labelled heads;
+#     the total foots; a statement's running balance holds on every line.
+
+_MON3 = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep",
+                                      "oct", "nov", "dec"], 1)}
+
+
+def _ext_date(s: str) -> str | None:
+    s = s.strip()
+    for pat, order in ((r"(\d{4})-(\d{2})-(\d{2})$", "ymd"), (r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2}|\d{4})$", "dmy")):
+        m = re.match(pat, s)
+        if m:
+            a, b, c = (int(x) for x in m.groups())
+            y, mo, d = (a, b, c) if order == "ymd" else (c + 2000 if c < 100 else c, b, a)
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+    m = re.match(r"(\d{1,2})[\s\-]([A-Za-z]{3,9})[\s\-,]*(\d{4})$", s)
+    if m:
+        return f"{int(m.group(3)):04d}-{_MON3[m.group(2)[:3].lower()]:02d}-{int(m.group(1)):02d}"
+    m = re.match(r"([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$", s)
+    if m:
+        return f"{int(m.group(3)):04d}-{_MON3[m.group(1)[:3].lower()]:02d}-{int(m.group(2)):02d}"
+    return None
+
+
+_EXT_MONEY = {"taxable_value", "cgst", "sgst", "igst", "round_off", "invoice_total", "opening_balance",
+              "closing_balance"}
+_EXT_DATES = {"invoice_date", "statement_from", "statement_to"}
+_OCR_UNDO = str.maketrans({"O": "0", "l": "1", "S": "5"})
+
+
+def _ext_norm(key: str, value: str) -> str:
+    if key in _EXT_MONEY:
+        try:
+            return str(Decimal(value.replace(",", "")).quantize(Decimal("0.01")))
+        except InvalidOperation:
+            return "INVALID"
+    if key in _EXT_DATES:
+        return _ext_date(value) or "INVALID"
+    if key == "place_of_supply":
+        return value[:2]
+    if key in ("supplier_name", "buyer_name", "bank"):
+        return value.strip().casefold()
+    return value.strip()
+
+
+def validate_extraction(path: Path, doc: dict) -> None:
+    if not require(path, doc, ["id", "kind", "synthetic", "provenance", "layout", "document", "labels", "evidence"]):
+        return
+    if doc["synthetic"] is not True or "SYNTHETIC" not in doc["provenance"]:
+        fail(path, "must declare synthetic: true and a SYNTHETIC provenance line")
+    text = doc["document"].get("text", "")
+    first = text.splitlines()[0] if text else ""
+    if "SYNTHETIC" not in first:
+        fail(path, "the document's FIRST LINE must say SYNTHETIC — the page itself, not only the JSON")
+    if path.stem != doc["id"]:
+        fail(path, f"file name must equal id {doc['id']!r}")
+    fields, lines, ev = doc["labels"]["fields"], doc["labels"]["lines"], doc["evidence"]
+    damaged = set(doc.get("ocr_damaged", []))
+    for key, surface in ev.items():
+        if surface not in text:
+            fail(path, f"evidence for {key} ({surface!r}) does not occur in the document text")
+        undone = surface.translate(_OCR_UNDO) if key in damaged else surface
+        if _ext_norm(key, undone) != _ext_norm(key, fields.get(key, "")):
+            fail(path, f"evidence for {key} ({surface!r}) does not normalise to the label {fields.get(key)!r}")
+    for key, value in fields.items():
+        empty = value in ("", None) or (key in _EXT_MONEY and Decimal(value) == 0)
+        if empty or key in ev:
+            continue
+        if key == "place_of_supply" and doc["kind"] == "invoice":
+            inferred = (fields["buyer_gstin"] or fields["supplier_gstin"])[:2]
+            if value != inferred:
+                fail(path, f"place_of_supply {value} is not printed and is not the state inferred from the GSTINs ({inferred})")
+            continue
+        fail(path, f"label {key}={value!r} has no evidence in the text (ungrounded)")
+    for key in ("supplier_gstin", "buyer_gstin"):
+        if fields.get(key) and not gstin_valid(fields[key]):
+            fail(path, f"{key} {fields[key]} fails its checksum")
+
+    if doc["kind"] == "invoice":
+        intra = fields["supplier_gstin"][:2] == fields["place_of_supply"]
+        taxable = Decimal(0)
+        tax_lines = []
+        for ln in lines:
+            amt = Decimal(ln["amount"])
+            if (Decimal(ln["qty"]) * Decimal(ln["rate"])).quantize(Decimal("0.01")) != amt:
+                fail(path, f"line {ln['description']}: qty x rate != amount")
+            if ln["description"] not in text or ln["hsn"] not in text:
+                fail(path, f"line {ln['description']}: description/HSN not in the text")
+            taxable += amt
+            tax_lines.append({"taxableValue": ln["amount"], "gstRatePct": ln["gst_rate_pct"]})
+        if taxable != Decimal(fields["taxable_value"]):
+            fail(path, f"lines sum to {taxable}, labelled taxable value {fields['taxable_value']}")
+        t = derive_tax({"supplierStateCode": "A", "placeOfSupplyStateCode": "A" if intra else "B", "lines": tax_lines})
+        for head in ("cgst", "sgst", "igst"):
+            if t[head].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) != Decimal(fields[head]):
+                fail(path, f"{head} re-derived {t[head]} != labelled {fields[head]}")
+        gross = taxable + sum(Decimal(fields[h]) for h in ("cgst", "sgst", "igst"))
+        ro = Decimal(fields["round_off"])
+        if abs(ro) >= 1 or gross + ro != Decimal(fields["invoice_total"]):
+            fail(path, f"total {fields['invoice_total']} != taxable+tax {gross} + round off {ro}")
+    elif doc["kind"] == "bank_statement":
+        bal = Decimal(fields["opening_balance"])
+        lo, hi = fields["statement_from"], fields["statement_to"]
+        for k, ln in enumerate(lines, 1):
+            dr = Decimal(ln["debit"] or 0)
+            cr = Decimal(ln["credit"] or 0)
+            if (dr == 0) == (cr == 0):
+                fail(path, f"line {k}: exactly one of debit/credit must be set")
+            bal = bal - dr + cr
+            if bal != Decimal(ln["balance"]):
+                fail(path, f"line {k}: running balance {bal} != labelled {ln['balance']}")
+            if not lo <= ln["date"] <= hi:
+                fail(path, f"line {k}: date {ln['date']} outside the statement period")
+            n = ln["narration"]
+            if n not in text and not (n[:36] in text and n[36:] in text):
+                fail(path, f"line {k}: narration not in the text")
+        if bal != Decimal(fields["closing_balance"]):
+            fail(path, f"closing balance {fields['closing_balance']} != running balance {bal}")
+        if not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", fields["ifsc"]):
+            fail(path, f"IFSC {fields['ifsc']} is not IFSC-shaped")
+    else:
+        fail(path, f"unknown kind {doc['kind']!r}")
+
+
+# ---------------------------------------------------------------------------
+# embedding/ — the W1a Hinglish narration retrieval eval (d124)
+# ---------------------------------------------------------------------------
+#
+# Three files (corpus, queries, qrels), dispatched on CONTENT not file name so a
+# poisoned copy is validated by the same code. The judgments are re-derived
+# from the documents' own intent/key metadata, independently of the generator:
+#   grade 2  <=> same intent AND same key (party / employee / month)
+#   grade 1   => same intent, different key
+#   grade 0   => a different intent (a judged hard negative)
+# and COMPLETENESS: every document with the query's intent and key is judged.
+# An unjudged relevant document is scored as a miss for whichever model finds
+# it — the one defect that makes a better embedding model look worse.
+# The count printed for this family is the number of judged ROWS.
+
+
+def _emb_meta(path: Path) -> tuple[dict, dict]:
+    base = path.parent if (path.parent / "corpus.json").exists() else ROOT / "embedding"
+    corpus = json.loads((base / "corpus.json").read_text(encoding="utf-8"))["documents"]
+    queries = json.loads((base / "queries.json").read_text(encoding="utf-8"))["queries"]
+    return {d["id"]: d for d in corpus}, {q["id"]: q for q in queries}
+
+
+def _emb_items(path: Path, items: list, what: str) -> None:
+    seen = set()
+    for it in items:
+        if not require(path, it, ["id", "text", "lang", "intent", "key"]):
+            continue
+        if it["id"] in seen:
+            fail(path, f"duplicate {what} id {it['id']}")
+        seen.add(it["id"])
+        if it["lang"] not in ("en", "hi", "hinglish"):
+            fail(path, f"{what} {it['id']}: unknown lang {it['lang']!r}")
+        elif (it["lang"] == "hi") != _has_devanagari(it["text"]):
+            fail(path, f"{what} {it['id']}: lang {it['lang']} but Devanagari present={_has_devanagari(it['text'])}")
+
+
+def validate_embedding(path: Path, data: dict) -> int:
+    if data.get("synthetic") is not True or "SYNTHETIC" not in data.get("provenance", ""):
+        fail(path, "must declare synthetic: true and a SYNTHETIC provenance line")
+    if "documents" in data:
+        _emb_items(path, data["documents"], "document")
+        return 0
+    if "queries" in data:
+        _emb_items(path, data["queries"], "query")
+        return 0
+    if "rows" not in data:
+        fail(path, "not a corpus, queries or qrels file")
+        return 0
+    docs, queries = _emb_meta(path)
+    judged: dict[str, dict[str, int]] = {}
+    for r in data["rows"]:
+        q, d, g = r.get("query"), r.get("doc"), r.get("grade")
+        if q not in queries or d not in docs:
+            fail(path, f"row {r}: unknown query or document id")
+            continue
+        if g not in (0, 1, 2):
+            fail(path, f"row {r}: grade must be 0, 1 or 2")
+            continue
+        if d in judged.setdefault(q, {}):
+            fail(path, f"row {r}: ({q}, {d}) judged twice")
+        judged[q][d] = g
+        qq, dd = queries[q], docs[d]
+        same_intent, same_key = qq["intent"] == dd["intent"], qq["key"] == dd["key"]
+        want = 2 if same_intent and same_key else 1 if same_intent else 0
+        if g != want:
+            fail(path, f"row {q}->{d}: grade {g} but the metadata says {want} "
+                       f"(query {qq['intent']}/{qq['key']}, doc {dd['intent']}/{dd['key']})")
+    by_ik: dict[tuple, set] = {}
+    for d in docs.values():
+        by_ik.setdefault((d["intent"], d["key"]), set()).add(d["id"])
+    for q, qq in queries.items():
+        j = judged.get(q, {})
+        missing = by_ik.get((qq["intent"], qq["key"]), set()) - set(j)
+        if missing:
+            fail(path, f"query {q}: {len(missing)} relevant document(s) left unjudged, e.g. {sorted(missing)[0]}")
+        if not any(g == 0 for g in j.values()):
+            fail(path, f"query {q}: no judged hard negative")
+    return len(data["rows"])
+
+
 VALIDATORS = {
     "tax": validate_tax,
     "tds": validate_tds,
@@ -3500,6 +3964,9 @@ VALIDATORS = {
     "gstr2b": validate_gstr2b,
     "ims": validate_ims,
     "payroll": validate_payroll,
+    "tau": validate_tau,
+    "extraction": validate_extraction,
+    "embedding": validate_embedding,
 }
 
 MIN_COUNTS = {
@@ -3572,10 +4039,23 @@ MIN_COUNTS = {
     #      employer's salary, and total income rounded to the nearest TEN while
     #      the tax is rounded to the nearest RUPEE.
     "payroll": 12,
+    # TAU (W1a, d124). EXACT, like gstr2b: the 200 is PLAN-AGENTIC W1's stated
+    # suite size, the Go harness pins the same number, and a deleted task must
+    # fail here rather than quietly shrink the denominator of a pass^5.
+    "tau": 200,
+    # EXTRACTION (W1a, d124). EXACT: 100 invoices + 50 statements (10 each for
+    # HDFC, ICICI, SBI, Axis, Kotak) is PLAN-AGENTIC W1's stated set, and a
+    # field-level F1 over a silently smaller denominator is not comparable
+    # with the last run's.
+    "extraction": 150,
+    # EMBEDDING (W1a, d124). Counted in judged ROWS, not files (there are three
+    # files). EXACT at 2342 — inside PLAN-AGENTIC W1's 2-3k target — because a
+    # recall@10 over a silently different judgment set is a different metric.
+    "embedding": 2342,
 }
 
 # Families that carry a POISONED-FIXTURE TRIPWIRE. See check_poison().
-POISON_FAMILIES = ("gstr2b", "ims")
+POISON_FAMILIES = ("gstr2b", "ims", "tau", "extraction", "embedding")
 
 
 def _ts_union_members(source: str, type_name: str) -> set[str] | None:
@@ -3701,6 +4181,7 @@ def check_poison() -> None:
 def main() -> int:
     check_vocabulary_matches_typescript()
     check_poison()
+    check_generator_drift()
     counts: dict[str, int] = {k: 0 for k in VALIDATORS}
     for category, validator in VALIDATORS.items():
         directory = ROOT / category
@@ -3714,8 +4195,11 @@ def main() -> int:
             if not isinstance(data, dict):
                 fail(path, "top-level JSON must be an object")
                 continue
-            counts[category] += 1
-            validator(path, data)
+            # A validator may return how many CASES the file holds (the
+            # embedding family keeps its 2,342 judged rows in one file);
+            # anything else counts the file as one case.
+            n = validator(path, data)
+            counts[category] += n if isinstance(n, int) else 1
 
     for category, minimum in MIN_COUNTS.items():
         if counts[category] < minimum:

@@ -193,6 +193,7 @@ than renumbering.**
 | **W3 data understanding — catalogue, tenant profile, entity facts, embeddings, Tier B role/views** | **0096–0099** | **RESERVED 2026-09-28** for the wave-1 workflow |
 | **W5 documents + bank statements on open weights — provenance, idempotency keys** | **0100–0101** | **RESERVED 2026-09-28** for the wave-1 workflow |
 | **W4 insights / W6 channels / W7 learning (wave 2)** | **0102–0109** | **RESERVED 2026-09-28** — W4 0102–0104, W6 0105–0106, W7 0107–0109. Not to be taken by wave 1 |
+| **W1a golden sets — tau suite, extraction set, narration retrieval eval** | **none** | **CONSUMED NOTHING, 2026-09-28, by design** (d124). Everything W1a built is a fixture (`corpora/tau`, `corpora/extraction`, `corpora/embedding`) or a judge (`internal/evals/tau`, `insightd/evals`), and a judge that owned a table would be a judge that could be written to. It adds no route, no `routeAction` arm and no ACL rule; the seeder census is untouched. Each trial runs in a freshly created company through the existing HTTP API and is dropped by `testdb.Cleanup` |
 
 **T6 CAME BACK FOR A THIRD NUMBER, AND TOOK 0067 RATHER THAN RENUMBERING.** 0049–0050 were
 reserved on the assumption that TCS needed only the declaration table. It does not: wiring
