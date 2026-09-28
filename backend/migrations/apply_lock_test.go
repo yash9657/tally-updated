@@ -36,13 +36,22 @@ func TestConcurrentAppliesOnAnEmptyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin postgres unreachable and CORED_SKIP_DB is not set: %v", err)
 	}
-	defer admin.Close(ctx)
 	name := fmt.Sprintf("tally_applylock_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
+		admin.Close(ctx)
 		t.Fatalf("create %s: %v", name, err)
 	}
+	// ⛔ THE DROP OWNS THE ADMIN CONNECTION'S LIFETIME. A `defer admin.Close`
+	// runs when this function returns — BEFORE t.Cleanup — so the drop ran on
+	// a closed connection, its error was discarded, and every run leaked a
+	// tally_applylock_* database into the shared cluster (five found at the
+	// wave-2 merge). Report a failed drop instead of swallowing it.
 	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+		bg := context.Background()
+		defer admin.Close(bg)
+		if _, err := admin.Exec(bg, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)"); err != nil {
+			t.Errorf("cleanup: drop %s: %v", name, err)
+		}
 	})
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {

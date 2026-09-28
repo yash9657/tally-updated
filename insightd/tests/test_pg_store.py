@@ -536,7 +536,13 @@ def _schemaless_dsn(dsn: str) -> str:
     into false reds/greens."""
     import psycopg
 
-    bare = dsn.replace("/tally?", "/template1?")
+    from urllib.parse import urlsplit, urlunsplit
+
+    # Any database name, not only the shared "tally": every lane and the
+    # integrator run on a private database (tally_w2_<lane>), and a literal
+    # "/tally?" match silently skipped both assertions there.
+    parts = urlsplit(dsn)
+    bare = urlunsplit(parts._replace(path="/template1")) if parts.path not in ("", "/") else dsn
     if bare == dsn:
         pytest.skip(f"cannot derive a schema-less database from DSN {dsn!r}")
     try:
