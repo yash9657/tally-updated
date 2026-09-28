@@ -311,6 +311,17 @@ var allowedDeps = map[string]map[string]bool{
 	// the router, not a query: it must be readable by an agent planner, a doc
 	// generator or a test with no database anywhere in sight.
 	"internal/actions": {"internal/authz": true},
+	// evals/tau (W1a, d124) is the state-based task harness. {} — THE STRICTEST
+	// POLICY, and the reason is the same as form140's: it is a JUDGE, and a
+	// judge that could import the ledger could be tempted to read the books by
+	// a door the agent under test does not have. It sees the books only through
+	// the Books interface (an HTTP surface), exactly as the agent does, so an
+	// agent cannot write anywhere the judge does not look. Its DB test imports
+	// server/testdb/migrations; test files are outside this walker by design.
+	//
+	// No line in internal/server's set: server does not import it, and must
+	// not — the harness is a client of the product, not a part of it.
+	"internal/evals/tau": {},
 	// notify (item C) is the transactional OUTBOX for outbound notifications.
 	// It touches the db layer and nothing else — deliberately: a notifier that
 	// could reach into the ledger or the authz store would be a way for a
