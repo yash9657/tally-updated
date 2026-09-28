@@ -38,7 +38,6 @@ package bankstatement
 
 import (
 	"crypto/sha256"
-	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -116,6 +115,9 @@ const (
 	YMDDash   DateLayout = "yyyy-mm-dd"
 	DMYSlash2 DateLayout = "dd/mm/yy"
 	MDYSlash  DateLayout = "mm/dd/yyyy"
+	// DMonYSpace is "01 Apr 2026", State Bank of India's statement layout
+	// (profiles.go). Month by NAME, so it can never be confused with mm/dd.
+	DMonYSpace DateLayout = "dd Mon yyyy"
 )
 
 // goLayout maps a named layout to Go's reference time.
@@ -124,8 +126,9 @@ var goLayout = map[DateLayout]string{
 	DMYDash:   "02-01-2006",
 	DMonY:     "02-Jan-2006",
 	YMDDash:   "2006-01-02",
-	DMYSlash2: "02/01/06",
-	MDYSlash:  "01/02/2006",
+	DMYSlash2:  "02/01/06",
+	MDYSlash:   "01/02/2006",
+	DMonYSpace: "02 Jan 2006",
 }
 
 // KnownDateLayouts lists every layout this build can read, for the client's
@@ -160,8 +163,13 @@ type ColumnMapping struct {
 	Direction  string `json:"direction,omitempty"`
 
 	RunningBalance string `json:"running_balance,omitempty"`
-	BankReference  string `json:"bank_reference,omitempty"`
-	ChequeNumber   string `json:"cheque_number,omitempty"`
+	// BalanceSign is a Cr/Dr flag column carrying the RUNNING BALANCE's sign,
+	// for exports that print the balance unsigned beside its own flag (Kotak;
+	// see profiles.go). "Dr" there means overdrawn — a NEGATIVE balance in the
+	// bank's orientation. Optional; a balance cell with its own suffix needs none.
+	BalanceSign   string `json:"balance_sign,omitempty"`
+	BankReference string `json:"bank_reference,omitempty"`
+	ChequeNumber  string `json:"cheque_number,omitempty"`
 }
 
 // Line is one transaction as the bank reported it, normalised.
@@ -198,6 +206,11 @@ type Line struct {
 	// bank_statement_line column comments in migration 0062.
 	Hash       string
 	Occurrence int
+	// Narration is the structured reading of Description (narration.go). An
+	// ANNOTATION: it is never an input to the amount, direction or date, and it
+	// is deliberately excluded from Hash, so improving the parser can never
+	// make a re-import of the same file look like new transactions.
+	Narration Narration
 }
 
 // Statement is a parsed file.
@@ -214,6 +227,17 @@ type Statement struct {
 	BalanceWalked bool
 	PeriodFrom    time.Time
 	PeriodTo      time.Time
+	// Order is the row order the running balances revealed; OrderUnknown when
+	// the file carries none. A newest-first file is walked bottom-up.
+	Order Order
+	// Summary is what the file's preamble and footer DECLARED (summary.go).
+	Summary Summary
+	// Proof is set by ParseStatement, and is the zero value after a bare Parse.
+	Proof BalanceProof
+	// Delimiter is the one the file was read with, reported so a proposal can
+	// say "read as tab-separated" rather than leave the operator wondering why
+	// an ".xls" parsed.
+	Delimiter rune
 }
 
 // Parse reads a CSV bank statement under a confirmed mapping.
@@ -221,22 +245,41 @@ type Statement struct {
 // It is total on refusals: every return path is either a complete Statement or
 // an error naming the row and the column that stopped it.
 func Parse(content string, m ColumnMapping) (Statement, error) {
-	header, records, err := readCSV(content)
+	t, err := readTable(content)
 	if err != nil {
 		return Statement{}, err
 	}
+	header := t.header
 	idx, err := m.resolve(header)
 	if err != nil {
 		return Statement{}, err
 	}
+	layout := goLayout[m.DateLayout]
+	records, footer := splitFooter(t.body, idx.valueDate, func(v string) bool {
+		if v == "" {
+			return false
+		}
+		_, perr := time.Parse(layout, v)
+		return perr == nil
+	})
 	if len(records) == 0 {
 		return Statement{}, fmt.Errorf("%w: it has a header row and nothing under it", ErrEmptyFile)
 	}
 
-	st := Statement{Lines: make([]Line, 0, len(records))}
+	summaryRows := make([][]string, 0, len(t.preamble)+len(footer))
+	summaryRows = append(summaryRows, t.preamble...)
+	summaryRows = append(summaryRows, footer...)
+	summary, err := readSummary(summaryRows)
+	if err != nil {
+		return Statement{}, err
+	}
+
+	st := Statement{Lines: make([]Line, 0, len(records)), Summary: summary, Delimiter: t.delimiter}
 	for i, rec := range records {
-		// +2: one for the header row, one because operators count from 1.
-		lineNo := i + 2
+		// +2: one for the header row, one because operators count from 1. The
+		// offset is the preamble (and any separator row under the header), so
+		// the number is the row the operator sees in their spreadsheet.
+		lineNo := t.offset + i + 2
 		ln, err := m.parseRow(rec, header, idx, lineNo)
 		if err != nil {
 			return Statement{}, err
@@ -253,42 +296,41 @@ func Parse(content string, m ColumnMapping) (Statement, error) {
 	return st, nil
 }
 
+// ParseStatement is Parse plus the MANDATORY balance proof (proof.go): the
+// entry point every import goes through. A statement that cannot be proved is
+// refused here, before any transaction opens.
+func ParseStatement(content string, m ColumnMapping, operator Declared) (Statement, error) {
+	st, err := Parse(content, m)
+	if err != nil {
+		return Statement{}, err
+	}
+	if err := prove(&st, st.Summary, operator); err != nil {
+		return Statement{}, err
+	}
+	return st, nil
+}
+
 // readCSV splits the file into its header row and its records.
 //
 // FieldsPerRecord is set to -1 so a ragged file reaches parseRow, where a
 // missing cell is refused against the COLUMN THAT IS MISSING. csv's own
 // "wrong number of fields" error names neither the column nor anything the
 // operator can act on.
+//
+// ⚠️ IT NO LONGER ASSUMES THE HEADER IS THE FIRST ROW. readTable (layout.go)
+// finds it by what it says, detects the delimiter, and strips the preamble;
+// this wrapper keeps propose.go's call site. Trailing blank rows are trimmed
+// here because the proposal has no mapping to split a footer with.
 func readCSV(content string) ([]string, [][]string, error) {
-	r := csv.NewReader(strings.NewReader(content))
-	r.FieldsPerRecord = -1
-	r.TrimLeadingSpace = true
-	rows, err := r.ReadAll()
+	t, err := readTable(content)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrUnsupportedFormat, err)
+		return nil, nil, err
 	}
-	// Banks prepend blank lines and a title row above the real header. Skip
-	// leading rows that are entirely empty; a title row is the operator's
-	// problem to trim and we refuse it by name below rather than guessing which
-	// row is the header.
-	for len(rows) > 0 && allBlank(rows[0]) {
-		rows = rows[1:]
-	}
-	if len(rows) == 0 {
-		return nil, nil, fmt.Errorf("%w: the file is empty", ErrEmptyFile)
-	}
-	header := make([]string, len(rows[0]))
-	for i, h := range rows[0] {
-		header[i] = strings.TrimSpace(h)
-	}
-	// Trailing blank rows are ordinary in bank exports and are not a refusal —
-	// unlike a blank row in the MIDDLE, which parseRow refuses because it may be
-	// the dropped row B-4 exists to catch.
-	body := rows[1:]
+	body := t.body
 	for len(body) > 0 && allBlank(body[len(body)-1]) {
 		body = body[:len(body)-1]
 	}
-	return header, body, nil
+	return t.header, body, nil
 }
 
 func allBlank(rec []string) bool {
@@ -306,6 +348,7 @@ type colIndex struct {
 	valueDate, txnDate, description             int
 	deposit, withdrawal, amount, direction      int
 	runningBalance, bankReference, chequeNumber int
+	balanceSign                                 int
 }
 
 // resolve validates the mapping against the file's actual header and turns
@@ -320,7 +363,7 @@ func (m ColumnMapping) resolve(header []string) (colIndex, error) {
 	for i, h := range header {
 		pos[strings.ToLower(h)] = i
 	}
-	idx := colIndex{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1}
+	idx := colIndex{-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1}
 
 	find := func(name, field string, required bool) (int, error) {
 		if strings.TrimSpace(name) == "" {
@@ -384,6 +427,12 @@ func (m ColumnMapping) resolve(header []string) (colIndex, error) {
 	if idx.runningBalance, err = find(m.RunningBalance, "the running balance", false); err != nil {
 		return idx, err
 	}
+	if idx.balanceSign, err = find(m.BalanceSign, "the balance's Cr/Dr flag", false); err != nil {
+		return idx, err
+	}
+	if idx.balanceSign >= 0 && idx.runningBalance < 0 {
+		return idx, fmt.Errorf("%w: a balance Cr/Dr flag is mapped but no running balance is", ErrUnmappedColumn)
+	}
 	if idx.bankReference, err = find(m.BankReference, "the bank reference", false); err != nil {
 		return idx, err
 	}
@@ -437,9 +486,23 @@ func (m ColumnMapping) parseRow(rec, header []string, idx colIndex, lineNo int) 
 
 	if idx.runningBalance >= 0 {
 		if raw := cell(rec, idx.runningBalance); raw != "" {
-			bal, berr := parseAmount(raw)
+			// parseBalance, NOT parseAmount: in a balance cell "Dr" is a SIGN.
+			// See summary.go's parseBalance.
+			bal, berr := parseBalance(raw)
 			if berr != nil {
 				return Line{}, fmt.Errorf("%w: row %d, the running balance %q", ErrBadAmount, lineNo, raw)
+			}
+			if idx.balanceSign >= 0 {
+				switch flag := strings.ToUpper(strings.TrimRight(cell(rec, idx.balanceSign), ".")); flag {
+				case "DR", "D", "DEBIT":
+					bal = bal.Abs().Neg()
+				case "CR", "C", "CREDIT", "":
+					// An empty flag leaves the cell's own reading, which is
+					// positive unless the cell itself said Dr.
+				default:
+					return Line{}, fmt.Errorf("%w: row %d has %q in the balance's Cr/Dr column, which is neither",
+						ErrBadAmount, lineNo, flag)
+				}
 			}
 			ln.RunningBalance = bal
 			ln.HasBalance = true
@@ -447,6 +510,7 @@ func (m ColumnMapping) parseRow(rec, header []string, idx colIndex, lineNo int) 
 	}
 
 	ln.Hash = hashLine(ln)
+	ln.Narration = ParseNarration(ln.Description)
 	return ln, nil
 }
 
@@ -553,7 +617,8 @@ func parseAmount(raw string) (decimal.Decimal, error) {
 		neg, s = true, strings.TrimSuffix(strings.TrimPrefix(s, "("), ")")
 	}
 	up := strings.ToUpper(s)
-	for _, suffix := range []string{"CR", "DR"} {
+	// "Dr." with a full stop is as common as "Dr" in exports.
+	for _, suffix := range []string{"CR.", "DR.", "CR", "DR"} {
 		if strings.HasSuffix(up, suffix) {
 			s = s[:len(s)-len(suffix)]
 			break
@@ -604,19 +669,49 @@ func (l Line) signed() decimal.Decimal {
 // When the file carries no running balance the walk cannot run, and
 // BalanceWalked stays false so the import can SAY that. A check that did not
 // run must never be reported the same way as a check that passed.
+//
+// ⭐ BOTH DIRECTIONS ARE TRIED, AND THE BALANCES DECIDE WHICH. Several banks
+// export newest-first. Slice 2a walked in file order only, so a correct
+// newest-first statement was refused as "a row is missing" at row 3. The
+// forward walk runs first and ITS error is the one reported when neither
+// direction holds, so every refusal slice 2a produced is unchanged. The dates
+// are not consulted: two rows on one day cannot be ordered by date at all, and
+// the balance is the bank's own statement of the order.
 func walkBalances(st *Statement) error {
 	for _, ln := range st.Lines {
 		if !ln.HasBalance {
 			st.BalanceWalked = false
+			st.Order = OrderUnknown
 			return nil
 		}
 	}
-	first := st.Lines[0]
-	st.OpeningBalance = first.RunningBalance.Sub(first.signed())
-	st.ClosingBalance = st.Lines[len(st.Lines)-1].RunningBalance
+	fwdErr := walk(st.Lines)
+	if fwdErr == nil {
+		first := st.Lines[0]
+		st.OpeningBalance = first.RunningBalance.Sub(first.signed())
+		st.ClosingBalance = st.Lines[len(st.Lines)-1].RunningBalance
+		st.BalanceWalked, st.Order = true, OldestFirst
+		return nil
+	}
+	rev := make([]Line, len(st.Lines))
+	for i, l := range st.Lines {
+		rev[len(st.Lines)-1-i] = l
+	}
+	if walk(rev) == nil {
+		oldest := rev[0]
+		st.OpeningBalance = oldest.RunningBalance.Sub(oldest.signed())
+		st.ClosingBalance = rev[len(rev)-1].RunningBalance
+		st.BalanceWalked, st.Order = true, NewestFirst
+		return nil
+	}
+	return fwdErr
+}
 
-	prev := first.RunningBalance
-	for _, ln := range st.Lines[1:] {
+// walk checks that each line's balance is the previous balance plus its own
+// movement, in the order given.
+func walk(lines []Line) error {
+	prev := lines[0].RunningBalance
+	for _, ln := range lines[1:] {
 		want := prev.Add(ln.signed())
 		if !want.Equal(ln.RunningBalance) {
 			return fmt.Errorf(
@@ -628,7 +723,6 @@ func walkBalances(st *Statement) error {
 		}
 		prev = ln.RunningBalance
 	}
-	st.BalanceWalked = true
 	return nil
 }
 
