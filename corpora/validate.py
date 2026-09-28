@@ -134,6 +134,10 @@ KNOWN_SCREENS = {
     # ScreenKind under the bare `agent-approval` token, and it carries writes
     # (the decisions), which no report frame does.
     "approval-inbox",
+    # W4 — THE INSIGHTS INBOX: the insight engine's findings, the morning digest,
+    # verdicts and suppressions; Tab + Enter opens a voucher behind a finding.
+    # A ScreenKind under the bare `insights` token, and it carries writes.
+    "insights",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.
