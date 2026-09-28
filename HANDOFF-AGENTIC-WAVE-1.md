@@ -1,3 +1,7 @@
+> ⛔ **SUPERSEDED as the entry point by `HANDOFF-AGENTIC-WAVE-2.md`** (wave 2 merged 2026-09-28: W2
+> breadth, W3 follow-ons, W4, W6-MCP). Start there. This file stays valid for wave 1's record: §4.3–§4.4,
+> the §7 decision numbering and the §8 review.
+
 # Handoff — agentic **wave 1 merged**: W1a, W2 (backend + frontend), W3, W5. ⛔ DRIVER: `PLAN-AGENTIC.md` §3
 Updated: 2026-09-28, after the integration merge on `session/t32-and-close-7-3`. Supersedes
 `HANDOFF-AGENTIC-AFTER-W0.md` as the entry point. That file's §7 (traps) and §9 (workflow recipe) still hold
