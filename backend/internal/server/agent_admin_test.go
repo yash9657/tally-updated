@@ -44,6 +44,22 @@ func TestAgentAutonomyRouteIsOwnersOnlyWithStepUp(t *testing.T) {
 	if n := adminInt(t, `SELECT count(*) FROM agent_autonomy WHERE company_id = $1`, b.companyID); n != 0 {
 		t.Fatal("the refused PUT wrote a row")
 	}
+	// ⛔ THE HANDLER DEMANDS THE STEP-UP ITSELF, not only the Owner level's
+	// RequiresWebAuthn (which the admin API will not let anyone turn off, but
+	// an older tenant row may carry). With the level's own flag cleared behind
+	// the API's back, the router no longer asks — the CONTROL write proves it —
+	// and the autonomy PUT is still refused.
+	if n := adminInt(t, `WITH u AS (UPDATE security_level SET requires_webauthn = false
+		 WHERE company_id = $1 AND is_owner RETURNING 1) SELECT count(*) FROM u`, b.companyID); n != 1 {
+		t.Fatalf("cleared requires_webauthn on %d owner levels", n)
+	}
+	if rec, _ := doRaw(t, srv, http.MethodPost, b.base+"/ledgers", noStepUp, map[string]any{"name": "Control Ledger",
+		"group_name": "Indirect Expenses"}); rec.Code != http.StatusCreated {
+		t.Fatalf("CONTROL: an owner write without a step-up once the level no longer requires one = %d", rec.Code)
+	}
+	if rec, resp := doRaw(t, srv, http.MethodPut, b.base+"/agent/autonomy", noStepUp, row); rec.Code != http.StatusForbidden || resp["code"] != "STEPUP_REQUIRED" {
+		t.Fatalf("PUT without a step-up, level flag cleared = %d %v, want the handler's own 403 STEPUP_REQUIRED", rec.Code, resp)
+	}
 	rec, resp := do(t, srv, http.MethodPut, b.base+"/agent/autonomy", row)
 	if rec.Code != http.StatusOK || len(asList(resp["rows"])) != 1 || asMap(asList(resp["rows"])[0])["level"] != float64(2) {
 		t.Fatalf("PUT with a step-up = %d %v", rec.Code, resp)

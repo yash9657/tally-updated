@@ -108,8 +108,11 @@ func TestAgentCreatedLedgerIsBornBlocked(t *testing.T) {
 	pay := voucherBody("2025-05-20", "human pays the new party", [3]string{lid, "D", "1000.00"},
 		[3]string{b.ledgers["HDFC Bank"], "C", "1000.00"})
 	rec, _ := do(t, srv, http.MethodPost, b.base+"/vouchers/payment", pay)
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "unblocks it") {
-		t.Fatalf("a person's payment to a blocked ledger = %d %s, want 422 naming the block", rec.Code, rec.Body.String())
+	// The OPERATOR'S sentence (internal/ledger), not the trigger's floor: it
+	// names the ledger and where the unblock is.
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "Ledgers, Unblock") ||
+		!strings.Contains(rec.Body.String(), newPartyName) {
+		t.Fatalf("a person's payment to a blocked ledger = %d %s, want 422 naming the ledger and the unblock", rec.Code, rec.Body.String())
 	}
 
 	// ---- the agent can never unblock it: refused by the router's own gate
