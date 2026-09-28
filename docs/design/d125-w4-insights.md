@@ -198,4 +198,23 @@ insightd/requirements.txt | wc -l`: **0**. insightd is not touched.
 
 ## 7. Gate figures at the end of the lane
 
-(See the lane report for the final command output; filled from the runs named there.)
+All on `tally_w2_w4` (pre-migrated, 80 migration files, max `0103_ledger_credit_limit`), all four DSN envs
+pointed at it.
+
+| Gate | Command | Result |
+|---|---|---|
+| build + vet | `cd backend && go build ./... && go vet ./...` | clean |
+| offline build | `GOFLAGS=-mod=readonly GOPROXY=off go build ./...` | clean |
+| no new deps | `git diff 4e7cfff -- backend/go.mod backend/go.sum frontend/package.json frontend/pnpm-lock.yaml insightd/requirements.txt \| wc -l` | **0** |
+| full backend suite | `go test ./... -count=1 -p 4 -timeout 60m` | **exit 0, 49 packages ok, 7 with no test files** (was 47 at the wave-1 merge: + `insights`, `insights/narrate`) |
+| Tier 0 | `make tier0` | ok; `replayed 15 interactions across 5 cassettes in 3 directories` |
+| frontend types | `cd frontend && pnpm exec tsc --noEmit` | exit 0 |
+| frontend tests | `pnpm exec vitest run` | **Test Files 127 passed (127), Tests 2027 passed (2027)** (was 126 / 2019) |
+| corpora | `python3 corpora/validate.py` | OK, counts unchanged (`KNOWN_SCREENS` gained `insights`) |
+| insightd | — | not touched; not run |
+
+Two first-run failures of the full suite were real and are fixed in `2abc98f`: the stored-date cutoff
+census required the two id-naming write routes (feedback, unsuppress) to be accounted for (added, with
+the reason they move nothing in the books), and the restore round-trip found `insight_voucher_event`
+doubled — the restore's voucher_head inserts re-enqueue through the trigger — so the queue is now in
+`backup.notRestored` with that reason.
