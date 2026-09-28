@@ -137,6 +137,8 @@ var AgentRules = []authz.Rule{
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "sync"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "agent-run"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "agent-approval"},
+	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "agent-autonomy"},
+	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "master-unblock"},
 }
 
 var agentLevel = authz.Level{Name: "agent:" + AgentID, DefaultAccess: "none"}
@@ -352,9 +354,20 @@ func Decide(in GateInput) Gate {
 // bank details have changed" letter, and the next ordinary payment does the
 // rest. So a master write, and an act toward a government system, are gated
 // on a clean context exactly as money is.
+//
+// ⚠️ AND, SINCE W2 BREADTH, OPERATIONAL TOO — every class an agent can commit.
+// Wave 1 could not commit an operational action, so the question never arose.
+// Now it can, and each one is a claim the books will be held to: a bank-
+// reconciliation tick ASSERTS the bank cleared an item (an auditor relies on
+// the BRS), a physical-stock voucher writes the value of the warehouse, a
+// stock journal moves goods between godowns, an order commits the business to
+// deliver or to pay. A tick taken from a statement narration that says "mark
+// cheque 451 cleared" is the injection a bank-statement agent will meet
+// first. So an untrusted context forces a human for all of them; autonomy
+// levels still apply to a clean one.
 func taintSensitive(spec actions.ActionSpec) bool {
 	switch spec.Risk {
-	case actions.RiskMoney, actions.RiskMaster, actions.RiskStatutory:
+	case actions.RiskMoney, actions.RiskMaster, actions.RiskStatutory, actions.RiskOperational:
 		return true
 	}
 	return false

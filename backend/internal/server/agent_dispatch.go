@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"time"
 
@@ -92,6 +93,36 @@ func agentGate(c *agentCall, act authz.Action, res authz.Resource, resName strin
 	return ""
 }
 
+// attributedTo is the created_by a write is stamped with: the body's claim for
+// a person's request, and — for an agent's in-process call — ALWAYS
+// "agent:<run> for <user>", whatever the body said.
+//
+// ⛔ THE AGENT DOES NOT CHOOSE ITS OWN ATTRIBUTION. The body's created_by is
+// free text the model assembled; left alone, an agent-posted voucher read
+// "agent" (wave 1) or whatever an injected instruction asked it to write —
+// "Ramesh", say. The stamp names the run (whose intent log says what was asked,
+// what was shown, and who approved it) and the human the run acted for.
+func attributedTo(r *http.Request, claimed string) string {
+	if call := agentCallFrom(r.Context()); call != nil {
+		return AgentAttribution(call.caller.Principal.RunID, call.caller.Principal.OnBehalfOf)
+	}
+	return claimed
+}
+
+// AgentAttribution is the created_by an agent's write carries.
+func AgentAttribution(runID, onBehalfOf uuid.UUID) string {
+	return "agent:" + runID.String() + " for " + onBehalfOf.String()
+}
+
+// agentRunOf is the run an in-process agent request belongs to (uuid.Nil for a
+// person's request).
+func agentRunOf(r *http.Request) uuid.UUID {
+	if call := agentCallFrom(r.Context()); call != nil {
+		return call.caller.Principal.RunID
+	}
+	return uuid.Nil
+}
+
 // agentDispatcher implements agent.Dispatcher over the server's own router.
 type agentDispatcher struct {
 	s   *Server
@@ -99,27 +130,6 @@ type agentDispatcher struct {
 }
 
 var _ agent.Dispatcher = agentDispatcher{}
-
-// voucherIDsWrittenSQL finds the logical vouchers this transaction wrote.
-//
-// ⚠️ xmin IS HOW "WRITTEN BY THIS TRANSACTION" IS ASKED, and the comparison is
-// on the low 32 bits: xmin is a 32-bit xid while txid_current_if_assigned() is
-// epoch-extended. txid_current_if_assigned() is NULL for a transaction that
-// has written nothing — the middleware's read transactions — so the hook is a
-// no-op there without a second query.
-const voucherIDsWrittenSQL = `
-	SELECT DISTINCT voucher_id FROM voucher_version
-	 WHERE company_id = $1
-	   AND txid_current_if_assigned() IS NOT NULL
-	   AND xmin::text = (txid_current_if_assigned() % 4294967296)::text`
-
-const postingsWrittenSQL = `
-	SELECT p.ledger_id, l.name, p.dr_cr::text, p.amount::text
-	  FROM posting p JOIN ledger l ON l.id = p.ledger_id AND l.company_id = p.company_id
-	 WHERE p.company_id = $1
-	   AND txid_current_if_assigned() IS NOT NULL
-	   AND p.xmin::text = (txid_current_if_assigned() % 4294967296)::text
-	 ORDER BY p.dr_cr, l.name, p.amount`
 
 func toPaise(amount string) (int64, error) {
 	d, err := decimal.NewFromString(amount)
@@ -144,57 +154,47 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 	if !req.Spec.IsWrite && req.Mode != agent.ModeRead {
 		return agent.Result{}, fmt.Errorf("agent: a read dispatched as %s", req.Mode)
 	}
+	if req.Mode != agent.ModeRead && !agent.Previewable(req.Spec.ID) {
+		// ⛔ THE SAME ALLOWLIST FOR COMMIT AS FOR PREVIEW. A commit replays a
+		// recorded preview, so it can only name a previewable spec — but the
+		// readTxEffect contract below (one hooked transaction, read back) is a
+		// property of the handler, and this is where it is relied on.
+		return agent.Result{}, fmt.Errorf("agent: %s is not previewable", req.Spec.ID)
+	}
+
+	// A bank-reconciliation write changes a row an un-tick then DELETES, so
+	// the before-image must be read before the handler runs (agent_effect.go).
+	var tick *bankTick
+	if req.Mode != agent.ModeRead && req.Spec.Resource == "bank-reconciliation" {
+		t, err := d.bankTickBefore(ctx, companyID, req.Params)
+		if err != nil {
+			return agent.Result{}, err
+		}
+		tick = t
+	}
 
 	var (
-		mu         sync.Mutex
-		effect     = &agent.Effect{}
-		voucherIDs []uuid.UUID
-		fired      bool
-		dupKey     bool
-		overCeil   string
-		runEnded   bool
-		hookErr    error
+		mu       sync.Mutex
+		effect   = &agent.Effect{}
+		written  txEffect
+		fired    bool
+		dupKey   bool
+		overCeil string
+		stale    string
+		runEnded bool
+		hookErr  error
 	)
 	var hook *db.TxHook
 	switch req.Mode {
 	case agent.ModePreview:
-		if !agent.Previewable(req.Spec.ID) {
-			return agent.Result{}, fmt.Errorf("agent: %s is not previewable", req.Spec.ID)
-		}
 		hook = &db.TxHook{DryRun: true, BeforeCommit: func(ctx context.Context, tx pgx.Tx) error {
-			rows, err := tx.Query(ctx, postingsWrittenSQL, companyID)
+			te, err := readTxEffect(ctx, tx, companyID, tick)
 			if err != nil {
 				return err
 			}
-			defer rows.Close()
 			mu.Lock()
 			defer mu.Unlock()
-			for rows.Next() {
-				var p agent.Posting
-				if err := rows.Scan(&p.LedgerID, &p.Ledger, &p.DrCr, &p.Amount); err != nil {
-					return err
-				}
-				paise, err := toPaise(p.Amount)
-				if err != nil {
-					return err
-				}
-				p.AmountPaise = paise
-				// dr_cr is the 0002 enum ('D', 'C').
-				if p.DrCr == "D" {
-					effect.DebitPaise += paise
-				} else {
-					effect.CreditPaise += paise
-				}
-				effect.Postings = append(effect.Postings, p)
-			}
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			var n int
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM (`+voucherIDsWrittenSQL+`) v`, companyID).Scan(&n); err != nil {
-				return err
-			}
-			effect.Vouchers += n
+			mergeEffect(effect, te.effect)
 			return nil
 		}}
 	case agent.ModeCommit:
@@ -202,20 +202,14 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			return agent.Result{}, errors.New("agent: a commit needs an idempotency key")
 		}
 		// ⛔ ANSWER A REPEATED KEY FROM THE RECORD, WITHOUT RUNNING THE
-		// HANDLER. This is the crash-after-commit case: the voucher committed
+		// HANDLER. This is the crash-after-commit case: the write committed
 		// and the durable step never recorded it, so exec:k runs again.
-		var recorded []uuid.UUID
-		var found bool
-		if err := d.s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
-			var err error
-			recorded, found, err = agent.LookupCommit(ctx, tx, req.IdempotencyKey)
-			return err
-		}); err != nil {
+		rec, found, err := d.lookupCommit(ctx, companyID, req.IdempotencyKey)
+		if err != nil {
 			return agent.Result{}, err
 		}
 		if found {
-			return agent.Result{Status: http.StatusOK, Replayed: true, VoucherIDs: recorded,
-				Body: jsonBody(map[string]any{"replayed": true, "voucher_ids": recorded})}, nil
+			return replayed(rec), nil
 		}
 		hook = &db.TxHook{BeforeCommit: func(ctx context.Context, tx pgx.Tx) error {
 			mu.Lock()
@@ -223,34 +217,17 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			if fired {
 				return nil
 			}
-			var assigned *int64
-			if err := tx.QueryRow(ctx, `SELECT txid_current_if_assigned()`).Scan(&assigned); err != nil {
-				return err
-			}
-			if assigned == nil {
-				return nil // a read transaction (the middleware's): nothing to record
-			}
-			rows, err := tx.Query(ctx, voucherIDsWrittenSQL, companyID)
+			te, err := readTxEffect(ctx, tx, companyID, tick)
 			if err != nil {
 				return err
 			}
-			var ids []uuid.UUID
-			for rows.Next() {
-				var id uuid.UUID
-				if err := rows.Scan(&id); err != nil {
-					rows.Close()
-					return err
-				}
-				ids = append(ids, id)
-			}
-			rows.Close()
-			if len(ids) == 0 {
-				return nil // this write transaction created no voucher
+			if te.kind == "" {
+				return nil // this transaction wrote nothing a commit records
 			}
 			// ⛔ THE RUN MUST STILL BE LIVE, UNDER A ROW LOCK, IN THIS
 			// TRANSACTION. FOR SHARE makes a concurrent Cancel's UPDATE wait
-			// for this commit (the voucher then predates the cancel), and a
-			// Cancel that committed first is seen here and rolls the voucher
+			// for this commit (the write then predates the cancel), and a
+			// Cancel that committed first is seen here and rolls the write
 			// back. The engine's per-step status read cannot close that gap.
 			if req.RunID != uuid.Nil {
 				var st string
@@ -262,40 +239,57 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 					return fmt.Errorf("agent: run %s is %s; nothing it proposed may commit", req.RunID, st)
 				}
 			}
+			// ⛔ AN APPROVED ALTERATION RESTATES THE VERSION IT WAS SHOWN. The
+			// ledger appends an ALTER onto whatever the head is now; if a
+			// person altered the voucher after the preview, committing the
+			// agent's restatement would silently discard their edit. The new
+			// version must be exactly one past the one the approver saw.
+			for _, v := range te.versions {
+				if v.Op != "ALTER" {
+					continue
+				}
+				want, ok := req.ExpectVersions[v.VoucherID]
+				if !ok {
+					stale = fmt.Sprintf("voucher %s was altered but its preview recorded no version to restate", v.VoucherID)
+					return errors.New("agent: " + stale)
+				}
+				if v.VersionNo != want+1 {
+					stale = fmt.Sprintf("voucher %s has changed since it was previewed (the approver saw version %d; it is now at version %d) — preview it again",
+						v.VoucherID, want, v.VersionNo-1)
+					return errors.New("agent: " + stale)
+				}
+			}
 			// ⛔ THE DELEGATED CEILING, ON WHAT THIS TRANSACTION ACTUALLY
 			// WROTE. The gate judged the ceiling on the preview; an approver's
-			// edited body is never previewed again, so this is the one place
-			// its amount is known. Above the ceiling the voucher rolls back.
-			if req.MaxDebitPaise != nil {
-				var debit string
-				if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount),0)::text FROM (`+postingsWrittenSQL+`) p WHERE dr_cr = 'D'`,
-					companyID).Scan(&debit); err != nil {
-					return err
-				}
-				paise, err := toPaise(debit)
-				if err != nil {
-					return err
-				}
-				if paise > *req.MaxDebitPaise {
-					overCeil = fmt.Sprintf("the committed debit of %d paise exceeds this run's delegated ceiling of %d paise", paise, *req.MaxDebitPaise)
-					return errors.New("agent: " + overCeil)
-				}
+			// edit is re-previewed at the decision, but this is the one place
+			// the amount of the body that COMMITS is known for certain. Above
+			// the ceiling the write rolls back.
+			if req.MaxDebitPaise != nil && te.effect.DebitPaise > *req.MaxDebitPaise {
+				overCeil = fmt.Sprintf("the committed debit of %d paise exceeds this run's delegated ceiling of %d paise",
+					te.effect.DebitPaise, *req.MaxDebitPaise)
+				return errors.New("agent: " + overCeil)
 			}
 			var approval any
 			if req.ApprovalID != uuid.Nil {
 				approval = req.ApprovalID
 			}
-			// ⛔ IN THE VOUCHER'S OWN TRANSACTION. If a racing dispatch of the
+			voucherIDs := []uuid.UUID{}
+			if te.kind == agent.ObjectVoucher {
+				voucherIDs = te.objects
+			}
+			// ⛔ IN THE WRITE'S OWN TRANSACTION. If a racing dispatch of the
 			// same key got here first, this INSERT violates the primary key,
-			// the error rolls THIS transaction back, and the second voucher
+			// the error rolls THIS transaction back, and the second write
 			// never exists.
 			if _, err := tx.Exec(ctx,
-				`INSERT INTO agent_commit (company_id, idempotency_key, run_id, approval_id, action_id, voucher_ids)
-				 VALUES ($1, $2, $3, $4, $5, $6)`,
-				companyID, req.IdempotencyKey, req.RunID, approval, req.Spec.ID, ids); err != nil {
+				`INSERT INTO agent_commit (company_id, idempotency_key, run_id, approval_id, action_id,
+				                           voucher_ids, object_kind, object_ids)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				companyID, req.IdempotencyKey, req.RunID, approval, req.Spec.ID,
+				voucherIDs, string(te.kind), te.objects); err != nil {
 				// ⛔ ONLY A UNIQUE VIOLATION IS "LOST THE RACE". Any other
 				// failure — a deadlock, a serialization failure, a statement
-				// timeout, the run FK — also rolls the voucher back, but there
+				// timeout, the run FK — also rolls the write back, but there
 				// is no winner's record to answer from; treating it as a replay
 				// once recorded an approved payment as posted when nothing was.
 				var pgErr *pgconn.PgError
@@ -307,7 +301,7 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 				return fmt.Errorf("agent: commit idempotency: %w", err)
 			}
 			fired = true
-			voucherIDs = ids
+			written = te
 			return nil
 		}}
 	}
@@ -356,42 +350,106 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 		if runEnded {
 			return agent.Result{Status: http.StatusConflict, Body: jsonError("agent: the run was cancelled; nothing it proposed may commit")}, nil
 		}
+		if stale != "" {
+			return agent.Result{Status: http.StatusConflict, Body: jsonError("agent: " + stale)}, nil
+		}
 		if overCeil != "" {
 			return agent.Result{Status: http.StatusForbidden, Body: jsonError("agent: " + overCeil)}, nil
 		}
 		if hookErr != nil {
 			// TRANSIENT: returned as an error so exec:k records nothing and is
 			// retried with the SAME idempotency key.
-			return agent.Result{}, fmt.Errorf("agent: recording the commit of %s failed; the voucher was rolled back: %w", req.Spec.ID, hookErr)
+			return agent.Result{}, fmt.Errorf("agent: recording the commit of %s failed; the write was rolled back: %w", req.Spec.ID, hookErr)
 		}
 		if dupKey {
 			// Lost the race to a concurrent dispatch of the same key: answer
 			// from the winner's record — which must exist; if it cannot be
 			// read, that is a transient failure, never an empty "replayed".
-			var recorded []uuid.UUID
-			var found bool
-			if err := d.s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
-				var err error
-				recorded, found, err = agent.LookupCommit(ctx, tx, req.IdempotencyKey)
-				return err
-			}); err != nil {
+			rec, found, err := d.lookupCommit(ctx, companyID, req.IdempotencyKey)
+			if err != nil {
 				return agent.Result{}, fmt.Errorf("agent: reading the winning commit of %s: %w", req.IdempotencyKey, err)
 			}
 			if !found {
 				return agent.Result{}, fmt.Errorf("agent: commit key %s collided but no record of it is visible", req.IdempotencyKey)
 			}
-			return agent.Result{Status: http.StatusOK, Replayed: true, VoucherIDs: recorded,
-				Body: jsonBody(map[string]any{"replayed": true, "voucher_ids": recorded})}, nil
+			return replayed(rec), nil
 		}
-		res.VoucherIDs = voucherIDs
+		if fired {
+			res.ObjectKind, res.ObjectIDs = written.kind, written.objects
+			if written.kind == agent.ObjectVoucher {
+				res.VoucherIDs = written.objects
+			}
+		}
 		if res.OK() && !fired {
-			// A 2xx that wrote no voucher is not a commit this layer can vouch
+			// A 2xx that wrote nothing is not a commit this layer can vouch
 			// for; say so rather than record a success with nothing behind it.
 			res.Status = http.StatusInternalServerError
-			res.Body = jsonError("agent: the handler answered success but no voucher was written")
+			res.Body = jsonError("agent: the handler answered success but nothing was written")
 		}
 	}
 	return res, nil
+}
+
+// replayed is the answer to a known idempotency key: the original commit, said
+// again, marked as a replay.
+func replayed(rec agent.CommitRecord) agent.Result {
+	return agent.Result{Status: http.StatusOK, Replayed: true, VoucherIDs: rec.VoucherIDs,
+		ObjectKind: rec.ObjectKind, ObjectIDs: rec.ObjectIDs,
+		Body: jsonBody(map[string]any{"replayed": true, "voucher_ids": rec.VoucherIDs,
+			"object_kind": rec.ObjectKind, "object_ids": rec.ObjectIDs})}
+}
+
+func (d agentDispatcher) lookupCommit(ctx context.Context, companyID uuid.UUID, key string) (agent.CommitRecord, bool, error) {
+	var rec agent.CommitRecord
+	var found bool
+	err := d.s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		rec, found, err = agent.LookupCommit(ctx, tx, key)
+		return err
+	})
+	return rec, found, err
+}
+
+// bankTickBefore reads a bank-reconciliation leg's tick before the write that
+// changes it. ledgerID and voucherID are uuids (concretePath required them);
+// legNo is the leg's ordinal.
+func (d agentDispatcher) bankTickBefore(ctx context.Context, companyID uuid.UUID, params map[string]string) (*bankTick, error) {
+	ledgerID, err := uuid.Parse(params["ledgerID"])
+	if err != nil {
+		return nil, fmt.Errorf("agent: bank reconciliation needs a ledger id")
+	}
+	voucherID, err := uuid.Parse(params["voucherID"])
+	if err != nil {
+		return nil, fmt.Errorf("agent: bank reconciliation needs a voucher id")
+	}
+	legNo, err := strconv.Atoi(params["legNo"])
+	if err != nil || legNo < 0 {
+		return nil, fmt.Errorf("agent: bank reconciliation needs a leg number")
+	}
+	t := &bankTick{voucherID: voucherID, ledgerID: ledgerID, legNo: legNo}
+	err = d.s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		t.date, err = readBankTick(ctx, tx, voucherID, ledgerID, legNo)
+		return err
+	})
+	return t, err
+}
+
+// mergeEffect folds one transaction's effect into a preview's running total
+// (a previewable handler writes in one transaction, but the middleware's
+// reads are hooked too and contribute nothing).
+func mergeEffect(into *agent.Effect, e agent.Effect) {
+	into.Postings = append(into.Postings, e.Postings...)
+	into.DebitPaise += e.DebitPaise
+	into.CreditPaise += e.CreditPaise
+	into.Vouchers += e.Vouchers
+	into.Versions = append(into.Versions, e.Versions...)
+	into.Replaces = append(into.Replaces, e.Replaces...)
+	into.Delta = append(into.Delta, e.Delta...)
+	into.Stock = append(into.Stock, e.Stock...)
+	into.Masters = append(into.Masters, e.Masters...)
+	into.Orders = append(into.Orders, e.Orders...)
+	into.BankDates = append(into.BankDates, e.BankDates...)
 }
 
 func jsonError(msg string) []byte { return jsonBody(map[string]string{"error": msg}) }

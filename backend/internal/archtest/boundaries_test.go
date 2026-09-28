@@ -798,6 +798,12 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/policy":    true,
 		"internal/intentlog": true,
 		"internal/durable":   true,
+		// W2 breadth: the agent's five profile tools (agent/profiles.go) are
+		// W3's functions, read by the server for the run's human with that
+		// human's ACL applied per fact (server/agent_profiles.go). Server, not
+		// agent: the agent package still reaches the books only through the
+		// Dispatcher and its ProfileReader seam.
+		"internal/profile": true,
 	},
 	"internal/archtest": {},
 }

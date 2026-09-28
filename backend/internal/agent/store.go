@@ -204,13 +204,24 @@ type Decision struct {
 	DecidedBy       *uuid.UUID      `json:"decided_by,omitempty"`
 	DecidedWebAuthn bool            `json:"decided_webauthn"`
 	DecidedAt       time.Time       `json:"decided_at"`
+	// EditedPreview is the approver's edit run through the real handler in
+	// dry-run mode at the moment of the decision (0095): the effect the
+	// approver saw for THEIR body, which is the one that commits.
+	EditedPreview *EditedPreview `json:"edited_preview,omitempty"`
+}
+
+// EditedPreview is the recorded dry run of an approver's edited body.
+type EditedPreview struct {
+	Status int     `json:"status"`
+	Effect *Effect `json:"effect,omitempty"`
 }
 
 const approvalSelect = `
 	SELECT a.id, a.run_id, a.step_key, a.action_id, a.acl_key, a.risk, a.args, a.preview,
 	       a.amount_paise, a.reasons, a.provenance, a.on_behalf_of, a.requested_at, a.deadline_at,
 	       r.instruction,
-	       d.id, d.decision, d.edited_args, d.note, d.decided_by, d.decided_webauthn, d.decided_at
+	       d.id, d.decision, d.edited_args, d.note, d.decided_by, d.decided_webauthn, d.decided_at,
+	       d.edited_preview
 	  FROM agent_approval a
 	  JOIN agent_run r ON r.company_id = a.company_id AND r.id = a.run_id
 	  LEFT JOIN agent_decision d ON d.company_id = a.company_id AND d.approval_id = a.id`
@@ -224,9 +235,10 @@ func scanApproval(row pgx.Row) (Approval, error) {
 	var dBy *uuid.UUID
 	var dWebAuthn *bool
 	var dAt *time.Time
+	var dPreview []byte
 	if err := row.Scan(&a.ID, &a.RunID, &a.StepKey, &a.ActionID, &a.ACLKey, &a.Risk, &a.Args, &a.Preview,
 		&a.AmountPaise, &reasons, &prov, &a.OnBehalfOf, &a.RequestedAt, &a.DeadlineAt, &a.Instruction,
-		&dID, &dDecision, &dEdited, &dNote, &dBy, &dWebAuthn, &dAt); err != nil {
+		&dID, &dDecision, &dEdited, &dNote, &dBy, &dWebAuthn, &dAt, &dPreview); err != nil {
 		return Approval{}, err
 	}
 	if err := json.Unmarshal(reasons, &a.Reasons); err != nil {
@@ -239,6 +251,13 @@ func scanApproval(row pgx.Row) (Approval, error) {
 	if dID != nil {
 		a.Decision = &Decision{ID: *dID, Decision: *dDecision, EditedArgs: dEdited, Note: *dNote,
 			DecidedBy: dBy, DecidedWebAuthn: *dWebAuthn, DecidedAt: *dAt}
+		if len(dPreview) > 0 {
+			var ep EditedPreview
+			if err := json.Unmarshal(dPreview, &ep); err != nil {
+				return Approval{}, fmt.Errorf("agent: decode edited preview: %w", err)
+			}
+			a.Decision.EditedPreview = &ep
+		}
 		switch *dDecision {
 		case "approve":
 			a.State = "approved"
@@ -280,35 +299,61 @@ func listApprovals(ctx context.Context, tx pgx.Tx, where string, args ...any) ([
 // decision already existed (0094's UNIQUE), which is how a late approve after
 // expiry is refused.
 func insertDecision(ctx context.Context, tx pgx.Tx, companyID, approvalID uuid.UUID, decision string,
-	edited json.RawMessage, note string, by *uuid.UUID, webauthn bool, at time.Time) (bool, error) {
+	edited json.RawMessage, note string, by *uuid.UUID, webauthn bool, at time.Time, editedPreview *EditedPreview) (bool, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return false, err
 	}
+	var ep any
+	if editedPreview != nil && len(edited) > 0 {
+		b, err := json.Marshal(editedPreview)
+		if err != nil {
+			return false, err
+		}
+		ep = b
+	}
 	tag, err := tx.Exec(ctx,
 		`INSERT INTO agent_decision (id, company_id, approval_id, decision, edited_args, note,
-		                             decided_by, decided_webauthn, decided_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		                             decided_by, decided_webauthn, decided_at, edited_preview)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 ON CONFLICT ON CONSTRAINT agent_decision_one_per_approval DO NOTHING`,
-		id, companyID, approvalID, decision, nullJSON(edited), note, by, webauthn, at)
+		id, companyID, approvalID, decision, nullJSON(edited), note, by, webauthn, at, ep)
 	if err != nil {
 		return false, err
 	}
 	return tag.RowsAffected() == 1, nil
 }
 
+// CommitRecord is a recorded agent_commit: what one idempotency key wrote.
+type CommitRecord struct {
+	VoucherIDs []uuid.UUID
+	ObjectKind ObjectKind
+	ObjectIDs  []uuid.UUID
+}
+
 // lookupCommit reads a recorded commit by its idempotency key.
-func lookupCommit(ctx context.Context, tx pgx.Tx, key string) ([]uuid.UUID, bool, error) {
-	var ids []uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT voucher_ids FROM agent_commit WHERE idempotency_key = $1`, key).Scan(&ids)
+func lookupCommit(ctx context.Context, tx pgx.Tx, key string) (CommitRecord, bool, error) {
+	var rec CommitRecord
+	var kind string
+	err := tx.QueryRow(ctx, `SELECT voucher_ids, object_kind, object_ids FROM agent_commit WHERE idempotency_key = $1`,
+		key).Scan(&rec.VoucherIDs, &kind, &rec.ObjectIDs)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, nil
+		return CommitRecord{}, false, nil
 	}
-	return ids, err == nil, err
+	if err != nil {
+		return CommitRecord{}, false, err
+	}
+	rec.ObjectKind = ObjectKind(kind)
+	// A row written before 0095 recorded only voucher_ids; its object_ids
+	// default to empty, and the vouchers ARE the objects.
+	if len(rec.ObjectIDs) == 0 && rec.ObjectKind == ObjectVoucher {
+		rec.ObjectIDs = rec.VoucherIDs
+	}
+	return rec, true, nil
 }
 
 // LookupCommit is lookupCommit for the dispatcher, which runs it under the
 // caller's company scope before dispatching a commit.
-func LookupCommit(ctx context.Context, tx pgx.Tx, key string) ([]uuid.UUID, bool, error) {
+func LookupCommit(ctx context.Context, tx pgx.Tx, key string) (CommitRecord, bool, error) {
 	return lookupCommit(ctx, tx, key)
 }

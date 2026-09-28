@@ -337,6 +337,15 @@ type Ledger struct {
 	// requires it to ADD UP — CreateLedger enforces both. Empty is fine for a
 	// ledger with no opening balance or with bill-wise tracking off.
 	OpeningBills []OpeningBill
+
+	// BornOfRun, when set, is the AGENT RUN whose commit is creating this
+	// ledger (migration 0095). ⛔ A ledger born of a run is BORN BLOCKED: it
+	// takes no posting until a person unblocks it (UnblockLedger). The two are
+	// one field on purpose — there is no way to say "the agent made this" and
+	// "but it may be paid at once" in the same call. Set ONLY by
+	// internal/server from the request's in-process agent identity, never from
+	// a request body.
+	BornOfRun uuid.UUID
 }
 
 // OpeningBill is one bill of a ledger's opening bill-wise breakup.
@@ -734,21 +743,32 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 		if err := refuseIfNameTaken(ctx, tx, "ledger", l.Name, "ledger", "name"); err != nil {
 			return err
 		}
+		// ⛔ BORN BLOCKED (0095): a ledger the agent is creating carries its
+		// block from the INSERT itself, so there is no instant, however short,
+		// at which it exists and could be posted to.
+		var bornOfRun, blockedReason any
+		if l.BornOfRun != uuid.Nil {
+			bornOfRun = l.BornOfRun
+			blockedReason = BornBlockedReason(l.BornOfRun)
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO ledger
 			   (id, company_id, name, group_id, opening_balance, opening_dc,
 			    maintain_bill_by_bill, gstin, state_code, registration_type,
 			    pan, credit_days, address, city, pincode,
-			    bank_account_number, bank_ifsc)
+			    bank_account_number, bank_ifsc,
+			    created_by_run, blocked_at, blocked_reason)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7,
 			         NULLIF($8,''), NULLIF($9,''), $10::gst_registration_type,
 			         NULLIF($11,''), $12,
 			         NULLIF($13,''), NULLIF($14,''), NULLIF($15,''),
-			         NULLIF($16,''), NULLIF($17,''))`,
+			         NULLIF($16,''), NULLIF($17,''),
+			         $18, CASE WHEN $19::text IS NULL THEN NULL ELSE now() END, $19::text)`,
 			id, companyID, l.Name, groupID, l.OpeningBalance, l.OpeningDC,
 			l.MaintainBillByBill, l.GSTIN, l.StateCode, string(l.RegistrationType),
 			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
 			l.BankAccountNumber, strings.ToUpper(strings.TrimSpace(l.BankIFSC)),
+			bornOfRun, blockedReason,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"ledger_company_name_normalised", "ledger", l.Name, "insert ledger")
@@ -794,6 +814,10 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			// what the master said at the time, and an unaudited field cannot
 			// answer it.
 			"bank_account_number": l.BankAccountNumber, "bank_ifsc": l.BankIFSC,
+		}
+		if l.BornOfRun != uuid.Nil {
+			after["blocked"] = true
+			after["created_by_run"] = l.BornOfRun.String()
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", id, OpCreate, nil, after, createdBy)
 	})

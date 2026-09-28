@@ -172,7 +172,7 @@ func (s *Server) handleSetBankDate(w http.ResponseWriter, r *http.Request) {
 	// still showed as unmatched.
 	var err error
 	if req.StatementLineID == "" {
-		err = s.banking.SetBankDate(ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, req.CreatedBy)
+		err = s.banking.SetBankDate(ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, attributedTo(r, req.CreatedBy))
 	} else {
 		lineID, perr := uuid.Parse(req.StatementLineID)
 		if perr != nil {
@@ -180,7 +180,7 @@ func (s *Server) handleSetBankDate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		err = s.banking.SetBankDateFromStatementLine(
-			ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, req.CreatedBy, lineID)
+			ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, attributedTo(r, req.CreatedBy), lineID)
 	}
 	switch {
 	case err == nil:

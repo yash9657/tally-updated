@@ -478,7 +478,7 @@ func (s *Server) handleSetStockItemValuationMethod(w http.ResponseWriter, r *htt
 		return
 	}
 	stored, err := s.masters.SetStockItemValuationMethod(ctx, itemID,
-		strings.TrimSpace(req.ValuationMethod), req.CreatedBy)
+		strings.TrimSpace(req.ValuationMethod), attributedTo(r, req.CreatedBy))
 	if err != nil {
 		if errors.Is(err, masters.ErrValuationMethodUnchanged) {
 			// 409, not 422: nothing about the request is unprocessable — the

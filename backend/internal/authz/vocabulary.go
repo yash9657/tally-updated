@@ -493,6 +493,24 @@ var KnownResources = append([]Resource{
 	"agent-run",
 	"agent-approval",
 
+	// THE AGENT'S AUTONOMY TABLE (W2 breadth, migration 0093's rows, D121
+	// "Wave 2 breadth"): reading and setting the L0-L3 level per (user, action,
+	// amount band). A THIRD bare token, not `agent-approval`: deciding one
+	// approval is the checker's seat; deciding that a class of commit needs
+	// NO checker at all is the owner's, and the route refuses every non-Owner
+	// level in the handler as well. Bare for the reason above (zero acl_rule
+	// rows, Data Entry refused by default); governance, so an agent can
+	// neither read nor raise its own autonomy.
+	"agent-autonomy",
+
+	// RELEASING AN AGENT-CREATED LEDGER FOR POSTING (W2 breadth, migration
+	// 0095): POST /ledgers/{id}/unblock. Not `master`, because `alter master`
+	// is what CREATES a ledger, and the point of "born blocked" is that the
+	// person who lets the agent make a party and the person who lets it be
+	// paid can be different people. Bare (zero acl_rule rows, Data Entry
+	// refused by default); governance, so no agent can unblock anything.
+	"master-unblock",
+
 	// THE e-INVOICE / IRN: the Invoice Reference Number the NIC portal issues
 	// against a B2B tax invoice, statutorily mandatory in India above a turnover
 	// threshold.
