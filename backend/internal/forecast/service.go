@@ -51,6 +51,23 @@ func NewService(pool *db.Pool) *Service {
 	return &Service{runner: pool, report: reporting.NewService(pool)}
 }
 
+// TxRunner is both halves a Service reads through: the report's tx and its own
+// read-only supplement.
+type TxRunner interface {
+	reporting.TxRunner
+	Runner
+}
+
+// NewServiceOver builds a Service over any runner — in particular one that
+// REUSES a caller's open transaction (W4's nightly insight run reads the
+// projection inside the same transaction as the facts it has just refreshed,
+// so every figure of the night describes one moment of the books; the
+// profile.Refresh rule, D122-9). A runner whose read-only half reuses a
+// read-write transaction is the caller's promise that fn only reads.
+func NewServiceOver(r TxRunner) *Service {
+	return &Service{runner: r, report: reporting.NewService(r)}
+}
+
 // dateAttr carries a bill's date attributes, keyed by (ledger_id, ref_name).
 type dateAttr struct {
 	voucherDate *time.Time

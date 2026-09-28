@@ -2374,6 +2374,11 @@ type ledgerReq struct {
 	// is D43's shape on a second route, and it is why D87's form could not have
 	// carried the field honestly without this line.
 	CreditDays *int `json:"credit_days"`
+	// CreditLimit (0103, W4) is the party's credit limit as a decimal string;
+	// "" means no limit agreed and is stored NULL — never 0, which is the
+	// different instruction "no credit at all". It is what the insight
+	// engine's credit-limit-breach detector compares the debtor's balance to.
+	CreditLimit string `json:"credit_limit"`
 
 	CreatedBy string `json:"created_by"`
 
@@ -2492,7 +2497,17 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var creditLimit *decimal.Decimal
+	if strings.TrimSpace(req.CreditLimit) != "" {
+		cl, err := decimal.NewFromString(strings.TrimSpace(req.CreditLimit))
+		if err != nil || cl.IsNegative() {
+			writeError(w, http.StatusBadRequest, "invalid credit_limit: a non-negative amount, or empty for no limit")
+			return
+		}
+		creditLimit = &cl
+	}
 	id, err := s.masters.CreateLedger(ctx, masters.Ledger{
+		CreditLimit:        creditLimit,
 		Name:               req.Name,
 		GroupName:          req.GroupName,
 		OpeningBalance:     opening,

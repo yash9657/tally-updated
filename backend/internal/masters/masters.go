@@ -290,6 +290,10 @@ type Ledger struct {
 	RegistrationType   GSTRegistrationType
 	PAN                string
 	CreditDays         *int
+	// CreditLimit is the party's credit limit (migration 0103). nil = no
+	// limit agreed, written NULL; a zero is the real instruction "no credit"
+	// and is kept as 0. See 0103's header for why the two must not collapse.
+	CreditLimit *decimal.Decimal
 
 	// Address is the party's POSTAL ADDRESS as a NEWLINE-SEPARATED BLOCK, and
 	// City / PIN complete it. Migration 0039 stores all three exactly as
@@ -739,16 +743,17 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			   (id, company_id, name, group_id, opening_balance, opening_dc,
 			    maintain_bill_by_bill, gstin, state_code, registration_type,
 			    pan, credit_days, address, city, pincode,
-			    bank_account_number, bank_ifsc)
+			    bank_account_number, bank_ifsc, credit_limit)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7,
 			         NULLIF($8,''), NULLIF($9,''), $10::gst_registration_type,
 			         NULLIF($11,''), $12,
 			         NULLIF($13,''), NULLIF($14,''), NULLIF($15,''),
-			         NULLIF($16,''), NULLIF($17,''))`,
+			         NULLIF($16,''), NULLIF($17,''), $18)`,
 			id, companyID, l.Name, groupID, l.OpeningBalance, l.OpeningDC,
 			l.MaintainBillByBill, l.GSTIN, l.StateCode, string(l.RegistrationType),
 			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
 			l.BankAccountNumber, strings.ToUpper(strings.TrimSpace(l.BankIFSC)),
+			l.CreditLimit,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"ledger_company_name_normalised", "ledger", l.Name, "insert ledger")
@@ -794,6 +799,11 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			// what the master said at the time, and an unaudited field cannot
 			// answer it.
 			"bank_account_number": l.BankAccountNumber, "bank_ifsc": l.BankIFSC,
+		}
+		// Audited only when set, so every ledger created before 0103 keeps
+		// the audit-doc keys it always had.
+		if l.CreditLimit != nil {
+			after["credit_limit"] = l.CreditLimit.StringFixed(2)
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", id, OpCreate, nil, after, createdBy)
 	})
