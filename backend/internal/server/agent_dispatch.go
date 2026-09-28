@@ -264,7 +264,17 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 		}}
 	}
 
-	hctx := withAgentCall(ctx, call)
+	// ⛔ A FRESH CONTEXT, NOT THE CALLER'S. The poller's ctx already carries a
+	// company scope (Resume set it), and a value that rode in on it would reach
+	// the router as if the middleware had established it. The in-process
+	// request starts with NOTHING but the agent call and (for preview/commit)
+	// the hook, exactly as a browser request starts with nothing but its
+	// headers; only the caller's cancellation is carried over.
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+	hctx := withAgentCall(base, call)
 	if hook != nil {
 		hctx = db.WithTxHook(hctx, hook)
 	}

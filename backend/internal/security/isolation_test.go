@@ -42,10 +42,19 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+// ADMIN_DATABASE_URL / DATABASE_URL override the shared dev database; the
+// Makefile exports both with these defaults.
+var (
+	adminDSN = secEnvDSN("ADMIN_DATABASE_URL", "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
+	appDSN   = secEnvDSN("DATABASE_URL", "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable")
 )
+
+func secEnvDSN(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 // tenantTables is the ORIGINAL SEVEN — the core ledger tables. It is kept as a
 // hand-written list because other tests below (notably the narrow-role probe)

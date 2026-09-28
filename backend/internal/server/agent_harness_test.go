@@ -473,5 +473,5 @@ type fixedClock struct {
 	t  time.Time
 }
 
-func (c *fixedClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *fixedClock) Now() time.Time  { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
 func (c *fixedClock) Set(t time.Time) { c.mu.Lock(); c.t = t; c.mu.Unlock() }

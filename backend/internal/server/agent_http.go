@@ -73,7 +73,9 @@ func (s *Server) ConfigureAgent(o AgentOptions) {
 func (s *Server) AgentPollOnce(ctx context.Context) (int, error) { return s.agentPoller.RunOnce(ctx) }
 
 // AgentAnchorOnce writes intent-log anchors once (tests, operators).
-func (s *Server) AgentAnchorOnce(ctx context.Context) (int, error) { return s.agentPoller.AnchorOnce(ctx) }
+func (s *Server) AgentAnchorOnce(ctx context.Context) (int, error) {
+	return s.agentPoller.AnchorOnce(ctx)
+}
 
 // RunAgentPoller polls until ctx ends: every `every`, immediately when a run
 // is started or a decision is recorded, and anchors the intent log daily.

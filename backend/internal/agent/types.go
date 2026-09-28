@@ -87,23 +87,23 @@ type Input struct {
 
 // Run is an agent_run row.
 type Run struct {
-	ID          uuid.UUID          `json:"id"`
-	CompanyID   uuid.UUID          `json:"-"`
-	CreatedBy   uuid.UUID          `json:"created_by"`
-	Subject     string             `json:"-"`
-	AgentID     string             `json:"agent_id"`
-	Channel     Channel            `json:"channel"`
-	Instruction string             `json:"instruction"`
-	Inputs      []Input            `json:"inputs"`
-	Delegation  policy.Delegation  `json:"delegation"`
-	Status      Status             `json:"status"`
-	Outcome     json.RawMessage    `json:"outcome,omitempty"`
-	LastError   string             `json:"last_error,omitempty"`
-	Attempts    int                `json:"attempts"`
-	NextPollAt  *time.Time         `json:"next_poll_at,omitempty"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	FinishedAt  *time.Time         `json:"finished_at,omitempty"`
+	ID          uuid.UUID         `json:"id"`
+	CompanyID   uuid.UUID         `json:"-"`
+	CreatedBy   uuid.UUID         `json:"created_by"`
+	Subject     string            `json:"-"`
+	AgentID     string            `json:"agent_id"`
+	Channel     Channel           `json:"channel"`
+	Instruction string            `json:"instruction"`
+	Inputs      []Input           `json:"inputs"`
+	Delegation  policy.Delegation `json:"delegation"`
+	Status      Status            `json:"status"`
+	Outcome     json.RawMessage   `json:"outcome,omitempty"`
+	LastError   string            `json:"last_error,omitempty"`
+	Attempts    int               `json:"attempts"`
+	NextPollAt  *time.Time        `json:"next_poll_at,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+	FinishedAt  *time.Time        `json:"finished_at,omitempty"`
 }
 
 // Principal is the policy principal this run acts as.
