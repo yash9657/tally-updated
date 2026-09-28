@@ -3488,6 +3488,240 @@ def validate_payroll(path: Path, case: dict) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# tau/ — the W1a state-based agent task suite (d124)
+# ---------------------------------------------------------------------------
+#
+# WHAT IS RE-DERIVED HERE, INDEPENDENTLY OF BOTH THE GENERATOR'S BOOKKEEPING AND
+# THE GO ENGINE:
+#   - every expected voucher balances (sum Dr == sum Cr, to the paisa);
+#   - every GST-bearing POST in a seed or a reference plan: the tax legs the
+#     fixture expects equal derive_tax() over the step's own lines (accounting
+#     mode) or over qty x rate at the ITEM MASTER's rate (item invoice);
+#   - every question's stated figures: a trial-balance question's figure is the
+#     ledger's opening plus every expected leg on it; a GSTR-3B 3.1(a) figure
+#     is the sum over June's expected SALES; a GSTR-1 HSN row is the sum over
+#     the seed's lines carrying that HSN;
+#   - every GSTIN carries a valid checksum, every fixture says SYNTHETIC, and
+#     Hindi utterances are Devanagari while English/Hinglish are not.
+# And, separately, check_tau_generator_drift(): the committed fixtures are
+# byte-identical to what corpora/tau/generate.py produces, so a hand edit to
+# one fixture (the way an oracle gets "fixed" to agree with a bug) fails.
+
+TAU_FAMILIES = {"voucher_entry", "item_invoice", "bank_match", "gst_returns", "nl_query",
+                "master_creation", "guard"}
+_GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
+
+
+def gstin_valid(g: str) -> bool:
+    if not _GSTIN_RE.match(g):
+        return False
+    total = 0
+    for i, c in enumerate(g[:14]):
+        v = _GSTIN_CHARS.index(c) * (1 if i % 2 == 0 else 2)
+        total += v // 36 + v % 36
+    return _GSTIN_CHARS[(36 - total % 36) % 36] == g[14]
+
+
+def _has_devanagari(s: str) -> bool:
+    return any("ऀ" <= ch <= "ॿ" for ch in s)
+
+
+def _tau_ref_name(value: Any) -> str | None:
+    if isinstance(value, str) and value.startswith("{@") and value.endswith("}"):
+        return value[2:-1].split(":", 1)[1]
+    return None
+
+
+def _tau_steps(case: dict) -> list[dict]:
+    return list(case.get("seed", {}).get("steps", [])) + list(case.get("reference_plan", []))
+
+
+def _tau_item_rates(case: dict) -> dict[str, Decimal]:
+    rates = {}
+    for st in _tau_steps(case):
+        if st.get("method") == "POST" and st.get("path") == "/stock-items":
+            b = st.get("body", {})
+            rates[b.get("name")] = Decimal(b.get("gst_rate_pct", "0"))
+    return rates
+
+
+def _tau_legs(v: dict, ledger: str, side: str) -> Decimal:
+    return sum((Decimal(p["amount"]) for p in v.get("postings", [])
+                if p["ledger"] == ledger and p["dr_cr"] == side), Decimal(0))
+
+
+def _tau_check_gst_step(path: Path, case: dict, st: dict, vouchers: list[dict]) -> None:
+    body = st.get("body") or {}
+    gst = body.get("gst")
+    if not gst:
+        return
+    cls = st["path"].rsplit("/", 1)[-1]
+    side = "C" if cls == "sales" else "D"
+    if body.get("inventory"):
+        rates = _tau_item_rates(case)
+        lines = []
+        for ln in body["inventory"]:
+            item = _tau_ref_name(ln.get("stock_item_id"))
+            if item not in rates:
+                fail(path, f"item invoice line names item {item!r} with no stock-item master in the task")
+                return
+            lines.append({"taxableValue": str(Decimal(ln["qty"]) * Decimal(ln["rate"])),
+                          "gstRatePct": str(rates[item])})
+    else:
+        lines = [{"taxableValue": ln["taxable_value"], "gstRatePct": ln["gst_rate_pct"]} for ln in gst.get("lines", [])]
+    want = derive_tax({"supplierStateCode": gst["supplier_state_code"],
+                       "placeOfSupplyStateCode": gst["place_of_supply_state_code"], "lines": lines})
+    heads = {"cgst": _tau_ref_name(gst.get("cgst_ledger_id")), "sgst": _tau_ref_name(gst.get("sgst_ledger_id")),
+             "igst": _tau_ref_name(gst.get("igst_ledger_id"))}
+    date = body.get("voucher_date")
+    cands = [v for v in vouchers if v["class"] == cls and v["date"] == date]
+    if body.get("inventory"):
+        items = sorted(_tau_ref_name(ln["stock_item_id"]) for ln in body["inventory"])
+        cands = [v for v in cands if sorted(x["item"] for x in v.get("inventory", [])) == items]
+    else:
+        # Matched on the LEDGERS the step names, never on its amounts: matching
+        # on amounts would make a fixture whose expected tax leg was edited
+        # "match nothing" and fail for the wrong reason.
+        named = sorted(_tau_ref_name(q["ledger_id"]) for q in body.get("postings", []))
+        cands = [v for v in cands if sorted(p["ledger"] for p in v["postings"]) == named]
+    if len(cands) != 1:
+        if case.get("family") == "guard":
+            return  # a guard's naive write is, by design, absent from the expected state
+        fail(path, f"GST {cls} step dated {date}: {len(cands)} matching expected vouchers, want exactly 1")
+        return
+    v = cands[0]
+    for head in ("cgst", "sgst", "igst"):
+        led = heads[head]
+        got = _tau_legs(v, led, side) if led else Decimal(0)
+        if got != want[head]:
+            fail(path, f"{cls} {date}: expected {head.upper()} leg {got} but derive_tax gives {want[head]}")
+
+
+def _tau_balance(case: dict, ledger: str) -> Decimal:
+    exp = case["expected"]
+    bal = Decimal(0)
+    for l in exp["ledgers"]:
+        if l["name"] == ledger:
+            sign = Decimal(1) if l["opening_dc"] in ("D", "") else Decimal(-1)
+            bal = sign * Decimal(l["opening_balance"])
+    for v in exp["vouchers"]:
+        for p in v["postings"]:
+            if p["ledger"] == ledger:
+                bal += Decimal(p["amount"]) if p["dr_cr"] == "D" else -Decimal(p["amount"])
+    return bal
+
+
+def _tau_check_outputs(path: Path, case: dict) -> None:
+    """Re-derive every figure a question's answer must state, from the books.
+
+    Keyed on WHAT THE REFERENCE PLAN READS (its capture selectors), not on the
+    task id, so a renamed or copied task is re-derived exactly the same way.
+    """
+    exp = case["expected"]
+    outs = [Decimal(o) for o in exp.get("outputs", [])]
+    derived: list[Decimal] = []
+    june = [v for v in exp["vouchers"] if v["class"] == "sales" and v["date"].startswith("2025-06")]
+    heads = {"txval": ("Sales @18%",), "iamt": ("Output IGST",), "camt": ("Output CGST",),
+             "samt": ("Output SGST",)}
+    for st in case.get("reference_plan", []):
+        for sel in (st.get("capture") or {}).values():
+            m = re.match(r"rows\[ledger=(.+)\]\.(debit|credit)$", sel)
+            if m:
+                derived.append(abs(_tau_balance(case, m.group(1))))
+                continue
+            m = re.match(r"sup_details\.osup_det\.(txval|iamt|camt|samt)$", sel)
+            if m:
+                derived.append(sum((_tau_legs(v, led, "C") for v in june for led in heads[m.group(1)]), Decimal(0)))
+                continue
+            m = re.match(r"hsn\.data\[hsn_sc=(\w+)\]\.(txval|tot_val)$", sel)
+            if m:
+                tot = Decimal(0)
+                for gst_st in _tau_steps(case):
+                    body = gst_st.get("body") or {}
+                    gst = body.get("gst") or {}
+                    for ln in gst.get("lines", []):
+                        if ln["hsn"] != m.group(1) or not str(body.get("voucher_date", "")).startswith("2025-06"):
+                            continue
+                        t = derive_tax({"supplierStateCode": gst["supplier_state_code"],
+                                        "placeOfSupplyStateCode": gst["place_of_supply_state_code"],
+                                        "lines": [{"taxableValue": ln["taxable_value"],
+                                                   "gstRatePct": ln["gst_rate_pct"]}]})
+                        tot += Decimal(ln["taxable_value"]) if m.group(2) == "txval" else t["invoiceTotal"]
+                derived.append(tot)
+                continue
+            if sel.endswith((".voucher_id", ".leg_no")):
+                continue  # plumbing for a later step, not a stated figure
+            fail(path, f"capture selector {sel!r}: this validator cannot re-derive what it reads")
+    # A MULTISET compare: CGST and SGST are usually the same figure, and a set
+    # would let a fixture state it once and still "match" both heads.
+    q = Decimal("0.01")
+    if sorted(d.quantize(q) for d in derived) != sorted(o.quantize(q) for o in outs):
+        fail(path, f"re-derived figures {sorted(str(d.quantize(q)) for d in derived)} != expected outputs "
+                   f"{sorted(str(o.quantize(q)) for o in outs)}")
+
+
+def validate_tau(path: Path, case: dict) -> None:
+    if not require(path, case, ["id", "family", "language", "synthetic", "provenance", "today", "seed",
+                                "utterance", "reference_plan", "expected"]):
+        return
+    if case["synthetic"] is not True or "SYNTHETIC" not in case["provenance"]:
+        fail(path, "must declare synthetic: true and a SYNTHETIC provenance line")
+    if case["family"] not in TAU_FAMILIES:
+        fail(path, f"unknown family {case['family']!r}")
+    if path.stem != case["id"]:
+        fail(path, f"file name must equal id {case['id']!r}")
+    lang, utt = case["language"], case["utterance"]
+    if lang not in ("en", "hi", "hinglish"):
+        fail(path, f"unknown language {lang!r}")
+    elif (lang == "hi") != _has_devanagari(utt):
+        fail(path, f"language {lang} but Devanagari present={_has_devanagari(utt)}")
+    if (case["family"] == "guard") != bool(case.get("naive_plan")):
+        fail(path, "naive_plan is required on, and only on, guard tasks")
+    exp = case["expected"]
+    for v in exp["vouchers"]:
+        dr = sum((Decimal(p["amount"]) for p in v["postings"] if p["dr_cr"] == "D"), Decimal(0))
+        cr = sum((Decimal(p["amount"]) for p in v["postings"] if p["dr_cr"] == "C"), Decimal(0))
+        if dr != cr or dr == 0:
+            fail(path, f"expected {v['class']} {v['date']} does not balance: Dr {dr} Cr {cr}")
+        for p in v["postings"]:
+            money(path, f"voucher posting {p['ledger']}", p["amount"])
+        for ln in v.get("inventory", []):
+            if Decimal(ln["qty"]) * Decimal(ln["rate"]) != Decimal(ln["amount"]):
+                fail(path, f"inventory line {ln['item']}: qty x rate != amount")
+    for l in exp["ledgers"]:
+        if l["gstin"]:
+            if not gstin_valid(l["gstin"]):
+                fail(path, f"ledger {l['name']}: GSTIN {l['gstin']} fails its checksum")
+            elif l["state_code"] != l["gstin"][:2]:
+                fail(path, f"ledger {l['name']}: state {l['state_code']} disagrees with GSTIN {l['gstin']}")
+    for st in _tau_steps(case):
+        if st.get("method") == "POST" and st.get("path") in ("/vouchers/sales", "/vouchers/purchase"):
+            _tau_check_gst_step(path, case, st, exp["vouchers"])
+    _tau_check_outputs(path, case)
+
+
+def check_tau_generator_drift() -> None:
+    """The committed tau fixtures must be exactly what generate.py emits."""
+    import importlib.util
+
+    gen = ROOT / "tau" / "generate.py"
+    spec = importlib.util.spec_from_file_location("tau_generate", gen)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    want = {t["id"]: mod.render(t) for t in mod.build()}
+    have = {p.stem: p.read_text(encoding="utf-8") for p in (ROOT / "tau").glob("*.json")}
+    for tid in sorted(set(want) | set(have)):
+        if tid not in have:
+            _errors.append(f"tau/{tid}.json: produced by generate.py but not committed")
+        elif tid not in want:
+            _errors.append(f"tau/{tid}.json: committed but not produced by generate.py (hand-written?)")
+        elif want[tid] != have[tid]:
+            _errors.append(f"tau/{tid}.json: differs from generate.py's output — re-run the generator "
+                           f"rather than editing a fixture")
+
+
 VALIDATORS = {
     "tax": validate_tax,
     "tds": validate_tds,
@@ -3500,6 +3734,7 @@ VALIDATORS = {
     "gstr2b": validate_gstr2b,
     "ims": validate_ims,
     "payroll": validate_payroll,
+    "tau": validate_tau,
 }
 
 MIN_COUNTS = {
@@ -3572,10 +3807,14 @@ MIN_COUNTS = {
     #      employer's salary, and total income rounded to the nearest TEN while
     #      the tax is rounded to the nearest RUPEE.
     "payroll": 12,
+    # TAU (W1a, d124). EXACT, like gstr2b: the 200 is PLAN-AGENTIC W1's stated
+    # suite size, the Go harness pins the same number, and a deleted task must
+    # fail here rather than quietly shrink the denominator of a pass^5.
+    "tau": 200,
 }
 
 # Families that carry a POISONED-FIXTURE TRIPWIRE. See check_poison().
-POISON_FAMILIES = ("gstr2b", "ims")
+POISON_FAMILIES = ("gstr2b", "ims", "tau")
 
 
 def _ts_union_members(source: str, type_name: str) -> set[str] | None:
@@ -3701,6 +3940,7 @@ def check_poison() -> None:
 def main() -> int:
     check_vocabulary_matches_typescript()
     check_poison()
+    check_tau_generator_drift()
     counts: dict[str, int] = {k: 0 for k in VALIDATORS}
     for category, validator in VALIDATORS.items():
         directory = ROOT / category

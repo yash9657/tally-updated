@@ -354,7 +354,7 @@
       }
     ]
   },
-  "utterance": "June ka 3B file karne se pehle — Reddy Agro Foods ka 27 June wala ₹17,500 + 18% GST ka bill (SAC 998311, Sales @18%) entry nahi hua tha. Pehle daalo, phir total outward taxable aur total output tax batao.",
+  "utterance": "June ka 3B file karne se pehle — Reddy Agro Foods ka 27 June wala ₹17,500 + 18% GST ka bill (SAC 998311, Sales @18%) entry nahi hua tha. Pehle daalo, phir total outward taxable aur head-wise output tax batao.",
   "reference_plan": [
     {
       "method": "POST",
@@ -404,7 +404,7 @@
       }
     },
     {
-      "answer": "Posted. June outward taxable {tx}; tax IGST {i} + CGST {c} + SGST {s} = 24410.00."
+      "answer": "Posted. June outward taxable {tx}; output tax IGST {i}, CGST {c}, SGST {s}."
     }
   ],
   "expected": {
@@ -661,7 +661,9 @@
     ],
     "outputs": [
       "112000.00",
-      "24410.00"
+      "24410.00",
+      "0.00",
+      "0.00"
     ]
   }
 }

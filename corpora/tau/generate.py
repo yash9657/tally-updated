@@ -786,23 +786,29 @@ def gst_3b_after_missing(s: Suite, n: int, lang: str):
     ps, (c1, s1, i1, total) = b.gst_postings("sales", party, "Sales @18%", amt, rate, pstate, OUT_TAX)
     body = Book.voucher_body("", date, ps, gst=b.gst_block(pstate, [(Decimal(amt), rate)], OUT_TAX, "998311"))
     txval = sum(Decimal(a) for a, *_ in sales) + amt
-    tax = sum(sum(t[:3]) for *_, t in sales) + c1 + s1 + i1
-    exp = b.expected(extra_vouchers=[Book.canon_voucher("sales", date, ps)], outputs=[f"{txval:.2f}", f"{tax:.2f}"])
+    # By head, not as one total: the scripted reference agent cannot add, and a
+    # total it merely RECITED from this script would be a figure the engine
+    # never had to produce.
+    i_all = sum(t[2] for *_, t in sales) + i1
+    c_all = sum(t[0] for *_, t in sales) + c1
+    s_all = sum(t[1] for *_, t in sales) + s1
+    exp = b.expected(extra_vouchers=[Book.canon_voucher("sales", date, ps)],
+                     outputs=[f"{txval:.2f}", f"{i_all:.2f}", f"{c_all:.2f}", f"{s_all:.2f}"])
     plan = [
         step("POST", "/vouchers/sales", body),
         step("GET", "/gstr3b?from=2025-06-01&to=2025-06-30",
              capture={"tx": "sup_details.osup_det.txval", "i": "sup_details.osup_det.iamt",
                       "c": "sup_details.osup_det.camt", "s": "sup_details.osup_det.samt"}),
-        answer("Posted. June outward taxable {tx}; tax IGST {i} + CGST {c} + SGST {s} = " + f"{tax:.2f}."),
+        answer("Posted. June outward taxable {tx}; output tax IGST {i}, CGST {c}, SGST {s}."),
     ]
     d = say_date(date, lang)
     utt = {
         "en": (f"Before I file June's GSTR-3B: the {d} invoice to {party} for {inr(amt)} + 18% GST (SAC 998311, "
-               f"Sales @18%) was never entered. Post it, then tell me total outward taxable value and total output tax."),
+               f"Sales @18%) was never entered. Post it, then tell me total outward taxable value and the output tax by head."),
         "hi": (f"जून का GSTR-3B भरने से पहले: {party} को {d} का {inr(amt)} + 18% जीएसटी (SAC 998311, Sales @18%) का बिल "
-               f"दर्ज ही नहीं हुआ। उसे दर्ज करें, फिर कुल कर योग्य बाहरी आपूर्ति और कुल आउटपुट टैक्स बताइए।"),
+               f"दर्ज ही नहीं हुआ। उसे दर्ज करें, फिर कुल कर योग्य बाहरी आपूर्ति और हेड-वार आउटपुट टैक्स बताइए।"),
         "hinglish": (f"June ka 3B file karne se pehle — {party} ka {d} wala {inr(amt)} + 18% GST ka bill (SAC 998311, "
-                     f"Sales @18%) entry nahi hua tha. Pehle daalo, phir total outward taxable aur total output tax batao."),
+                     f"Sales @18%) entry nahi hua tha. Pehle daalo, phir total outward taxable aur head-wise output tax batao."),
     }[lang]
     s.add(f"gst-3b-missing-{n:03d}-{lang}", "gst_returns", lang,
           "post a missing sale, then read GSTR-3B outward totals", b, utt, plan, exp)

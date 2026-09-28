@@ -372,7 +372,7 @@
       }
     ]
   },
-  "utterance": "June ka 3B file karne se pehle — Joshi Pharma ka 27 June wala ₹28,000 + 18% GST ka bill (SAC 998311, Sales @18%) entry nahi hua tha. Pehle daalo, phir total outward taxable aur total output tax batao.",
+  "utterance": "June ka 3B file karne se pehle — Joshi Pharma ka 27 June wala ₹28,000 + 18% GST ka bill (SAC 998311, Sales @18%) entry nahi hua tha. Pehle daalo, phir total outward taxable aur head-wise output tax batao.",
   "reference_plan": [
     {
       "method": "POST",
@@ -428,7 +428,7 @@
       }
     },
     {
-      "answer": "Posted. June outward taxable {tx}; tax IGST {i} + CGST {c} + SGST {s} = 45100.00."
+      "answer": "Posted. June outward taxable {tx}; output tax IGST {i}, CGST {c}, SGST {s}."
     }
   ],
   "expected": {
@@ -705,7 +705,9 @@
     ],
     "outputs": [
       "316000.00",
-      "45100.00"
+      "37560.00",
+      "3770.00",
+      "3770.00"
     ]
   }
 }

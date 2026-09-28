@@ -447,7 +447,7 @@
       }
     ]
   },
-  "utterance": "जून का GSTR-3B भरने से पहले: Nair Spices को 27 जून 2025 का ₹17,500 + 18% जीएसटी (SAC 998311, Sales @18%) का बिल दर्ज ही नहीं हुआ। उसे दर्ज करें, फिर कुल कर योग्य बाहरी आपूर्ति और कुल आउटपुट टैक्स बताइए।",
+  "utterance": "जून का GSTR-3B भरने से पहले: Nair Spices को 27 जून 2025 का ₹17,500 + 18% जीएसटी (SAC 998311, Sales @18%) का बिल दर्ज ही नहीं हुआ। उसे दर्ज करें, फिर कुल कर योग्य बाहरी आपूर्ति और हेड-वार आउटपुट टैक्स बताइए।",
   "reference_plan": [
     {
       "method": "POST",
@@ -497,7 +497,7 @@
       }
     },
     {
-      "answer": "Posted. June outward taxable {tx}; tax IGST {i} + CGST {c} + SGST {s} = 33066.00."
+      "answer": "Posted. June outward taxable {tx}; output tax IGST {i}, CGST {c}, SGST {s}."
     }
   ],
   "expected": {
@@ -809,7 +809,9 @@
     ],
     "outputs": [
       "202600.00",
-      "33066.00"
+      "31896.00",
+      "585.00",
+      "585.00"
     ]
   }
 }

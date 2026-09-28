@@ -415,7 +415,7 @@
       }
     ]
   },
-  "utterance": "Before I file June's GSTR-3B: the 27 June 2025 invoice to Patel Hardware for ₹28,000 + 18% GST (SAC 998311, Sales @18%) was never entered. Post it, then tell me total outward taxable value and total output tax.",
+  "utterance": "Before I file June's GSTR-3B: the 27 June 2025 invoice to Patel Hardware for ₹28,000 + 18% GST (SAC 998311, Sales @18%) was never entered. Post it, then tell me total outward taxable value and the output tax by head.",
   "reference_plan": [
     {
       "method": "POST",
@@ -465,7 +465,7 @@
       }
     },
     {
-      "answer": "Posted. June outward taxable {tx}; tax IGST {i} + CGST {c} + SGST {s} = 21174.00."
+      "answer": "Posted. June outward taxable {tx}; output tax IGST {i}, CGST {c}, SGST {s}."
     }
   ],
   "expected": {
@@ -761,7 +761,9 @@
     ],
     "outputs": [
       "147100.00",
-      "21174.00"
+      "19334.00",
+      "920.00",
+      "920.00"
     ]
   }
 }
