@@ -1,3 +1,7 @@
+> ⛔ **SUPERSEDED 2026-09-28 — READ `HANDOFF-AGENTIC-WAVE-1.md` FIRST.** Wave 1 (W1a, W2, W3, W5) is merged on
+> `session/t32-and-close-7-3`; that file has the current gate baselines, owed lists, migrations and the wave-2
+> order. This file's §7 (traps) and §9 (workflow recipe) still apply; its §2 baselines and §4 order are stale.
+
 # Handoff — the agent plane: **W0 CLOSED, W8 TIER 0 CLOSED, §7-2 DECIDED**, W1a next. ⛔ DRIVER: `PLAN-AGENTIC.md` §3
 Updated: 2026-09-09 (after W0 — foundations landed, adversarially reviewed, every gate green,
 **nothing committed**). ⛔ **One thing is blocked on the user: §6.1 (bake-off spend + provider keys). §6.2 is
