@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -159,9 +160,99 @@ func (p *Pool) RunInTx(ctx context.Context, fn TxFunc) error {
 		_ = tx.Rollback(ctx)
 		return err
 	}
+	if h := txHookFrom(ctx); h != nil {
+		return h.finish(ctx, tx)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("db: commit: %w", err)
 	}
+	return nil
+}
+
+// TxHook lets the in-process agent dispatcher (internal/server's agent seam)
+// observe — and for a preview, discard — the transactions a real HTTP handler
+// runs, WITHOUT that handler knowing it is being observed.
+//
+// WHY IT LIVES IN THE ONE UNIVERSAL SEAM. PLAN-AGENTIC §1: "the agent never
+// gains a write path the human does not have". A preview that re-implemented
+// the voucher validators would be a second, drifting copy of them; a commit
+// that called ledger.PostVoucher directly would skip the router, the PDP and
+// the handler's own decoding. So both run the REAL handler, in process, and the
+// only thing that differs is what happens at the end of each transaction —
+// which is a property of the transaction, and RunInTx is where every business
+// transaction in cored ends.
+//
+// ⛔ A CONTEXT VALUE, WITH AN UNEXPORTED KEY, SET ONLY BY CODE. No header, no
+// query parameter and no body can install one; an HTTP client cannot reach it.
+//
+//   - BeforeCommit runs inside the transaction after fn succeeded and before
+//     commit (or the dry-run rollback). An error rolls the transaction back and
+//     is returned from RunInTx as fn's would be. The commit path uses it to
+//     insert the agent_commit idempotency row IN THE SAME TRANSACTION as the
+//     voucher, so the two commit together or not at all.
+//   - DryRun rolls every hooked transaction back instead of committing it. The
+//     handler still sees success and writes its normal response, which is the
+//     preview: the ledger effect the real validators and derivations produced,
+//     read back by BeforeCommit before it vanished.
+//
+// ⚠️ ONLY RunInTx IS HOOKED. RunInReadOnlyTx cannot write, and RunInAuthTx is
+// the pre-company auth catalog; neither is part of a handler's ledger effect.
+// A handler that wrote through Raw() would escape the hook — no ledger write
+// does, and internal/server's preview allowlist refuses any action whose
+// handler is not a known single-transaction voucher post.
+type TxHook struct {
+	BeforeCommit TxFunc
+	DryRun       bool
+
+	mu         sync.Mutex
+	committed  int
+	rolledBack int
+}
+
+type txHookKey struct{}
+
+// WithTxHook returns ctx carrying h. Every RunInTx under the returned context
+// runs h at its end.
+func WithTxHook(ctx context.Context, h *TxHook) context.Context {
+	return context.WithValue(ctx, txHookKey{}, h)
+}
+
+func txHookFrom(ctx context.Context) *TxHook {
+	h, _ := ctx.Value(txHookKey{}).(*TxHook)
+	return h
+}
+
+// Counts reports how many hooked transactions committed and how many were
+// rolled back by DryRun. A preview asserts committed == 0 AFTER the handler
+// returns: that is the check that the dry run held, not an assumption about it.
+func (h *TxHook) Counts() (committed, rolledBack int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.committed, h.rolledBack
+}
+
+func (h *TxHook) finish(ctx context.Context, tx pgx.Tx) error {
+	if h.BeforeCommit != nil {
+		if err := h.BeforeCommit(ctx, tx); err != nil {
+			_ = tx.Rollback(ctx)
+			return err
+		}
+	}
+	if h.DryRun {
+		if err := tx.Rollback(ctx); err != nil {
+			return fmt.Errorf("db: dry-run rollback: %w", err)
+		}
+		h.mu.Lock()
+		h.rolledBack++
+		h.mu.Unlock()
+		return nil
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit: %w", err)
+	}
+	h.mu.Lock()
+	h.committed++
+	h.mu.Unlock()
 	return nil
 }
 

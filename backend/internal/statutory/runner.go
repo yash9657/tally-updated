@@ -3,103 +3,48 @@ package statutory
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"sync"
+
+	"github.com/khata/cored/internal/durable"
 )
 
+// The durable step engine that this plane has run the IRN workflow on since
+// migration 0013 now lives in internal/durable, so that the agent plane (which
+// runs inside cored, and may not import this package — see internal/server's
+// allowedDeps) can run on the SAME engine. Every name below is an ALIAS, not a
+// copy: statutory.Run IS durable.Run, so the IRN path and the agent path cannot
+// drift into two engines with two sets of semantics. See durable's package doc
+// for what moved, why, and the five items D120 §6 said the engine owed.
+
 // StepResult is a completed step's recorded output, keyed by step Name.
-type StepResult struct {
-	Name   string          `json:"name"`
-	Output json.RawMessage `json:"output"`
-}
+type StepResult = durable.StepResult
 
 // StepStore persists completed step results per workflow so a resumed Run skips
-// already-completed steps. The workflowID is the idempotency key.
-type StepStore interface {
-	// Load returns the completed step results for a workflow, in append order.
-	Load(workflowID string) ([]StepResult, error)
-	// Append records one newly-completed step's result.
-	Append(workflowID string, r StepResult) error
-}
+// already-completed steps. The workflowID is the idempotency key. Since W2 it
+// takes a ctx on every method (D120 F4) and carries TryLock (D120 F3).
+type StepStore = durable.StepStore
+
+// Step is one unit of work in a workflow.
+type Step = durable.Step
 
 // MemStore is the in-memory StepStore — the tested path and the one the local
-// statutoryd binary uses. It is concurrency-safe.
-type MemStore struct {
-	mu  sync.Mutex
-	res map[string][]StepResult
-}
+// statutoryd binary uses.
+type MemStore = durable.MemStore
+
+// ErrParked and ErrLocked are durable's sentinels, re-exported beside Run
+// because D120 F1 said the parked sentinel belongs "beside Run in runner.go".
+var (
+	ErrParked = durable.ErrParked
+	ErrLocked = durable.ErrLocked
+)
+
+// Park is the value a step returns to park the run (errors.Is(err, ErrParked)).
+func Park(step, reason string) error { return durable.Park(step, reason) }
 
 // NewMemStore builds an empty in-memory store.
-func NewMemStore() *MemStore {
-	return &MemStore{res: make(map[string][]StepResult)}
-}
+func NewMemStore() *MemStore { return durable.NewMemStore() }
 
-// Load returns a copy of the recorded results for the workflow.
-func (m *MemStore) Load(workflowID string) ([]StepResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	src := m.res[workflowID]
-	out := make([]StepResult, len(src))
-	copy(out, src)
-	return out, nil
-}
-
-// Append records a completed step. Re-appending the same step name is ignored
-// (a fully-completed workflow re-run never duplicates rows).
-func (m *MemStore) Append(workflowID string, r StepResult) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, existing := range m.res[workflowID] {
-		if existing.Name == r.Name {
-			return nil
-		}
-	}
-	m.res[workflowID] = append(m.res[workflowID], r)
-	return nil
-}
-
-// Step is one unit of work in a workflow. Run receives the outputs of all
-// previously-completed steps (by name) and returns this step's output, which is
-// recorded on success.
-type Step struct {
-	Name string
-	Run  func(ctx context.Context, prev map[string]json.RawMessage) (json.RawMessage, error)
-}
-
-// Run executes the steps in order with durable resume semantics.
-//
-// Before running a step it checks the store for a completed result with that
-// Name: if present it REUSES the stored output and does NOT re-run the step.
-// This is what makes a memoized external call (e.g. GenerateIRN) execute exactly
-// once across retries and resumes. A step error aborts Run and returns the error
-// WITHOUT recording that step, so a re-Run retries only the failed step and the
-// tail. Completed steps are Append-ed to the store. workflowID is the
-// idempotency key; a fully-completed workflow re-Run performs zero step
-// executions and returns the final state from the store.
+// Run executes the steps in order with durable resume semantics, under the
+// workflow's lock. See durable.Run.
 func Run(ctx context.Context, store StepStore, workflowID string, steps []Step) (map[string]json.RawMessage, error) {
-	done, err := store.Load(workflowID)
-	if err != nil {
-		return nil, fmt.Errorf("statutory: load workflow %q: %w", workflowID, err)
-	}
-	completed := make(map[string]json.RawMessage, len(done))
-	for _, r := range done {
-		completed[r.Name] = r.Output
-	}
-
-	for _, step := range steps {
-		if out, ok := completed[step.Name]; ok {
-			// Already completed in a prior run: reuse, do not re-execute.
-			completed[step.Name] = out
-			continue
-		}
-		out, err := step.Run(ctx, completed)
-		if err != nil {
-			return nil, err
-		}
-		if err := store.Append(workflowID, StepResult{Name: step.Name, Output: out}); err != nil {
-			return nil, fmt.Errorf("statutory: persist step %q: %w", step.Name, err)
-		}
-		completed[step.Name] = out
-	}
-	return completed, nil
+	return durable.Run(ctx, store, workflowID, steps)
 }

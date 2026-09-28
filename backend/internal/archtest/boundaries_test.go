@@ -334,7 +334,22 @@ var allowedDeps = map[string]map[string]bool{
 	// edge cannot become a route into cored: rules' own allowed set is the EMPTY
 	// map immediately below, so it can reach nothing this package could not
 	// already reach — which is nothing.
-	"internal/statutory": {"internal/statutory/rules": true},
+	//
+	// W2 ADDED ONE EDGE, internal/durable, AND IT IS THE STEP ENGINE THIS
+	// PACKAGE ALREADY RAN ON. Run/StepStore/MemStore moved there (runner.go is
+	// now aliases) so that the agent plane — which lives inside cored and may
+	// NOT import this package, see server's set below — runs on the same
+	// engine rather than a second copy. durable's own set is the EMPTY map, so
+	// this edge reaches nothing either.
+	"internal/statutory": {"internal/statutory/rules": true, "internal/durable": true},
+	// durable (W2, D121) is the step-replay engine: Run, StepStore (ctx +
+	// TryLock), ErrParked, the advisory locker. ⛔ ITS ALLOWED SET IS EMPTY AND
+	// MUST STAY SO. It is imported by BOTH the IRN plane and the agent plane,
+	// so any sibling it gained would be linked into both — and the first
+	// tempting one is internal/platform/db ("so a store can set the company
+	// GUC"), which would drag tenancy into statutoryd. Tenant-scoped stores
+	// live with their callers (internal/agent's run store), not here.
+	"internal/durable": {},
 	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
 	// load-bearing in BOTH directions.
 	//
