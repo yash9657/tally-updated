@@ -675,8 +675,9 @@ func (l Line) signed() decimal.Decimal {
 // newest-first statement was refused as "a row is missing" at row 3. The
 // forward walk runs first and ITS error is the one reported when neither
 // direction holds, so every refusal slice 2a produced is unchanged. The dates
-// are not consulted: two rows on one day cannot be ordered by date at all, and
-// the balance is the bank's own statement of the order.
+// do not choose the direction — two rows on one day cannot be ordered by date
+// at all, and the balance is the bank's own statement of the order — EXCEPT
+// in the one case the balances cannot decide: the mirror image (see below).
 func walkBalances(st *Statement) error {
 	for _, ln := range st.Lines {
 		if !ln.HasBalance {
@@ -685,34 +686,110 @@ func walkBalances(st *Statement) error {
 			return nil
 		}
 	}
-	fwdErr := walk(st.Lines)
-	if fwdErr == nil {
-		first := st.Lines[0]
-		st.OpeningBalance = first.RunningBalance.Sub(first.signed())
-		st.ClosingBalance = st.Lines[len(st.Lines)-1].RunningBalance
-		st.BalanceWalked, st.Order = true, OldestFirst
-		return nil
-	}
 	rev := make([]Line, len(st.Lines))
 	for i, l := range st.Lines {
 		rev[len(st.Lines)-1-i] = l
 	}
-	if walk(rev) == nil {
-		oldest := rev[0]
-		st.OpeningBalance = oldest.RunningBalance.Sub(oldest.signed())
-		st.ClosingBalance = rev[len(rev)-1].RunningBalance
-		st.BalanceWalked, st.Order = true, NewestFirst
-		return nil
+	fwdErr := walk(st.Lines, false)
+	var order Order
+	var oldestFirst []Line
+	switch {
+	case fwdErr == nil:
+		order, oldestFirst = OldestFirst, st.Lines
+	case walk(rev, false) == nil:
+		order, oldestFirst = NewestFirst, rev
+	default:
+		return fwdErr
 	}
-	return fwdErr
+	// ⛔ THE MIRROR IMAGE. A statement read in the OTHER order with EVERY
+	// sign inverted walks too exactly when each row's movement equals the
+	// next one's — a run of identical EMIs, SIP debits, salary credits, any
+	// one-row file. For such a file the balances cannot tell "oldest-first,
+	// withdrawals" from "newest-first, deposits", which is precisely what a
+	// Deposit/Withdrawal mapping entered backwards looks like; accepting the
+	// walk imported every direction flipped under proof "running". So the
+	// dates decide, and only when they are unambiguous; otherwise the running
+	// balance has proved nothing about direction and says so (BalanceWalked
+	// false: the import then needs declared balances, proof.go).
+	var mirror []Line
+	if order == OldestFirst {
+		mirror = rev
+	} else {
+		mirror = st.Lines
+	}
+	if walk(mirror, true) == nil {
+		switch datesSay(st.Lines) {
+		case OldestFirst:
+			if order != OldestFirst {
+				return mirroredErr(OldestFirst)
+			}
+		case NewestFirst:
+			if order != NewestFirst {
+				return mirroredErr(NewestFirst)
+			}
+		default:
+			st.BalanceWalked = false
+			st.Order = OrderUnknown
+			return nil
+		}
+	}
+	oldest := oldestFirst[0]
+	st.OpeningBalance = oldest.RunningBalance.Sub(oldest.signed())
+	st.ClosingBalance = oldestFirst[len(oldestFirst)-1].RunningBalance
+	st.BalanceWalked, st.Order = true, order
+	return nil
+}
+
+func mirroredErr(dates Order) error {
+	return fmt.Errorf("%w: the running balances only walk if the file is read %s, but its dates run %s. "+
+		"Every row's direction would be inverted: the deposit and withdrawal columns (or the amount's sign) "+
+		"are mapped the wrong way round — the statement is NOT imported",
+		ErrBalanceWalk, map[Order]string{OldestFirst: "newest-first", NewestFirst: "oldest-first"}[dates], dates)
+}
+
+// datesSay is the row order the dates alone establish: OldestFirst when they
+// never fall and rise at least once, NewestFirst when they never rise and fall
+// at least once, OrderUnknown otherwise (one date throughout, or both ways).
+// The transaction date is used where the file has one — it is what banks sort
+// by; the value date can legitimately run out of order.
+func datesSay(lines []Line) Order {
+	at := func(l Line) time.Time {
+		if !l.TxnDate.IsZero() {
+			return l.TxnDate
+		}
+		return l.ValueDate
+	}
+	up, down := false, false
+	for i := 1; i < len(lines); i++ {
+		a, b := at(lines[i-1]), at(lines[i])
+		switch {
+		case b.After(a):
+			up = true
+		case b.Before(a):
+			down = true
+		}
+	}
+	switch {
+	case up && !down:
+		return OldestFirst
+	case down && !up:
+		return NewestFirst
+	}
+	return OrderUnknown
 }
 
 // walk checks that each line's balance is the previous balance plus its own
 // movement, in the order given.
-func walk(lines []Line) error {
+//
+// invert walks every row with its sign flipped — the mirror-image check only.
+func walk(lines []Line, invert bool) error {
 	prev := lines[0].RunningBalance
 	for _, ln := range lines[1:] {
-		want := prev.Add(ln.signed())
+		mv := ln.signed()
+		if invert {
+			mv = mv.Neg()
+		}
+		want := prev.Add(mv)
 		if !want.Equal(ln.RunningBalance) {
 			return fmt.Errorf(
 				"%w: at row %d the balance should be %s (%s %s %s) but the file says %s, a difference of %s. "+
