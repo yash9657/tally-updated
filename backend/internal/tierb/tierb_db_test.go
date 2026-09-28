@@ -311,28 +311,10 @@ func TestTheSecondWallStandsWithoutTheValidator(t *testing.T) {
 		}
 	}
 
-	// ⚠️ THE ONE THING THE SECOND WALL DOES NOT STOP, measured and recorded
-	// (d122 §6): the tenant GUC is a session setting any role may change, so
-	// RAW SQL that knew another company's id could re-scope itself. The
-	// validator is what excludes it — set_config/current_setting are not in
-	// the function allow-list and SET is not a SELECT — and the hermetic
-	// suite pins those refusals. Proven here so nobody believes otherwise.
-	//
-	// ⛔ PINNED BOTH WAYS. It used to be a t.Logf, so the residual could close
-	// or widen without anyone noticing, while 0097's header claimed the
-	// database half held on its own. Now: if raw set_config stops re-scoping,
-	// this FAILS and says to update 0097's header, internal/tierb's package
-	// doc and d122 §5; while it re-scopes, the validator refusals below are
-	// the only thing between agent_ro and another tenant.
-	res, err := tierb.RunRawAsAgent(b.ctx, pool,
-		`SELECT count(*) FROM (SELECT set_config('app.current_company_id', '`+a.cid.String()+`', true)) s, agent.items`)
-	residual := err == nil && len(res.Rows) == 1 && res.Rows[0][0] != "0"
-	if !residual {
-		t.Errorf("the GUC-tamper residual no longer reproduces (err=%v rows=%v): the database half may now hold on its own — "+
-			"update migration 0097's header, internal/tierb's package doc and d122 §5, then invert this assertion", err, res.Rows)
-	} else {
-		t.Logf("RESIDUAL CONFIRMED (pinned): raw SQL with set_config re-scoped to tenant A (%s rows). Only the validator refuses this.", res.Rows[0][0])
-	}
+	// The GUC-tamper residual this test used to PIN is closed by 0099; the
+	// raw attacks on it (set_config, SET, RESET, SET ROLE, DO, query_to_xml,
+	// security-definer functions) are TestRawSQLCannotLeaveItsTenant in
+	// tierb_tamper_db_test.go. The validator still refuses them first:
 	for _, src := range []string{
 		`SELECT set_config('app.current_company_id', '` + a.cid.String() + `', true) FROM items`,
 		`SELECT current_setting('app.current_company_id') FROM items`,

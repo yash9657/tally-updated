@@ -14,6 +14,13 @@
 -- only wall there (set_config/current_setting are not allow-listed; SET is not
 -- a SELECT). The DB test pins the residual; d122 §5 records the owed fix.
 --
+-- ⛔ CLOSED BY 0099 (comment-only edit here). 0099 binds the tenant with a
+-- row agent_ro cannot write and runs the untrusted text only inside
+-- security-definer functions, where no role change is possible. It also
+-- records the second hole this header did not know about: SET LOCAL ROLE
+-- agent_ro was undone by set_config('role','tally_app'), because SET ROLE is
+-- checked against the session user. Read 0099's header before this one.
+--
 -- ===========================================================================
 -- ⛔ THE THREE ROLES AND WHY THERE ARE THREE
 -- ===========================================================================

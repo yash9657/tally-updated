@@ -13,21 +13,24 @@
 // a second statement, a dollar-quoted string or a quoted identifier cannot
 // survive because the printer has no way to emit one.
 //
-// ⛔ AND THE VALIDATOR IS NOT THE ONLY WALL — BUT IT IS THE ONLY WALL
-// AGAINST ONE THING. SQL that bypassed it entirely would run as agent_ro,
-// which holds SELECT on the agent.* views and on nothing else, inside a READ
-// ONLY transaction, with the tenant GUC set so FORCE RLS on every base table
-// scopes the views' owner to one company (migration 0097). tierb_db_test.go
-// runs raw, unvalidated SQL as agent_ro to prove that wall stops base-table
-// reads, writes and default cross-tenant reads on its own.
+// ⛔ AND THE VALIDATOR IS NOT THE ONLY WALL. SQL that bypassed it entirely
+// still reaches Postgres only as the $1 of agent.tier_b_run / tier_b_plan
+// (migration 0099): SECURITY DEFINER functions owned by agent_ro, which hold
+// SELECT on the agent.* views and on nothing else, inside a READ ONLY
+// transaction. Inside a security-definer frame Postgres refuses to change
+// `role` at all, so the text cannot become tally_app; and the tenant is bound
+// by a (backend, transaction) row that tally_app wrote before the text
+// existed and agent_ro cannot write, which a RESTRICTIVE policy on every base
+// table ANDs onto the GUC policy for the views' owner. tierb_db_test.go runs
+// raw, unvalidated SQL through that path — set_config, SET, RESET, SET ROLE,
+// DO blocks, query_to_xml, security-definer functions — and proves it stays
+// in its own tenant with the validator assumed broken.
 //
-// ⚠️ IT DOES NOT STOP GUC TAMPERING. The tenant GUC is a session setting any
-// role may change, so raw SQL that knows another company's id can call
-// set_config (or SET) and re-scope RLS to that tenant; the same DB test
-// measures it and pins it. Only this validator excludes that — set_config and
-// current_setting are not allow-listed and SET is not a SELECT. Any path that
-// ran SQL as agent_ro WITHOUT this validator (a raw-SQL or Tier C door) would
-// be cross-tenant; d122 §5 records the residual and the owed hardening.
+// ⚠️ UNTIL 0099 THAT WAS NOT TRUE, twice over: the GUC was re-pointable by
+// set_config, and `SET LOCAL ROLE agent_ro` was undone by
+// set_config('role','tally_app') because SET ROLE is checked against the
+// SESSION user. d122 "Wave 2" has the before/after measurements. Any new
+// path that runs model text must go through tier_b_run, never tx.Query.
 //
 // ⛔ NO NEW DEPENDENCY (IMPLEMENTATION_PLAN §1.1). There is no SQL parser in
 // the module graph and none may be added, which is WHY the accepted grammar
