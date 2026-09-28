@@ -266,9 +266,16 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			// WROTE. The gate judged the ceiling on the preview; an approver's
 			// edited body is never previewed again, so this is the one place
 			// its amount is known. Above the ceiling the voucher rolls back.
+			//
+			// ⚠️ amount::numeric, because postingsWrittenSQL projects the
+			// amount as TEXT (the preview reads it back as a string). Summing
+			// the text failed with "function sum(text) does not exist" on
+			// EVERY commit of a run with a ceiling — fail-closed, so no
+			// over-ceiling edit ever posted, but neither did a within-ceiling
+			// one (found by W6's TestMCPDelegationCeiling, D126 §8).
 			if req.MaxDebitPaise != nil {
 				var debit string
-				if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount),0)::text FROM (`+postingsWrittenSQL+`) p WHERE dr_cr = 'D'`,
+				if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount::numeric),0)::text FROM (`+postingsWrittenSQL+`) p WHERE dr_cr = 'D'`,
 					companyID).Scan(&debit); err != nil {
 					return err
 				}
