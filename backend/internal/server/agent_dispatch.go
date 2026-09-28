@@ -270,9 +270,15 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			// postings' TEXT amount column — the sum(text) form failed every
 			// commit of a run with a ceiling until W6 caught it (D126 §8);
 			// W2 breadth's readback replaced that query outright.
-			if req.MaxDebitPaise != nil && te.effect.DebitPaise > *req.MaxDebitPaise {
-				overCeil = fmt.Sprintf("the committed debit of %d paise exceeds this run's delegated ceiling of %d paise",
-					te.effect.DebitPaise, *req.MaxDebitPaise)
+			//
+			// The figure is Effect.ValuePaise: the debit, or for an order or a
+			// stock voucher (which post no legs) the value of its lines — on
+			// the debit alone an L3 purchase order sailed past any ceiling
+			// (wave-2 review). A write with no measurable value was held for
+			// a human by the gate, so it is not refused here.
+			if v, ok := te.effect.ValuePaise(); ok && req.MaxDebitPaise != nil && v > *req.MaxDebitPaise {
+				overCeil = fmt.Sprintf("the committed value of %d paise exceeds this run's delegated ceiling of %d paise",
+					v, *req.MaxDebitPaise)
 				return errors.New("agent: " + overCeil)
 			}
 			var approval any

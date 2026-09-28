@@ -162,6 +162,25 @@ func TestGateMatrix(t *testing.T) {
 	if g := Decide(GateInput{Principal: p, Spec: pay, Level: L3, Amount: paise(100001), Provenance: clean, Now: now}); g.Mode != ModeApproval {
 		t.Errorf("an amount over the delegated ceiling went %s", g.Mode)
 	}
+	// ⛔ A CEILING THE GATE CANNOT MEASURE IS NOT MET (wave-2 review). An order,
+	// a stock voucher or a master alter carries no ledger debit; with nil as its
+	// amount the ceiling rule never fired and a run capped at Rs 1,000 committed
+	// a Rs 10 crore purchase order at L3. Mutation: drop the "cannot be measured
+	// against" rule in Decide and every case below goes autonomous.
+	for _, id := range []string{"post.purchase-orders", "post.vouchers.physical-stock", "put.bank-reconciliation._ledgerid._voucherid._legno"} {
+		s := spec(t, id)
+		p := principal(s.ACLKey)
+		p.Delegation.MaxAmountPaise = paise(100000)
+		if g := Decide(GateInput{Principal: p, Spec: s, Level: L3, Amount: nil, Provenance: clean, Now: now}); g.Mode != ModeApproval {
+			t.Errorf("%s under a Rs 1,000 ceiling with no measurable amount went %s (%v)", id, g.Mode, g.Reasons)
+		}
+		// Without a ceiling the same commit stays autonomous: the rule is the
+		// ceiling's, not a new blanket bar.
+		p.Delegation.MaxAmountPaise = nil
+		if g := Decide(GateInput{Principal: p, Spec: s, Level: L3, Amount: nil, Provenance: clean, Now: now}); g.Mode != ModeAutonomous {
+			t.Errorf("%s with no ceiling went %s (%v), want autonomous", id, g.Mode, g.Reasons)
+		}
+	}
 }
 
 func TestAgentIsNeverTheChecker(t *testing.T) {

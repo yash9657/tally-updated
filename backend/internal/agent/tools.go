@@ -608,10 +608,12 @@ func (l *loop) gate(ctx context.Context, prev map[string]json.RawMessage, k int,
 		}
 	}
 
-	// The amount is the handler's own, in paise: the preview's debit total.
+	// The amount is the handler's own, in paise: the preview's debit total,
+	// or for a write that posts no legs (an order, a stock voucher) the value
+	// Effect.ValuePaise reads from its lines. nil when neither measures it,
+	// and policy.Decide then holds a run with a delegated ceiling for a human.
 	var amount *int64
-	if t.Preview.Effect.DebitPaise > 0 {
-		v := t.Preview.Effect.DebitPaise
+	if v, ok := t.Preview.Effect.ValuePaise(); ok {
 		amount = &v
 	}
 	out.AmountPaise = amount

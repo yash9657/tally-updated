@@ -41,6 +41,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -245,6 +246,75 @@ type Effect struct {
 func (e *Effect) Empty() bool {
 	return e == nil || (len(e.Postings) == 0 && e.Vouchers == 0 && len(e.Stock) == 0 &&
 		len(e.Masters) == 0 && len(e.Orders) == 0 && len(e.BankDates) == 0)
+}
+
+// ValuePaise is the money a write commits the business to, in paise, as far
+// as Go can measure it from the read-back effect — the figure an autonomy
+// band and a run's delegated ceiling (Delegation.MaxAmountPaise) are judged
+// on. ok is false when the write carries no measurable value (a master
+// alter, a bank tick, an order close), and a caller holding a ceiling must
+// then treat the ceiling as NOT met: policy.Decide does.
+//
+// ⛔ NOT ONLY THE LEDGER DEBIT. Wave 1 judged the ceiling on DebitPaise alone,
+// which is zero for every write that posts no ledger legs — so a run capped
+// at Rs 1,000 committed a Rs 10 crore purchase order at L3 with no human. An
+// order is worth the sum of its lines (qty × rate); a stock voucher the
+// larger of what it moved in and what it moved out (a stock journal moves the
+// same goods both ways, and counting both would double its value).
+func (e *Effect) ValuePaise() (int64, bool) {
+	if e == nil {
+		return 0, false
+	}
+	if e.DebitPaise > 0 {
+		return e.DebitPaise, true
+	}
+	var in, out, orders big.Rat
+	measured := false
+	for _, s := range e.Stock {
+		a, ok := new(big.Rat).SetString(s.Amount)
+		if !ok {
+			return 0, false
+		}
+		a.Abs(a)
+		if s.Direction == "IN" {
+			in.Add(&in, a)
+		} else {
+			out.Add(&out, a)
+		}
+		measured = true
+	}
+	for _, o := range e.Orders {
+		for _, l := range o.Lines {
+			q, ok1 := new(big.Rat).SetString(l.Qty)
+			r, ok2 := new(big.Rat).SetString(l.Rate)
+			if !ok1 || !ok2 {
+				return 0, false
+			}
+			orders.Add(&orders, new(big.Rat).Abs(q.Mul(q, r)))
+			measured = true
+		}
+	}
+	if !measured {
+		return 0, false
+	}
+	stock := &in
+	if out.Cmp(&in) > 0 {
+		stock = &out
+	}
+	total := new(big.Rat).Add(stock, &orders)
+	// Rupees to paise, rounded UP: a ceiling is never passed by a fraction.
+	p := new(big.Rat).Mul(total, big.NewRat(100, 1))
+	n := new(big.Int).Quo(p.Num(), p.Denom())
+	if new(big.Rat).SetInt(n).Cmp(p) < 0 {
+		n.Add(n, big.NewInt(1))
+	}
+	if !n.IsInt64() {
+		return 0, false
+	}
+	if n.Int64() == 0 {
+		return 0, false
+	}
+	return n.Int64(), true
 }
 
 // VersionWritten is one voucher_version a write appended.

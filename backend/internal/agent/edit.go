@@ -84,9 +84,13 @@ func (e *Engine) PreviewEdit(ctx context.Context, companyID, approvalID uuid.UUI
 	// The delegated ceiling is the run's; the edit is held to it here, where
 	// the approver can still change it, as well as in the commit's own
 	// transaction (agent_dispatch.go), which is the control.
-	if c := run.Delegation.MaxAmountPaise; c != nil && res.Effect.DebitPaise > *c {
-		return ep, &ErrEditRefused{Status: 422, Message: fmt.Sprintf(
-			"the edited body debits %d paise, above this run's delegated ceiling of %d paise", res.Effect.DebitPaise, *c)}
+	// The value is Effect.ValuePaise, not the ledger debit alone, so an edited
+	// order or stock voucher is held to the ceiling too.
+	if v, ok := res.Effect.ValuePaise(); ok {
+		if c := run.Delegation.MaxAmountPaise; c != nil && v > *c {
+			return ep, &ErrEditRefused{Status: 422, Message: fmt.Sprintf(
+				"the edited body is worth %d paise, above this run's delegated ceiling of %d paise", v, *c)}
+		}
 	}
 	return ep, nil
 }

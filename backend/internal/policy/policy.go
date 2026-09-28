@@ -343,6 +343,17 @@ func Decide(in GateInput) Gate {
 		why = append(why, fmt.Sprintf("amount %d paise exceeds this run's delegated ceiling of %d paise",
 			*in.Amount, *in.Principal.Delegation.MaxAmountPaise))
 	}
+	if in.Amount == nil && in.Principal.Delegation.MaxAmountPaise != nil {
+		// ⛔ A CEILING THE GATE CANNOT MEASURE IS NOT MET. The delegation's
+		// promise is "approval for any commit above it, whatever the autonomy
+		// level"; a write whose value Go could not compute from the preview (a
+		// master alter, a bank tick, an order whose lines were not read back)
+		// may be above it, so it waits. Before the wave-2 review a nil amount
+		// skipped the rule above and an L3 purchase order of Rs 10 crore
+		// committed inside a Rs 1,000 run.
+		why = append(why, fmt.Sprintf("this run has a delegated ceiling of %d paise and this commit's value "+
+			"cannot be measured against it from the preview", *in.Principal.Delegation.MaxAmountPaise))
+	}
 	if in.Spec.MoneyMoving() && in.Amount == nil {
 		// A money-moving commit whose amount Go could not compute from the
 		// preview is one no band can be applied to.
