@@ -173,7 +173,7 @@ func (s *Server) handleAgentStartRun(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.agent.Start(ctx, agent.StartRequest{
 		CompanyID: companyID, UserID: userID, Subject: subject, Channel: agent.Channel(req.Channel),
-		Instruction: req.Instruction, Inputs: req.Inputs, DelegatedKeys: req.Delegate, MaxAmountPaise: req.MaxAmountPaise,
+		Instruction: req.Instruction, Inputs: req.Inputs, DelegatedKeys: req.Delegate, MaxAmountPaise: req.MaxAmountPaise, StepUp: stepUpFrom(ctx),
 	})
 	if err != nil {
 		writeAgentErr(w, err)

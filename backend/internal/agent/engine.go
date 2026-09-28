@@ -112,6 +112,8 @@ type StartRequest struct {
 	// the run may read but not write.
 	DelegatedKeys  []string
 	MaxAmountPaise *int64
+	// StepUp is whether the starting request carried a WebAuthn step-up.
+	StepUp bool
 }
 
 // Start creates a run (status running, due now) and writes its run_started
@@ -173,7 +175,7 @@ func (e *Engine) Start(ctx context.Context, req StartRequest) (Run, error) {
 	run := Run{
 		CompanyID: req.CompanyID, CreatedBy: req.UserID, Subject: req.Subject, AgentID: policy.AgentID,
 		Channel: req.Channel, Instruction: instr, Inputs: inputs, Status: StatusRunning, NextPollAt: &now,
-		Delegation: policy.Delegation{ACLKeys: keys, MaxAmountPaise: req.MaxAmountPaise,
+		Delegation: policy.Delegation{ACLKeys: keys, MaxAmountPaise: req.MaxAmountPaise, StepUp: req.StepUp,
 			// Long enough for the approval window plus a working day, so a
 			// commit approved in the window's last hour is not then refused
 			// because the grant lapsed.

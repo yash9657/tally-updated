@@ -30,10 +30,20 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+// ADMIN_DATABASE_URL / DATABASE_URL override the shared dev database (the
+// Makefile exports both with these defaults), so a lane on its own database
+// never migrates the shared one.
+var (
+	adminDSN = envDSN("ADMIN_DATABASE_URL", "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
+	appDSN   = envDSN("DATABASE_URL", "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable")
 )
+
+func envDSN(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 // newServer applies migrations (idempotent) and returns a wired Server. It
 // skips the test when Postgres is unavailable so the suite stays green offline.

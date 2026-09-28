@@ -74,8 +74,11 @@ import (
 // (the agent loop) are what fill this up; the gate exists now so that they land
 // into a gate instead of arriving before one.
 const (
-	tier0MinInteractions = 3
-	tier0MinCassettes    = 2
+	// W2 (D121) added internal/server/testdata/cassettes/agent.decide/: the
+	// payment run (5 decisions) and the sales run with its verifier retry (6),
+	// taking the corpus from 2 files / 3 interactions to 4 / 14.
+	tier0MinInteractions = 14
+	tier0MinCassettes    = 4
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way

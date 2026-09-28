@@ -259,6 +259,49 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 	case ToolPreview:
 		return l.preview(ctx, prev, d)
 
+	case ToolRead:
+		// actions.read: any RiskRead ActionSpec — a report, a master list —
+		// through the router as the human. ⛔ It is the ONLY generic door the
+		// agent has, and it is a read by construction: a spec whose Risk is
+		// anything but read (a print, a governance read like backup) is
+		// refused here before the router is asked.
+		var a struct {
+			ActionID   string            `json:"action_id"`
+			PathParams map[string]string `json:"path_params,omitempty"`
+			Query      map[string]string `json:"query,omitempty"`
+		}
+		if err := strictDecode(d.Args, &a); err != nil {
+			return toolErr(d.Tool, "args: "+err.Error()), nil
+		}
+		spec, ok := actions.ByID(a.ActionID)
+		if !ok {
+			return toolErr(d.Tool, fmt.Sprintf("no action %q; use actions.search", a.ActionID)), nil
+		}
+		if spec.Risk != actions.RiskRead || spec.Method != "GET" {
+			return toolErr(d.Tool, fmt.Sprintf("%s is not a read (risk %s)", spec.ID, spec.Risk)), nil
+		}
+		if r := policy.EffectiveRights(l.run.Principal(), spec, l.e.now()); !r.Allow {
+			return toolErr(d.Tool, r.Reason), nil
+		}
+		path, err := concretePath(spec, l.run.CompanyID, a.PathParams)
+		if err != nil {
+			return toolErr(d.Tool, err.Error()), nil
+		}
+		q := url.Values{}
+		for k, v := range a.Query {
+			if len(k) > 64 || len(v) > 256 || strings.ContainsAny(k, "&=?#/") {
+				return toolErr(d.Tool, "query parameters must be short plain values"), nil
+			}
+			q.Set(k, v)
+		}
+		res, err := l.e.Dispatch.Dispatch(ctx, l.caller(l.run.Delegation.StepUp), Request{Mode: ModeRead, Spec: spec, Path: path,
+			Query: q.Encode(), RunID: l.run.ID})
+		if err != nil {
+			return toolOut{}, err
+		}
+		return toolOut{Tool: d.Tool, OK: res.OK(), Result: trimBody(res.Body), Sources: []policy.Source{policy.SourceBooks},
+			Error: map[bool]string{false: fmt.Sprintf("status %d", res.Status)}[res.OK()]}, nil
+
 	case ToolStatus, ToolListPending:
 		approvals, err := l.e.ListApprovals(ctx, l.run.CompanyID, map[string]string{ToolStatus: "all", ToolListPending: "pending"}[d.Tool], l.run.ID)
 		if err != nil {
@@ -290,7 +333,7 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		}
 		path, _ := concretePath(spec, l.run.CompanyID, nil)
 		body, _ := json.Marshal(map[string]string{"nl": a.Question})
-		res, err := l.e.Dispatch.Dispatch(ctx, l.caller(false), Request{Mode: ModeRead, Spec: spec, Path: path, Body: body, RunID: l.run.ID})
+		res, err := l.e.Dispatch.Dispatch(ctx, l.caller(l.run.Delegation.StepUp), Request{Mode: ModeRead, Spec: spec, Path: path, Body: body, RunID: l.run.ID})
 		if err != nil {
 			return toolOut{}, err
 		}
@@ -314,7 +357,7 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 			return toolErr(d.Tool, "draft_id is not a valid id"), nil
 		}
 		path := strings.Replace(strings.Replace(spec.Route, "{companyID}", l.run.CompanyID.String(), 1), "{draftID}", url.PathEscape(a.DraftID), 1)
-		res, err := l.e.Dispatch.Dispatch(ctx, l.caller(false), Request{Mode: ModeRead, Spec: spec, Path: path, RunID: l.run.ID})
+		res, err := l.e.Dispatch.Dispatch(ctx, l.caller(l.run.Delegation.StepUp), Request{Mode: ModeRead, Spec: spec, Path: path, RunID: l.run.ID})
 		if err != nil {
 			return toolOut{}, err
 		}
@@ -373,7 +416,7 @@ func (l *loop) preview(ctx context.Context, prev map[string]json.RawMessage, d M
 	if err != nil {
 		return toolErr(d.Tool, err.Error()), nil
 	}
-	res, err := l.e.Dispatch.Dispatch(ctx, l.caller(false), Request{Mode: ModePreview, Spec: spec, Path: path, Body: a.Body, RunID: l.run.ID})
+	res, err := l.e.Dispatch.Dispatch(ctx, l.caller(l.run.Delegation.StepUp), Request{Mode: ModePreview, Spec: spec, Path: path, Body: a.Body, RunID: l.run.ID})
 	if err != nil {
 		return toolOut{}, err
 	}
@@ -673,7 +716,10 @@ func (l *loop) execStep(k int) durable.Step {
 		}
 		body := t.Preview.Body
 		var approvalID uuid.UUID
-		webauthn := false
+		// An autonomous commit carries the delegating human's step-up; one
+		// behind an approval carries the APPROVER's (set below), never the
+		// starter's.
+		webauthn := l.run.Delegation.StepUp
 		if g.Gate.Mode == policy.ModeApproval {
 			// ⛔ A COMMIT BEHIND AN APPROVAL RE-READS THE DECISION HERE, not
 			// only in await:k. await recorded "approve"; this is the belt to

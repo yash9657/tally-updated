@@ -31,9 +31,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	challengeAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	challengeAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	challengeAdminDSN = testEnvDSN("ADMIN_DATABASE_URL", "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
+	challengeAppDSN   = testEnvDSN("DATABASE_URL", "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable")
 )
 
 // testClock is a manually advanced clock so TTL expiry is proven deterministically

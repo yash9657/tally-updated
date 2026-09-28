@@ -60,9 +60,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	payrollAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	payrollAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	payrollAdminDSN = testEnvDSN("ADMIN_DATABASE_URL", "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
+	payrollAppDSN   = testEnvDSN("DATABASE_URL", "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable")
 )
 
 // payrollWageMonth is the month every test in this file runs.

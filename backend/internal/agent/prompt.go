@@ -25,6 +25,7 @@ const (
 const (
 	ToolSearch      = "actions.search"
 	ToolPreview     = "actions.preview"
+	ToolRead        = "actions.read"
 	ToolCommit      = "actions.commit"
 	ToolStatus      = "actions.status"
 	ToolQueryBooks  = "query_books"
@@ -33,7 +34,7 @@ const (
 	ToolFinish      = "finish"
 )
 
-var toolNames = []string{ToolSearch, ToolPreview, ToolCommit, ToolStatus, ToolQueryBooks, ToolGetDraft, ToolListPending, ToolFinish}
+var toolNames = []string{ToolSearch, ToolRead, ToolPreview, ToolCommit, ToolStatus, ToolQueryBooks, ToolGetDraft, ToolListPending, ToolFinish}
 
 func validTool(n string) bool {
 	for _, t := range toolNames {
@@ -53,6 +54,8 @@ by the same validators and access rules the user's own keystrokes go through.
 
 On every turn you call the tool "decide" exactly once, choosing ONE tool:
   actions.search   {"query": "..."}                         find the action for a task (e.g. "payment voucher")
+  actions.read     {"action_id": "...", "path_params": {}, "query": {}}
+                                                            run a READ action (a report, a list of ledgers)
   actions.preview  {"action_id": "...", "path_params": {}, "body": {...}}
                                                             run the action WITHOUT saving; returns the ledger
                                                             effect or the validator's error
@@ -84,7 +87,7 @@ Rules:
 var decideSchema = json.RawMessage(`{"type":"object","additionalProperties":false,` +
 	`"required":["tool","args"],"properties":{` +
 	`"plan":{"type":"array","items":{"type":"string"},"description":"on the first turn: the steps you intend"},` +
-	`"tool":{"type":"string","enum":["actions.search","actions.preview","actions.commit","actions.status","query_books","get_draft","list_pending","finish"]},` +
+	`"tool":{"type":"string","enum":["actions.search","actions.read","actions.preview","actions.commit","actions.status","query_books","get_draft","list_pending","finish"]},` +
 	`"args":{"type":"object"},` +
 	`"final":{"type":"string","description":"only with tool=finish"}}}`)
 

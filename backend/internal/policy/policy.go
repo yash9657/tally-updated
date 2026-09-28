@@ -79,6 +79,13 @@ type Delegation struct {
 	// whatever the autonomy level.
 	MaxAmountPaise *int64    `json:"max_amount_paise,omitempty"`
 	ExpiresAt      time.Time `json:"expires_at"`
+	// StepUp records that the human who granted this delegation had stepped
+	// up (WebAuthn) on the request that granted it. It is what a READ, a
+	// PREVIEW (which writes nothing) and an AUTONOMOUS commit (which the
+	// tenant chose to allow without a human at commit time) carry to a level
+	// that requires step-up. A commit behind an approval carries the
+	// APPROVER's step-up instead, never this.
+	StepUp bool `json:"step_up,omitempty"`
 }
 
 // Allows reports whether the delegation names key and is unexpired at now.
