@@ -241,7 +241,14 @@ var allowedDeps = map[string]map[string]bool{
 	// while it happened, because that test scans only internal/query's own
 	// files and does not follow transitive imports. THIS LINE, in the entry
 	// above, is the real proof of the invariant.
-	"internal/nlq": {"internal/query": true, "internal/llm": true},
+	//
+	// W3 wave 2 adds internal/catalogue: the translator prompt now carries
+	// the semantic catalogue (the entity guide in the cacheable half, the
+	// selected reports per question in the dynamic half). The edge points
+	// the SAFE way — nlq (which may reach the network) reads the catalogue
+	// (constant data over authz/query/actions); the catalogue must never
+	// import nlq or llm, and its own line below still says so.
+	"internal/nlq": {"internal/query": true, "internal/llm": true, "internal/catalogue": true},
 	// W3's semantic catalogue: report metadata keyed by authz's vocabulary,
 	// example DSL re-validated by query.Compile, display routes resolved from
 	// the generated actions registry. All three edges are READS of constant

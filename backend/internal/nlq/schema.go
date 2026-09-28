@@ -1,10 +1,13 @@
 package nlq
 
 import (
+	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/khata/cored/internal/catalogue"
 	"github.com/khata/cored/internal/query"
 )
 
@@ -192,6 +195,28 @@ func staticPrompt() string {
 		}
 		b.WriteString("\n")
 	}
+	// W3 wave 2: the semantic catalogue's ENTITY half, in the words users
+	// type. It is server-authored constant text (internal/catalogue), walked
+	// in query.Catalog() order, so it is byte-stable and belongs in the
+	// cacheable half. The REPORT half is per-question — which reports a
+	// question selects depends on the question — so it is in hintsPrompt,
+	// in Dynamic, never here.
+	b.WriteString("\nENTITY GUIDE (what each entity means, and words people use for it):\n")
+	for _, e := range catalogue.Entities() {
+		b.WriteString("- ")
+		b.WriteString(string(e.Entity))
+		b.WriteString(": ")
+		b.WriteString(e.Description)
+		if len(e.Synonyms) > 0 {
+			b.WriteString(" Words: ")
+			b.WriteString(strings.Join(e.Synonyms, ", "))
+		}
+		if len(e.Hinglish) > 0 {
+			b.WriteString("; Hinglish: ")
+			b.WriteString(strings.Join(e.Hinglish, ", "))
+		}
+		b.WriteString(".\n")
+	}
 	b.WriteString(`
 RULES (the compiler rejects violations; obey them so the query is answerable):
 1. Aliases (a metric's "as", and any order_by column) must be lowercase snake_case, and an order_by column must spell an emitted dimension or metric alias IDENTICALLY.
@@ -204,6 +229,7 @@ RULES (the compiler rejects violations; obey them so the query is answerable):
 8. outstandings is an AS-AT-TODAY position, always. Its due_date range filters WHEN BILLS FALL DUE; it does not move the as-on date, and there is no way to ask it for a past position.
 9. stock_movements amount is the line value AS ENTERED (a sale's selling value), never the cost of goods issued; a stock VALUE question cannot be answered here. Its in_qty/out_qty/net_qty are exact.
 10. bank_statement_lines: deposits are money INTO the bank account and withdrawals money out; description is a FILTER only (use op like with % wildcards) and can never be grouped by.
+11. CATALOGUE HINTS (below, when present) are chosen by keyword match and may be wrong. Their example queries are SHAPES: replace any party, ledger or item name in an example with the one the question names, drop a filter the question does not state, and never copy an example's name into an answer. A hint that says the DSL cannot answer a report means: if the question needs that report, refuse (R4).
 
 REFUSE — call emit_query with entity "" (and empty metrics/dimensions/filters/order_by, null date_range, limit 0) when:
 R1. The question names a scope other than the signed-in company: another company/tenant/organisation/firm by name, "all companies", "every tenant", "across all books", or a raw company UUID. Every answer is scoped to the signed-in company by the server and no other scope is reachable. Answering such a question with this company's figures would put the caller's own number under someone else's question, which is worse than a refusal.
@@ -256,6 +282,107 @@ Q: "total sales for every company"
 -> emit_query {"entity":"","metrics":[],"dimensions":[],"filters":[],"date_range":null,"order_by":[],"limit":0}
 `)
 	return b.String()
+}
+
+// hintTopK is how many selected reports a question's hints carry. Three is
+// the depth the held-out selector gate measures (top-3 38/40, d122 §2): the
+// right report is in the first three far more often than it is first.
+const hintTopK = 3
+
+// hintsPrompt is the per-QUESTION half of the catalogue: the reports
+// catalogue.Select ranks for this question, each with what it answers (and
+// does not), the DSL entities its examples use, and one example DSL shape —
+// or the reason the DSL cannot answer it.
+//
+// ⛔ IT IS DYNAMIC BECAUSE IT DEPENDS ON THE QUESTION. Put it in Static and the
+// prefix changes with every question anybody asks; the cache never hits.
+// It is a separate Dynamic message rather than an addition to dynamicPrompt,
+// so dynamicPrompt stays a function of (clock, FY month) alone and the six
+// schema_test.go assertions about the rendered prompt keep meaning what they
+// meant.
+//
+// ⛔ NO TENANT DATA. Everything printed here is catalogue text — authored in
+// internal/catalogue, the same for every tenant. The question selects it; the
+// question itself is not echoed (it rides once, in the user turn).
+//
+// ⚠️ THE EXAMPLES NAME SYNTHETIC PARTIES ("Kaveri Traders"), because a filter
+// shape with no value teaches nothing. Rule 11 tells the model they are
+// shapes; TestHintExamplesDecodeAndCompile keeps every one a query the
+// production decoder and the compiler accept.
+func hintsPrompt(nl string) string {
+	matches := catalogue.Select(nl, hintTopK)
+	var b strings.Builder
+	if len(matches) == 0 {
+		b.WriteString("\nCATALOGUE HINTS: no catalogue report shares a word with this question. " +
+			"Answer from the CATALOG and ENTITY GUIDE above if they express it; otherwise refuse (R4).\n")
+		return b.String()
+	}
+	b.WriteString("\nCATALOGUE HINTS for this question (keyword-selected, best first; rule 11 applies):\n")
+	for i, m := range matches {
+		e, ok := catalogue.Lookup(m.Report)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "%d. %s (report %s)", i+1, e.Title, e.Report)
+		if len(m.Entities) > 0 {
+			ents := make([]string, len(m.Entities))
+			for j, en := range m.Entities {
+				ents[j] = string(en)
+			}
+			b.WriteString(" -> entities: ")
+			b.WriteString(strings.Join(ents, ", "))
+		}
+		b.WriteString("\n   ")
+		b.WriteString(e.Description)
+		b.WriteString("\n")
+		if len(e.DSL) == 0 {
+			b.WriteString("   The DSL cannot answer this report: ")
+			b.WriteString(e.NoDSLReason)
+			b.WriteString("\n")
+			continue
+		}
+		if e.DSLFidelity == "partial" {
+			b.WriteString("   (the example answers only the slice the description names)\n")
+		}
+		b.WriteString("   example shape -> emit_query ")
+		b.WriteString(emitShape(e.DSL[0]))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// emitShape renders a catalogue example the way the emit_query schema demands
+// it: every property present, arrays never null. json.Marshal alone would
+// print "metrics":null for an example with none, which is a schema-INVALID
+// tool input — teaching it would earn a repair round trip on every hit.
+func emitShape(q query.Query) string {
+	if q.Metrics == nil {
+		q.Metrics = []query.Metric{}
+	}
+	if q.Dimensions == nil {
+		q.Dimensions = []string{}
+	}
+	if q.Filters == nil {
+		q.Filters = []query.Filter{}
+	}
+	for i := range q.Filters {
+		if q.Filters[i].Values == nil {
+			q.Filters[i].Values = []string{}
+		}
+	}
+	if q.OrderBy == nil {
+		q.OrderBy = []query.OrderTerm{}
+	}
+	if q.Limit == 0 {
+		q.Limit = query.DefaultLimit
+	}
+	out, err := json.Marshal(q)
+	if err != nil {
+		// Unreachable for the closed catalogue types; a hint that cannot be
+		// rendered is dropped rather than half-printed.
+		return "{}"
+	}
+	return string(out)
 }
 
 // iso formats a date the way every date in the DSL is spelled (YYYY-MM-DD), so
