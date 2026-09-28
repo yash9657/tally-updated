@@ -796,6 +796,26 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"the undo of the above, with the same reach: it deletes a 'set-aside' row only, " +
 		"refuses to touch a 'matched' one, and carries no date",
 
+	// ---- W2 THE AGENT PLANE (D121). TWO WRITE ROUTES, ONE REASON.
+	//
+	// ⛔ THE DOCUMENT THESE NAME IS AN AGENT RUN OR AN APPROVAL, NOT A LEDGER
+	// DOCUMENT. A decision writes one agent_decision row and nudges the run; a
+	// cancel writes the run's status. Neither writes a voucher_version, a posting
+	// or a balance. ⭐ AND THE COMMIT AN APPROVAL RELEASES IS JUDGED WHERE IT
+	// HAPPENS: the agent's commit is an in-process request to the REAL voucher
+	// route (agent_dispatch.go), so companyAuthMiddleware reads that request's
+	// asserted date and, for an alter, the stored one — both ends of the move,
+	// exactly as for a person's keystrokes. Judging the approval as well would
+	// judge the same voucher twice and the approval once for nothing.
+	//
+	// ⛔ IF AN APPROVAL EVER COMMITS BY ITSELF — writing the voucher inside the
+	// decision request rather than through the router — this entry becomes FALSE.
+	"POST /v1/companies/{companyID}/agent/approvals/{approvalID}/decision": "" +
+		"an approval decision writes an agent_decision row, not a ledger document; the commit it " +
+		"releases is a separate in-process request to the voucher route, judged by the cutoff there",
+	"POST /v1/companies/{companyID}/agent/runs/{runID}/cancel": "" +
+		"cancelling a run writes the run's status only; it commits nothing and carries no date",
+
 	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
 	//
 	// ⛔ THE DOCUMENT THESE NAME IS NOT A LEDGER DOCUMENT. The census matches them

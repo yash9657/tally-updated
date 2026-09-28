@@ -45,6 +45,7 @@ import (
 	// `report`, and calling the renderer is what stops this file from becoming a
 	// second place that knows a colon goes between them.
 	"github.com/khata/cored/internal/actions"
+	"github.com/khata/cored/internal/agent"
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
 
@@ -268,6 +269,15 @@ type Server struct {
 	// queue afterwards. Exposed so tests and an operator can drain on demand
 	// rather than waiting on a ticker.
 	notifier *notify.Dispatcher
+
+	// The agent plane (W2, D121). agent is always constructed — its reads
+	// (runs, events, the inbox) work with no model — and refuses to START a
+	// run when it has no model (503 AGENT_UNCONFIGURED), which is the shipped
+	// hermetic default. Its only write path is agentDispatcher, over this
+	// server's own router.
+	agent       *agent.Engine
+	agentPoller *agent.Poller
+	agentKick   chan struct{}
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
@@ -407,8 +417,53 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// deployment does not send mail. Nothing here claims a message arrived.
 		notifier: notify.NewDispatcher(pool, notify.LogSender{}),
 	}
+	agentLLM, err := buildAgentLLM(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	s.initAgent(agentLLM)
 	s.routes()
 	return s, nil
+}
+
+// initAgent builds the engine and its poller over this server's pool and
+// router. Split out so the no-database registry generator (&Server{}) is not
+// asked to build one.
+func (s *Server) initAgent(model *llm.Client) {
+	s.agent = &agent.Engine{Pool: s.pool, LLM: model}
+	s.agent.Dispatch = agentDispatcher{s: s, now: s.agent.Clock}
+	s.agentPoller = &agent.Poller{Engine: s.agent}
+	s.agentKick = make(chan struct{}, 1)
+}
+
+// buildAgentLLM builds the agent's model client from the SAME LLM_PROVIDER
+// configuration nlq uses (buildLLM), with the agent's own timeout default.
+// Unset means nil: the agent plane is present and inert, which is the hermetic
+// default HANDOFF-AGENTIC-AFTER-W0 §1.6 requires ("with no keys and no network
+// every gate runs and passes").
+func buildAgentLLM(pool *db.Pool) (*llm.Client, error) {
+	set, configured, err := buildLLM()
+	if err != nil || !configured {
+		return nil, err
+	}
+	budget, err := buildBudget(pool)
+	if err != nil {
+		return nil, err
+	}
+	timeout := set.Timeout
+	if timeout <= 0 {
+		// A background agent step, not an interactive query box: nlq's 15s
+		// would cut a planning call off mid-thought.
+		timeout = 60 * time.Second
+	}
+	c, err := llm.New(llm.Config{Provider: set.Provider, Model: set.Model, APIKey: set.APIKey, BaseURL: set.BaseURL,
+		HTTP: &http.Client{Timeout: timeout}, Budget: budget, Recorder: trajectoryRecorder{}, Now: time.Now})
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("cored: agent model = %s/%s", set.Provider, set.Model)
+	return c, nil
 }
 
 // DispatchNotifications drains the notification outbox once and reports how many
@@ -1223,6 +1278,11 @@ func (s *Server) routes() {
 		// route emits every ledger, every party and every salary as one file. See
 		// handler_backup.go.
 		r.Get("/backup", s.handleBackupCompany)
+
+		// THE AGENT PLANE (W2, D121) — runs and the approval inbox. See
+		// agent_http.go for the contract and routeAction's /agent/ arm for
+		// the two bare tokens (agent-run, agent-approval).
+		s.agentRoutes(r)
 
 		// ===================================================================
 		// PER-COMPANY PRINT TEMPLATES (track C). handler_print_templates.go.

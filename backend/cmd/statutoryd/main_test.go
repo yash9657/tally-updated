@@ -191,7 +191,7 @@ func TestNewStepStore_GoodDSNYieldsDurableStore(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), `DELETE FROM statutory_step WHERE workflow_id = $1`, wf)
 	})
-	if err := pg.Append(wf, statutory.StepResult{Name: "build", Output: []byte(`{"ok":true}`)}); err != nil {
+	if err := pg.Append(context.Background(), wf, statutory.StepResult{Name: "build", Output: []byte(`{"ok":true}`)}); err != nil {
 		t.Fatalf("Append through the booted store: %v", err)
 	}
 	var n int

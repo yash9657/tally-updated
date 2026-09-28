@@ -561,6 +561,7 @@ func TestActionRegistryGolden(t *testing.T) {
 			ACLKey:         actions.RenderACLKey(act, res, resName),
 			IsWrite:        act.IsWrite(),
 			StepUpEligible: stepUpEligible(act, res, resName),
+			Risk:           actions.ClassifyRisk(act, res),
 			DateSubject:    cutoffDateSubject(synthRequest(method, route, companyID, "")),
 			Channel:        actions.ChannelNone,
 			Label:          specLabel(act, res, resName, method, route),
@@ -816,6 +817,7 @@ func renderRegistryGo(t *testing.T, specs []actions.ActionSpec, prov actions.Pro
 		fmt.Fprintf(&b, "\t\tACLKey:   %q,\n", s.ACLKey)
 		fmt.Fprintf(&b, "\t\tIsWrite:        %t,\n", s.IsWrite)
 		fmt.Fprintf(&b, "\t\tStepUpEligible: %t,\n", s.StepUpEligible)
+		fmt.Fprintf(&b, "\t\tRisk:           %q,\n", string(s.Risk))
 		if s.DateSubject != "" {
 			fmt.Fprintf(&b, "\t\tDateSubject:    %q,\n", s.DateSubject)
 		}

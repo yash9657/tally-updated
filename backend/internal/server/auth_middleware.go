@@ -73,6 +73,25 @@ func stepUpRequired(w http.ResponseWriter) {
 // and returns ok=false. It is the shared front half of both the authn-only path
 // (POST /v1/companies) and the full PDP path ({companyID} subtree).
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*authn.Claims, bool) {
+	// THE IN-PROCESS AGENT CALL (W2, agent_dispatch.go). It carries no token —
+	// there is none cored could mint in production — and it cannot be forged
+	// from outside: the context key is unexported and only the dispatcher sets
+	// it. It becomes the claims of the run's HUMAN, and then goes through
+	// exactly what a token would: the revocation check below, and the whole of
+	// companyAuthMiddleware after it.
+	if call := agentCallFrom(r.Context()); call != nil {
+		claims := call.claims()
+		revoked, rerr := s.sessionRevoked(r.Context(), claims)
+		if rerr != nil {
+			writeError(w, http.StatusUnauthorized, "session state unavailable")
+			return nil, false
+		}
+		if revoked {
+			writeError(w, http.StatusUnauthorized, "session revoked: this account was locked")
+			return nil, false
+		}
+		return claims, true
+	}
 	raw, present := bearerToken(r)
 	if !present {
 		writeError(w, http.StatusUnauthorized, "missing bearer token")
@@ -121,8 +140,9 @@ func (s *Server) authnOnlyMiddleware(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		// Service principals cannot bootstrap companies.
-		if claims.IsService() {
+		// Service principals cannot bootstrap companies — and neither can an
+		// agent: creating a company is not an action in its registry.
+		if claims.IsService() || agentCallFrom(r.Context()) != nil {
 			writeError(w, http.StatusForbidden, "service principals cannot create companies")
 			return
 		}
@@ -330,10 +350,26 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// W2: ACL(user) has just allowed it. An AGENT call must ALSO pass
+		// ACL(agent) ∩ delegation ∩ the structural rules, and the route it
+		// actually reached must be the ActionSpec it declared — so the
+		// intersection is enforced HERE, in the router, for every in-process
+		// request, and not only by the dispatcher that built it.
+		if call := agentCallFrom(r.Context()); call != nil {
+			if reason := agentGate(call, act, res, resName, call.at); reason != "" {
+				writeError(w, http.StatusForbidden, reason)
+				return
+			}
+		}
+
 		// (6) Authorized: inject the authz-verified identity + company into ctx.
 		ctx := db.WithSubject(r.Context(), claims.Subject)
 		ctx = db.WithUser(ctx, userID)
 		ctx = db.WithCompany(ctx, companyID)
+		// W2: whether THIS request's token attests a WebAuthn step-up, so an
+		// approval handler can record that the checker stepped up — the fact
+		// the agent's commit then carries (agent_dispatch.go).
+		ctx = withStepUp(ctx, claims.HasWebAuthn())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -1327,6 +1363,33 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// write cutoff — both gate on Action.IsWrite(), and a read carries no date.
 	case method == http.MethodGet && rest == "/backup":
 		return authz.Display, "backup", "", true
+
+	// THE AGENT PLANE (W2, D121). Two bare tokens — see authz/vocabulary.go on
+	// why two: starting and reading runs (`agent-run`) is a different authority
+	// from DECIDING their approvals (`agent-approval`), the checker's seat.
+	//
+	// The decision is an ALTER, so a level with RequiresWebAuthn must step up
+	// to approve — and the approver's step-up is what the agent's commit then
+	// carries to a WebAuthn level's write (agent_dispatch.go). The segment
+	// matching is exact: an /agent/... path of any other shape is unmapped and
+	// default-denied.
+	case strings.HasPrefix(rest, "/agent/"):
+		seg := splitPath(rest)
+		switch {
+		case len(seg) == 2 && seg[1] == "runs" && method == http.MethodGet,
+			len(seg) == 3 && seg[1] == "runs" && method == http.MethodGet,
+			len(seg) == 4 && seg[1] == "runs" && seg[3] == "events" && method == http.MethodGet:
+			return authz.Display, "agent-run", "", true
+		case len(seg) == 2 && seg[1] == "runs" && method == http.MethodPost:
+			return authz.Create, "agent-run", "", true
+		case len(seg) == 4 && seg[1] == "runs" && seg[3] == "cancel" && method == http.MethodPost:
+			return authz.Alter, "agent-run", "", true
+		case len(seg) == 2 && seg[1] == "approvals" && method == http.MethodGet,
+			len(seg) == 3 && seg[1] == "approvals" && method == http.MethodGet:
+			return authz.Display, "agent-approval", "", true
+		case len(seg) == 4 && seg[1] == "approvals" && seg[3] == "decision" && method == http.MethodPost:
+			return authz.Alter, "agent-approval", "", true
+		}
 
 	// PER-COMPANY PRINT TEMPLATES (track C): what this company's own documents
 	// SAY — the title, the letterhead lines, the declaration, the terms, the

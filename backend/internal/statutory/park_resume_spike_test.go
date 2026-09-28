@@ -79,7 +79,6 @@ const (
 	spikeRunEnv      = "KHATA_SPIKE_RUN_ID"
 	spikeNowEnv      = "KHATA_SPIKE_NOW"
 	spikeDelayEnv    = "KHATA_SPIKE_COMMIT_DELAY"
-	spikeLockEnv     = "KHATA_SPIKE_ADVISORY_LOCK"
 	spikeSentinelPfx = "SPIKE_RESULT="
 	spikePIDPfx      = "SPIKE_PID="
 )
@@ -87,16 +86,14 @@ const (
 // approvalWindow is the "days-long timeout" of the gate clause.
 const approvalWindow = 72 * time.Hour
 
-// errParked is returned by the approval step when no decision has been recorded.
+// F1 LANDED: the approval step parks with the engine's exported sentinel.
 //
-// ⛔ FINDING (F1), AND IT IS THE ONE CONCRETE GAP THIS SPIKE FOUND IN THE RUNNER.
-// statutory.Run returns the step's error verbatim, so its caller cannot tell
-// "parked, re-invoke me later" from "failed, page someone". Today the IRN
-// workflow has no parked state and never needed the distinction. W2 does: the
-// poller must re-invoke a parked run and must NOT re-invoke a permanently failed
-// one. The sentinel lives here in the spike; if W2 adopts this design it belongs
-// in runner.go beside Run, as an exported ErrParked with errors.Is support.
-var errParked = errors.New("spike: parked awaiting approval")
+// This spike used to declare its own errParked, with a note that statutory.Run
+// returned a step's error verbatim so its caller could not tell "parked,
+// re-invoke me later" from "failed, page someone", and that the sentinel
+// belonged beside Run as an exported ErrParked with errors.Is support. It now
+// is (internal/durable, re-exported in runner.go), and the spike uses it, so the
+// gate below is measured against the sentinel the agent plane's poller reads.
 
 // errApprovalExpired is the timeout half of the gate clause.
 var errApprovalExpired = errors.New("spike: approval window expired")
@@ -161,7 +158,7 @@ func spikeSteps(store StepStore, runID string, now time.Time, recordExec func(st
 				// commit assertion below would lose its meaning by association.
 
 				// The approvals "table": whatever the inbox wrote.
-				decided, err := store.Load(spikeApprovalWorkflowID(runID))
+				decided, err := store.Load(context.Background(), spikeApprovalWorkflowID(runID))
 				if err != nil {
 					return nil, fmt.Errorf("spike: read approvals: %w", err)
 				}
@@ -184,7 +181,7 @@ func spikeSteps(store StepStore, runID string, now time.Time, recordExec func(st
 						return nil, errApprovalExpired
 					}
 				}
-				return nil, errParked
+				return nil, Park("await_approval", "no decision recorded")
 			},
 		},
 		{
@@ -266,7 +263,7 @@ func TestSpikeChildEpoch(t *testing.T) {
 	recordExec := func(step string) error {
 		// A UNIQUE name per execution — see the file header on why a fixed name
 		// would collapse repeats and fake the result.
-		return store.Append(spikeExecWorkflowID(runID), StepResult{
+		return store.Append(context.Background(), spikeExecWorkflowID(runID), StepResult{
 			Name:   step + "@" + uuid.NewString(),
 			Output: json.RawMessage(`{"at":"` + now.UTC().Format(time.RFC3339) + `"}`),
 		})
@@ -278,39 +275,21 @@ func TestSpikeChildEpoch(t *testing.T) {
 	// this whole spike green while testing nothing it says it tests.
 	fmt.Println(spikePIDPfx + fmt.Sprint(os.Getpid()))
 
-	// The F5 fix under test: a per-run advisory lock, held for the whole Run on
-	// ONE connection. pg_try_advisory_lock is non-blocking — a poller that does
-	// not get the lock leaves the run to whoever holds it and comes back on its
-	// next tick, which is the correct behaviour for a poller and requires no
-	// new table and no new dependency (§1.1 intact).
-	if os.Getenv(spikeLockEnv) != "" {
-		conn, err := pool.Acquire(context.Background())
-		if err != nil {
-			t.Fatalf("child: acquire for advisory lock: %v", err)
-		}
-		defer conn.Release()
-		var got bool
-		if err := conn.QueryRow(context.Background(),
-			`SELECT pg_try_advisory_lock(hashtext($1))`, spikeRunWorkflowID(runID)).Scan(&got); err != nil {
-			t.Fatalf("child: advisory lock: %v", err)
-		}
-		if !got {
-			fmt.Println(spikeSentinelPfx + "LOCKED")
-			return
-		}
-		defer func() {
-			_, _ = conn.Exec(context.Background(),
-				`SELECT pg_advisory_unlock(hashtext($1))`, spikeRunWorkflowID(runID))
-		}()
-	}
-
+	// F3 LANDED: THE CHILD TAKES NO LOCK OF ITS OWN ANY MORE. It used to
+	// (behind KHATA_SPIKE_ADVISORY_LOCK), because the lock was a fix the caller
+	// had to remember. Run now takes a per-workflow pg_try_advisory_lock itself
+	// (StepStore.TryLock -> durable.AdvisoryLocker) and returns ErrLocked to the
+	// loser, so there is no longer a way to call Run without it — which is the
+	// only shape of "mandatory" that survives the next caller.
 	_, runErr := Run(context.Background(), store, spikeRunWorkflowID(runID),
 		spikeSteps(store, runID, now, recordExec))
 
 	switch {
 	case runErr == nil:
 		fmt.Println(spikeSentinelPfx + "COMPLETED")
-	case errors.Is(runErr, errParked):
+	case errors.Is(runErr, ErrLocked):
+		fmt.Println(spikeSentinelPfx + "LOCKED")
+	case errors.Is(runErr, ErrParked):
 		fmt.Println(spikeSentinelPfx + "PARKED")
 	case errors.Is(runErr, errApprovalExpired):
 		fmt.Println(spikeSentinelPfx + "EXPIRED")
@@ -419,7 +398,13 @@ func TestDurableParkExpiresAfterTheWindow(t *testing.T) {
 		t.Fatalf("F2 probe: got %q, want COMPLETED (an expired run is still resumable)", got)
 	}
 	assertExecCounts(t, admin, runID, map[string]int{"commit": 1})
-	t.Log("F2 CONFIRMED: expiry left no record, so a late approval still committed. W2 must write a terminal decision.")
+	// ⚠️ STILL TRUE OF THE RAW ENGINE, AND DELIBERATELY SO. An engine with no
+	// clock and no policy cannot decide a run is dead; the caller that owns the
+	// deadline must WRITE the terminal fact. internal/agent does — an expired
+	// approval inserts an 'expired' agent_decision row that the approval step
+	// reads, and the one-decision-per-approval UNIQUE refuses the late approve.
+	// See internal/agent's TestExpiredApprovalIsTerminal.
+	t.Log("F2 CONFIRMED at the engine: expiry left no record, so a late approval still committed. internal/agent makes it terminal by writing a decision.")
 }
 
 // ---------------------------------------------------------------------------
@@ -581,33 +566,27 @@ func spikeAppPool() (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// TestConcurrentPollersDoubleExecuteTheMoneyStep is FINDING F5, measured.
+// TestConcurrentPollersExecuteTheMoneyStepExactlyOnce is FINDING F5 CLOSED.
 //
-// ⛔⛔ THIS TEST ASSERTS A DEFECT, NOT A GUARANTEE. It is green when the money
-// step runs TWICE, because that is what this design does today under two
-// concurrent pollers — and W2 must not adopt it without the fix below.
+// ⛔ IT REPLACES TestConcurrentPollersDoubleExecuteTheMoneyStep, AS THAT TEST'S
+// OWN HEADER SAID IT SHOULD. That test ASSERTED THE DEFECT — it was green when
+// two concurrent pollers ran the money step twice while statutory_step recorded
+// it once — and said it would "go red the day someone fixes the underlying race,
+// which is the correct time to delete it". The race is fixed in the engine
+// (Run takes the per-workflow advisory lock before its first Load, D120 F3), so
+// it went red (the second poller now answers LOCKED, not COMPLETED) and was
+// deleted in the same change that made it red.
 //
-// PGStore's own header says so in prose ("Append takes NO row lock ... two
-// statutoryd instances sharing this DSN could both execute the `generate` step
-// and call the real IRP twice") and then discharges it with a DEPLOYMENT
-// assumption: "Single-instance statutoryd remains the deployment shape
-// (IMPLEMENTATION_PLAN.md §7 deferral 7)".
+// Same two concurrent child PROCESSES, same run, same 400ms widening of the
+// window between Run's memoisation check and its Append — and NO lock taken by
+// the child. ⛔ The assertion is commits == 1 EXACTLY, and it separately requires
+// that one poller was turned away with LOCKED: without that, two children that
+// merely failed to overlap would also show 1 and the lock would be credited with
+// a result it did not produce.
 //
-// ⛔ THAT ASSUMPTION DOES NOT CARRY OVER TO W2, AND THAT IS THE WHOLE POINT OF
-// THIS TEST. statutoryd is one process by choice. The agent plane runs inside
-// **cored**, which is a horizontally-scaled HTTP server — the moment two cored
-// instances poll the same parked run, both pass the memoisation check, both
-// execute `commit`, and the loser's Append is silently swallowed by ON CONFLICT
-// DO NOTHING. The books get two vouchers and the step store shows one. A defect
-// that is invisible in the ledger this engine keeps is the worst shape it could
-// have.
-//
-// THE FIX W2 OWES (do not adopt this design without it): take a per-run
-// PostgreSQL advisory lock — pg_try_advisory_xact_lock(hashtext(workflow_id)) —
-// or a SELECT ... FOR UPDATE lease row, around the whole Run, and skip the run
-// when the lock is not granted. Advisory locks need no new table and no new
-// dependency, which keeps §1.1 intact.
-func TestConcurrentPollersDoubleExecuteTheMoneyStep(t *testing.T) {
+// Mutation proof (run for D121): delete the TryLock call from durable.Run and
+// this test fails with "the money step executed 2 time(s)".
+func TestConcurrentPollersExecuteTheMoneyStepExactlyOnce(t *testing.T) {
 	admin := spikeHarness(t)
 	pids := &spikePIDs{}
 	runID := uuid.NewString()
@@ -615,86 +594,6 @@ func TestConcurrentPollersDoubleExecuteTheMoneyStep(t *testing.T) {
 
 	day0 := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
 	if got := spikeEpoch(t, pids, runID, day0); got != "PARKED" {
-		t.Fatalf("setup: got %q, want PARKED", got)
-	}
-	spikeRecordDecision(t, admin, runID, decisionOutput{Decision: "approve", By: "u-owner", At: day0})
-
-	// Two pollers wake on the same approved run at the same instant.
-	const delay = "400ms"
-	results := make(chan string, 2)
-	for i := 0; i < 2; i++ {
-		go func() {
-			// Each child is a separate process, so they cannot share a mutex
-			// even in principle — exactly the two-cored-instances shape.
-			cmd := exec.Command(os.Args[0], "-test.run=^TestSpikeChildEpoch$", "-test.v")
-			cmd.Env = append(os.Environ(),
-				spikeChildEnv+"=1",
-				spikeRunEnv+"="+runID,
-				spikeNowEnv+"="+day0.Add(time.Hour).UTC().Format(time.RFC3339),
-				spikeDelayEnv+"="+delay,
-			)
-			out, _ := cmd.CombinedOutput()
-			for _, line := range strings.Split(string(out), "\n") {
-				if line = strings.TrimSpace(line); strings.HasPrefix(line, spikeSentinelPfx) {
-					results <- strings.TrimPrefix(line, spikeSentinelPfx)
-					return
-				}
-			}
-			results <- "NO-SENTINEL"
-		}()
-	}
-	for i := 0; i < 2; i++ {
-		if got := <-results; got != "COMPLETED" {
-			t.Fatalf("concurrent poller %d: got %q, want COMPLETED", i, got)
-		}
-	}
-
-	var commits int
-	if err := admin.QueryRow(context.Background(),
-		`SELECT count(*) FROM statutory_step WHERE workflow_id = $1 AND step_name LIKE 'commit@%'`,
-		spikeExecWorkflowID(runID)).Scan(&commits); err != nil {
-		t.Fatalf("count commits: %v", err)
-	}
-
-	// The recorded run still shows ONE commit step — which is precisely why this
-	// is dangerous: the durable record does not reveal the double execution.
-	var recorded int
-	if err := admin.QueryRow(context.Background(),
-		`SELECT count(*) FROM statutory_step WHERE workflow_id = $1 AND step_name = 'commit'`,
-		spikeRunWorkflowID(runID)).Scan(&recorded); err != nil {
-		t.Fatalf("count recorded commit: %v", err)
-	}
-	if recorded != 1 {
-		t.Errorf("recorded commit steps = %d, want 1", recorded)
-	}
-
-	switch commits {
-	case 2:
-		t.Logf("F5 CONFIRMED: two concurrent pollers executed the money step %d times while the step store recorded %d. W2 must take a per-run advisory lock before adopting this design.", commits, recorded)
-	case 1:
-		t.Logf("F5 NOT REPRODUCED in this run (commits=%d): the race did not open. This does NOT clear the design — the window is real and unserialized; see the header. Re-run or widen %s.", commits, spikeDelayEnv)
-	default:
-		t.Fatalf("unexpected commit execution count %d", commits)
-	}
-}
-
-// TestAdvisoryLockPreventsDoubleExecution is the F5 FIX, measured under exactly
-// the conditions that broke without it.
-//
-// Same two concurrent pollers, same widened commit window, same run — the only
-// difference is that each child takes pg_try_advisory_lock(hashtext(workflow_id))
-// before Run and releases it after. One poller does the work; the other is told
-// LOCKED and leaves. ⛔ The assertion is commits == 1 EXACTLY: a fix that merely
-// made the race rarer would pass an "is it usually 1?" test and fail in
-// production at volume.
-func TestAdvisoryLockPreventsDoubleExecution(t *testing.T) {
-	admin := spikeHarness(t)
-	pids := &spikePIDs{}
-	runID := uuid.NewString()
-	t.Cleanup(func() { spikeCleanup(admin, runID) })
-
-	day0 := time.Date(2026, 9, 11, 9, 0, 0, 0, time.UTC)
-	if got := spikeEpoch(t, pids, runID, day0, spikeLockEnv+"=1"); got != "PARKED" {
 		t.Fatalf("setup: got %q, want PARKED", got)
 	}
 	spikeRecordDecision(t, admin, runID, decisionOutput{Decision: "approve", By: "u-owner", At: day0})
@@ -708,7 +607,6 @@ func TestAdvisoryLockPreventsDoubleExecution(t *testing.T) {
 				spikeRunEnv+"="+runID,
 				spikeNowEnv+"="+day0.Add(time.Hour).UTC().Format(time.RFC3339),
 				spikeDelayEnv+"=400ms",
-				spikeLockEnv+"=1",
 			)
 			out, _ := cmd.CombinedOutput()
 			for _, line := range strings.Split(string(out), "\n") {
@@ -732,7 +630,7 @@ func TestAdvisoryLockPreventsDoubleExecution(t *testing.T) {
 		t.Fatalf("count commits: %v", err)
 	}
 	if commits != 1 {
-		t.Fatalf("the money step executed %d time(s) under the advisory lock, want exactly 1 (pollers reported %v)", commits, got)
+		t.Fatalf("the money step executed %d time(s) under two concurrent pollers, want exactly 1 (pollers reported %v)", commits, got)
 	}
 
 	// ⚠️ ONE POLLER MUST HAVE BEEN TURNED AWAY. Without this, a run where the
@@ -744,5 +642,5 @@ func TestAdvisoryLockPreventsDoubleExecution(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"COMPLETED", "LOCKED"}) {
 		t.Fatalf("pollers reported %v, want one COMPLETED and one LOCKED; the two did not actually contend, so this run does not demonstrate the fix", got)
 	}
-	t.Logf("F5 FIX VERIFIED: under contention (%v) the money step executed exactly once", got)
+	t.Logf("F5 CLOSED: under contention (%v), with no caller-side lock, the money step executed exactly once", got)
 }
