@@ -265,7 +265,7 @@ func TestNarrateCassette(t *testing.T) {
 			Span: trajectory.Record{TraceID: fmt.Sprintf("%032x", 0xA4), SpanID: fmt.Sprintf("%016x", 1),
 				Name: "chat " + narrate.Feature, Kind: "chat", Status: "OK",
 				Attributes: map[string]any{trajectory.AttrFeature: narrate.Feature,
-					trajectory.AttrSemconvVersion: trajectory.SemconvVersion,
+					trajectory.AttrSemconvVersion:     trajectory.SemconvVersion,
 					trajectory.AttrGenAIOperationName: trajectory.OpChat, trajectory.AttrPromptHash: key}},
 			RequestBody: json.RawMessage(`{"model":"fake-narrator","tool_choice":"` + narrate.Tool + `"}`), ResponseBody: goodRaw}); err != nil {
 			t.Fatal(err)

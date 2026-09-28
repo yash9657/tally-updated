@@ -90,14 +90,14 @@ type book struct {
 	n    int
 
 	bank, capital, sales, purchases, expense, tdsPayable     uuid.UUID
-	ocgst, osgst, icgst, isgst                                uuid.UUID
+	ocgst, osgst, icgst, isgst                               uuid.UUID
 	kaveri, ganga, deccanRetail, bharat, deccanSteel, chitra uuid.UUID
-	widget, gadget, bolt                                      uuid.UUID
-	godown                                                    uuid.UUID
-	vouchers                                                  map[string]uuid.UUID
+	widget, gadget, bolt                                     uuid.UUID
+	godown                                                   uuid.UUID
+	vouchers                                                 map[string]uuid.UUID
 }
 
-func (b *book) day(n int) string { return b.T.AddDate(0, 0, n).Format("2006-01-02") }
+func (b *book) day(n int) string   { return b.T.AddDate(0, 0, n).Format("2006-01-02") }
 func (b *book) no(p string) string { b.n++; return fmt.Sprintf("%s-%03d", p, b.n) }
 
 func newBook(t *testing.T) *book {
