@@ -426,6 +426,17 @@ const FEATURES: {
           "WHAT IS NOT THERE: (1) no agent model is configured in the shipped server (LLM_PROVIDER unset), so starting a run says so and no new proposal can appear until one is; (2) a Sales, Purchase, Credit Note or Debit Note proposal can be approved or rejected from its diff but NOT edited — its F-key form is the GST invoice, which re-derives the tax, and Tally's 'As Voucher' mode is not built; (3) the agent can propose only the eight accounting voucher creates — no alterations, stock vouchers, masters, orders or bank matching yet — and there is no screen to set how much it may do without asking (autonomy levels are server-side only).",
       },
       /**
+       * W4 — THE INSIGHT ENGINE (d125). `partial`, because the deterministic
+       * half is built and the model half is not, and the note names both.
+       */
+      {
+        name: "Insights inbox and morning digest",
+        state: "partial",
+        note:
+          "Gateway > Insights (also Alt+G). Fifteen kinds of finding, all computed by fixed rules over your books — no model decides what is an insight or how much it is worth. When a voucher is saved: credit limit crossed, a supplier bill entered twice, place of supply not matching the customer's GSTIN state, a GST rate that differs from the item master for that HSN, an e-way bill needed. Every night after 02:00 IST: a customer paying slower than their own usual, a supplier missing from your GSTR-2B (ITC at risk), supplier price creep, a customer overdue for their usual reorder, reorder-now and dead stock, cash going negative inside 13 weeks, last month's GST payable, TDS not deposited, and back-dated entries by user. EVERY FIGURE IS RE-DERIVED FROM THE BOOKS BY A READ-ONLY QUERY BEFORE IT IS SHOWN, and a finding whose query does not reproduce it to the paisa is not stored; V on an insight re-runs that query now. Tab then Enter opens the vouchers behind it. U / N / W record useful / not useful / wrong — 'wrong' is what lowers a kind's standing, and a kind that is wrong too often stops reaching the digest; S suppresses a kind. D shows today's digest: at most five items, ranked by rupee impact, how often that kind is right, whether you can act on it, whether you have already seen it, and how you have rated it. " +
+          "WHAT IS NOT THERE: (1) no model narrates the digest in the shipped server (LLM_PROVIDER unset), so it uses fixed sentences — and when a model is configured, any digit, number word or unknown figure it writes is refused and the fixed sentence is shown instead; (2) the model-backed kinds are not built: predicted-late invoices, expected pay dates, reorder by BG/NBD, cross-sell, festival uplift, and a p10/p90 cash range (the 13-week path is the plain open-bill projection); (3) no early-payment-discount or vendor-bank-change finding — no bill here carries discount terms and no ledger alteration path exists; (4) WhatsApp delivery of the digest is not built — it lives here, in the app; (5) credit limits are set when a party is created over the API (credit_limit) — the ledger form has no field for it yet.",
+      },
+      /**
        * ⛔ ONE ROW BECAME TWO, AND THE SPLIT IS THE HONEST PART.
        *
        * This was a single row reading "Cash-flow projection and anomaly

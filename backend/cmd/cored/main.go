@@ -191,6 +191,14 @@ func runServe(ctx context.Context) error {
 	// advisory lock, so a second poller on the same run returns immediately.
 	go srv.RunAgentPoller(notifyCtx, 2*time.Second)
 
+	// The insight poller (W4, d125): drains the voucher-event queue the 0102
+	// trigger fills (real-time detectors), and after 02:00 IST runs each
+	// company's night — profile.Refresh, the nightly detectors, the morning
+	// digest — once per (company, business day). Safe on every replica: the
+	// queue is claimed SKIP LOCKED and the night is keyed by insight_run's
+	// UNIQUE.
+	go srv.RunInsightPoller(notifyCtx, 5*time.Second)
+
 	addr := ":" + port
 	log.Printf("cored serving on %s", addr)
 	if err := srv.ListenAndServe(ctx, addr); err != nil && !errors.Is(err, context.Canceled) {

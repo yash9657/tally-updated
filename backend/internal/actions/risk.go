@@ -100,6 +100,9 @@ var resourceRisk = map[authz.Resource]Risk{
 	"company": RiskGovernance, "security": RiskGovernance, "import": RiskGovernance,
 	"sync": RiskGovernance, "backup": RiskGovernance,
 	"agent-run": RiskGovernance, "agent-approval": RiskGovernance,
+	// W4: a verdict, a suppression or a digest trains and steers what the
+	// owner is shown; an agent doing either would be grading its own ranker.
+	"insights": RiskGovernance,
 }
 
 // governanceReads are DISPLAY actions that are nevertheless governance: a
@@ -115,6 +118,11 @@ var governanceReads = map[authz.Resource]bool{
 	// agent that can see what it is waiting on and phrase its next step at
 	// the approver. Reads of runs and approvals are for humans.
 	"agent-run": true, "agent-approval": true,
+	// W4: the insight inbox and digest. The digest is model-written text and
+	// the inbox is the owner's whole picture of the business; the agent's
+	// insight TOOLS are W2-breadth's to add, with a provenance class of their
+	// own (d125 OWED), not a read inherited from a route.
+	"insights": true,
 	// The ACL itself.
 	"security": true,
 }

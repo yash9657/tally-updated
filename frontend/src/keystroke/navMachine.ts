@@ -250,6 +250,8 @@ export const SCREEN_GOTO_ENTRIES: Readonly<Record<string, ScreenKind>> = {
   // is the other. ⚠️ Literal rather than APPROVAL_INBOX_LABEL because that const
   // is declared further down this module and a Record initialiser runs at load.
   "Approval Inbox": "approval-inbox",
+  // W4 — THE INSIGHTS INBOX (Alt+G door; the Gateway arm below is the other).
+  Insights: "insights",
 };
 
 /** Case-insensitive index of {@link SCREEN_GOTO_ENTRIES}, built once. */
@@ -611,6 +613,9 @@ export const BOMS_LABEL = "Bills of Materials";
  * the operator makes, not a wrong turn.
  */
 export const APPROVAL_INBOX_LABEL = "Approval Inbox";
+
+/** The Gateway label of the Insights inbox (W4). Same ordering rule as above. */
+export const INSIGHTS_LABEL = "Insights";
 
 /**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
@@ -1136,6 +1141,15 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         });
         return { stack };
       }
+      if (active.screen === "insights") {
+        // ENTER OPENS THE HIGHLIGHTED VOUCHER BEHIND THE INSIGHT, in alteration,
+        // by the Day Book's rule: the class comes from the row key, and a row
+        // with no renderable class (or no row at all) is not drilled.
+        const row = parseVoucherRowKey(active.selectedItem);
+        if (!row) return {};
+        stack.push(newVoucherFrame(row.voucherType, "alter"));
+        return { stack };
+      }
       if (active.screen === "approval-inbox") {
         // ENTER OPENS THE HIGHLIGHTED PROPOSAL IN ITS NATIVE VOUCHER SCREEN — a
         // CREATE frame of the proposal's own class, in the entry mode that
@@ -1389,6 +1403,11 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           APPROVAL_INBOX_LABEL.toLowerCase()
         ) {
           stack.push({ screen: "approval-inbox" });
+          return { stack };
+        }
+        // THE INSIGHTS INBOX (W4). Same ordering, same reason.
+        if (active.selectedItem?.toLowerCase() === INSIGHTS_LABEL.toLowerCase()) {
+          stack.push({ screen: "insights" });
           return { stack };
         }
         // "Display More Reports" opens the second-level report MENU (Tally's
@@ -2131,6 +2150,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === PAYROLL_REGISTER_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === FORM_138_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === APPROVAL_INBOX_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === INSIGHTS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
@@ -2178,6 +2198,15 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
   // refuses to drill one, so a highlight of an un-prefillable row is a no-op on
   // Enter rather than a stale highlight of the previous row.
   if (active.screen === "approval-inbox") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // THE INSIGHTS INBOX: the screen publishes the highlighted VOUCHER of the
+  // insight as a Day Book row key; Enter's arm drills it (or ignores a key
+  // that is not one).
+  if (active.screen === "insights") {
     active.selectedItem = menuItem;
     stack[stack.length - 1] = active;
     return { stack };

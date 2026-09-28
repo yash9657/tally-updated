@@ -179,6 +179,17 @@ import type {
   AgentRunsResponse,
   StartAgentRunRequest,
 } from "./agent";
+import type {
+  Insight,
+  InsightDigest,
+  InsightEvidenceResponse,
+  InsightRunResponse,
+  InsightSuppression,
+  InsightsListResponse,
+  InsightState,
+  InsightVerdict,
+  SuppressInsightRequest,
+} from "./insights";
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
@@ -1620,6 +1631,52 @@ export function createRestClient(
         `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}/decision`,
         body,
       );
+    },
+
+    // ---- THE INSIGHT ENGINE (W4, d125) ---------------------------------
+    // One method per route, so the UI-command census joins each to its
+    // ActionSpec by (verb, path). Ids are encoded path segments.
+    listInsights(companyID, query?: { state?: InsightState; type?: string }) {
+      return http.get<InsightsListResponse>(
+        `${company(companyID)}/insights`,
+        query ? { state: query.state, type: query.type } : undefined,
+      );
+    },
+    getInsight(companyID, insightID) {
+      return http.get<Insight>(`${company(companyID)}/insights/${encodeURIComponent(insightID)}`);
+    },
+    verifyInsight(companyID, insightID) {
+      return http.get<InsightEvidenceResponse>(
+        `${company(companyID)}/insights/${encodeURIComponent(insightID)}/evidence`,
+      );
+    },
+    insightFeedback(companyID, insightID, verdict: InsightVerdict, note?: string) {
+      return http.post<Insight>(
+        `${company(companyID)}/insights/${encodeURIComponent(insightID)}/feedback`,
+        { verdict, note: note ?? "" },
+      );
+    },
+    getInsightDigest(companyID, date?: string) {
+      return http.get<InsightDigest>(`${company(companyID)}/insights/digest`, date ? { date } : undefined);
+    },
+    composeInsightDigest(companyID, date?: string) {
+      return http.post<InsightDigest>(
+        `${company(companyID)}/insights/digest${date ? `?date=${encodeURIComponent(date)}` : ""}`,
+      );
+    },
+    listInsightSuppressions(companyID) {
+      return http.get<{ suppressions: InsightSuppression[] }>(`${company(companyID)}/insights/suppressions`);
+    },
+    suppressInsight(companyID, req: SuppressInsightRequest) {
+      return http.post<{ suppression_id: string }>(`${company(companyID)}/insights/suppressions`, req);
+    },
+    async unsuppressInsight(companyID, suppressionID) {
+      await http.del<unknown>(
+        `${company(companyID)}/insights/suppressions/${encodeURIComponent(suppressionID)}`,
+      );
+    },
+    runInsightsNow(companyID) {
+      return http.post<InsightRunResponse>(`${company(companyID)}/insights/run`);
     },
   };
 }

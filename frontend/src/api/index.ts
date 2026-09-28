@@ -109,6 +109,21 @@ export type {
   AgentApprovalsResponse,
   AgentApprovalResponse,
 } from "./agent";
+export type {
+  Insight,
+  InsightDigest,
+  InsightEvidenceResponse,
+  InsightField,
+  InsightRunResponse,
+  InsightState,
+  InsightSuppression,
+  InsightTypeInfo,
+  InsightUnit,
+  InsightVerdict,
+  InsightsListResponse,
+  DigestItem,
+  SuppressInsightRequest,
+} from "./insights";
 export {
   AGENT_UNCONFIGURED,
   approvalEffect,

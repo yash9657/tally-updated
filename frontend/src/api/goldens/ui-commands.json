@@ -2,14 +2,14 @@
   "note": "GENERATED ARTEFACT — do not hand-edit. Emitted by src/actions/uiCommandManifest.ts and COMPARED (not written) by its test. Regenerate with: UPDATE_UI_MANIFEST=1 pnpm run test:run -- uiCommandManifest",
   "keymap_profile": "tallyprime",
   "counts": {
-    "screen_kinds": 38,
-    "route_keys": 51,
-    "commands": 285,
+    "screen_kinds": 39,
+    "route_keys": 52,
+    "commands": 286,
     "global_bindings": 55,
     "screen_scoped_bindings": 201,
-    "gateway_entries": 29,
-    "client_routes": 167,
-    "client_calls": 173,
+    "gateway_entries": 30,
+    "client_routes": 177,
+    "client_calls": 183,
     "unused_client_methods": 10,
     "dead_commands": 2
   },
@@ -34,6 +34,7 @@
     "goto-overlay",
     "gstr9",
     "help",
+    "insights",
     "master-create",
     "members",
     "menu",
@@ -132,6 +133,10 @@
     },
     {
       "key": "help",
+      "registered": true
+    },
+    {
+      "key": "insights",
       "registered": true
     },
     {
@@ -2981,6 +2986,16 @@
       "dispatch": "machine"
     },
     {
+      "id": "menu:gateway:Insights",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Insights",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
       "id": "menu:gateway:Offline Outbox",
       "surface": "gateway-menu",
       "scope": "gateway",
@@ -3143,6 +3158,7 @@
     "closeBooks",
     "closePurchaseOrder",
     "closeSalesOrder",
+    "composeInsightDigest",
     "costCategorySummary",
     "costCentreSummary",
     "createBom",
@@ -3180,6 +3196,8 @@
     "getDayBook",
     "getEInvoice",
     "getEWayBill",
+    "getInsight",
+    "getInsightDigest",
     "getMe",
     "getOutstandings",
     "getPartyOpenBills",
@@ -3198,6 +3216,7 @@
     "importBankStatement",
     "importTallyXML",
     "importedStatement",
+    "insightFeedback",
     "inventoryVocabulary",
     "inviteMember",
     "listAgentApprovals",
@@ -3212,6 +3231,8 @@
     "listEmployees",
     "listGodowns",
     "listGroups",
+    "listInsightSuppressions",
+    "listInsights",
     "listLedgers",
     "listMembers",
     "listPurchaseOrders",
@@ -3259,6 +3280,7 @@
     "restoreCompany",
     "restoreStatementLine",
     "revokeInvite",
+    "runInsightsNow",
     "runPayroll",
     "salesOrderBook",
     "savePrintTemplate",
@@ -3274,11 +3296,14 @@
     "setStockItemValuationMethod",
     "setTDSProfile",
     "startAgentRun",
+    "suppressInsight",
     "syncCommit",
     "taxSections",
     "tdsRegister",
+    "unsuppressInsight",
     "updateMember",
-    "updateSecurityLevel"
+    "updateSecurityLevel",
+    "verifyInsight"
   ],
   "client_calls": [
     {
@@ -3471,6 +3496,12 @@
       "method": "closeSalesOrder",
       "verb": "PUT",
       "path": "/v1/companies/{companyID}/sales-orders/{orderID}/close",
+      "used": true
+    },
+    {
+      "method": "composeInsightDigest",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/insights/digest?date={date}",
       "used": true
     },
     {
@@ -3708,6 +3739,18 @@
       "used": true
     },
     {
+      "method": "getInsight",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/insights/{insightID}",
+      "used": true
+    },
+    {
+      "method": "getInsightDigest",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/insights/digest",
+      "used": true
+    },
+    {
       "method": "getMe",
       "verb": "GET",
       "path": "/v1/me",
@@ -3816,6 +3859,12 @@
       "used": true
     },
     {
+      "method": "insightFeedback",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/insights/{insightID}/feedback",
+      "used": true
+    },
+    {
       "method": "inventoryVocabulary",
       "verb": "GET",
       "path": "/v1/companies/{companyID}/inventory-vocabulary",
@@ -3903,6 +3952,18 @@
       "method": "listGroups",
       "verb": "GET",
       "path": "/v1/companies/{companyID}/groups",
+      "used": true
+    },
+    {
+      "method": "listInsightSuppressions",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/insights/suppressions",
+      "used": true
+    },
+    {
+      "method": "listInsights",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/insights",
       "used": true
     },
     {
@@ -4200,6 +4261,12 @@
       "used": true
     },
     {
+      "method": "runInsightsNow",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/insights/run",
+      "used": true
+    },
+    {
       "method": "runPayroll",
       "verb": "POST",
       "path": "/v1/companies/{companyID}/vouchers/payroll",
@@ -4290,6 +4357,12 @@
       "used": true
     },
     {
+      "method": "suppressInsight",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/insights/suppressions",
+      "used": true
+    },
+    {
       "method": "syncCommit",
       "verb": "POST",
       "path": "/v1/companies/{companyID}/sync/commit",
@@ -4308,6 +4381,12 @@
       "used": true
     },
     {
+      "method": "unsuppressInsight",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/insights/suppressions/{suppressionID}",
+      "used": true
+    },
+    {
       "method": "updateMember",
       "verb": "PUT",
       "path": "/v1/companies/{companyID}/members/{userID}",
@@ -4317,6 +4396,12 @@
       "method": "updateSecurityLevel",
       "verb": "PUT",
       "path": "/v1/companies/{companyID}/security-levels/{levelID}",
+      "used": true
+    },
+    {
+      "method": "verifyInsight",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/insights/{insightID}/evidence",
       "used": true
     }
   ]

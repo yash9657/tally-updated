@@ -58,6 +58,7 @@ import { GOTO_ENTRIES } from "../keystroke/navMachine";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { OfflineOutboxScreen } from "../screens/OfflineOutboxScreen";
 import { ApprovalInboxScreen } from "../screens/ApprovalInboxScreen";
+import { InsightsScreen } from "../screens/InsightsScreen";
 import { ScreenRegistry } from "./screenRegistry";
 
 /**
@@ -429,6 +430,7 @@ export function createDefaultRegistry(): ScreenRegistry {
     // ⛔ Without this entry the Gateway and Alt+G doors push a frame nothing
     // renders ("No screen registered"), which is a dead door that looks wired.
     "approval-inbox": ApprovalInboxScreen,
+    insights: InsightsScreen,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

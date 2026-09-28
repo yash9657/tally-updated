@@ -179,6 +179,18 @@ import type {
 } from "./agent";
 
 import type {
+  Insight,
+  InsightDigest,
+  InsightEvidenceResponse,
+  InsightRunResponse,
+  InsightSuppression,
+  InsightsListResponse,
+  InsightState,
+  InsightVerdict,
+  SuppressInsightRequest,
+} from "./insights";
+
+import type {
   ReconciliationPayloadResponse,
   ReconciliationQueueResponse,
   ResolveReconciliationResponse,
@@ -1967,4 +1979,39 @@ export interface CoredClient {
     approvalID: string,
     req: AgentDecisionRequest,
   ): Promise<AgentApprovalResponse>;
+
+  // ---- THE INSIGHT ENGINE (W4, d125) -------------------------------------
+  //
+  // ⛔ NONE OF THESE WRITES TO THE BOOKS. A verdict, a suppression, a digest
+  // or a run is a row in the insight tables; acting on an insight happens in
+  // the screen it names. Every route is the bare `insights` token.
+
+  /** Open (or `state`) insights, highest impact first, plus the type registry and what is owed. */
+  listInsights(
+    companyID: string,
+    query?: { state?: InsightState; type?: string },
+  ): Promise<InsightsListResponse>;
+  /** One insight, with its evidence SQL, args and voucher ids. */
+  getInsight(companyID: string, insightID: string): Promise<Insight>;
+  /** Re-run the stored evidence NOW, read-only: do the books still reproduce it? */
+  verifyInsight(companyID: string, insightID: string): Promise<InsightEvidenceResponse>;
+  /** Record a verdict (`create insights`); not_useful / wrong also dismiss it. */
+  insightFeedback(
+    companyID: string,
+    insightID: string,
+    verdict: InsightVerdict,
+    note?: string,
+  ): Promise<Insight>;
+  /** The stored morning digest for a date (404 when none was composed). */
+  getInsightDigest(companyID: string, date?: string): Promise<InsightDigest>;
+  /** Compose (or return the already-stored) digest for a date. */
+  composeInsightDigest(companyID: string, date?: string): Promise<InsightDigest>;
+  /** Active suppressions. */
+  listInsightSuppressions(companyID: string): Promise<{ suppressions: InsightSuppression[] }>;
+  /** Stop a type (or a type for one entity) reaching the digest (`alter insights`). */
+  suppressInsight(companyID: string, req: SuppressInsightRequest): Promise<{ suppression_id: string }>;
+  /** Lift a suppression. */
+  unsuppressInsight(companyID: string, suppressionID: string): Promise<void>;
+  /** Drain the real-time queue and run today's detectors now (once per day). */
+  runInsightsNow(companyID: string): Promise<InsightRunResponse>;
 }

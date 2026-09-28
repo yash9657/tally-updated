@@ -1400,6 +1400,30 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 			return authz.Alter, "agent-approval", "", true
 		}
 
+	// THE INSIGHT ENGINE (W4, d125): one bare token, `insights`. Reads are
+	// Display; a verdict, a digest composition and a run-now are Create (each
+	// writes a row and none alters one); suppressions — which change what the
+	// owner is shown — are Alter, including lifting one (a DELETE of a
+	// suppression row, not of anything in the books). Unmatched shapes fall
+	// through and default-deny.
+	case rest == "/insights" || strings.HasPrefix(rest, "/insights/"):
+		seg := splitPath(rest)
+		switch {
+		case len(seg) == 1 && method == http.MethodGet,
+			len(seg) == 2 && seg[1] == "digest" && method == http.MethodGet,
+			len(seg) == 2 && seg[1] == "suppressions" && method == http.MethodGet,
+			len(seg) == 2 && method == http.MethodGet,
+			len(seg) == 3 && seg[2] == "evidence" && method == http.MethodGet:
+			return authz.Display, "insights", "", true
+		case len(seg) == 2 && seg[1] == "digest" && method == http.MethodPost,
+			len(seg) == 2 && seg[1] == "run" && method == http.MethodPost,
+			len(seg) == 3 && seg[2] == "feedback" && method == http.MethodPost:
+			return authz.Create, "insights", "", true
+		case len(seg) == 2 && seg[1] == "suppressions" && method == http.MethodPost,
+			len(seg) == 3 && seg[1] == "suppressions" && method == http.MethodDelete:
+			return authz.Alter, "insights", "", true
+		}
+
 	// PER-COMPANY PRINT TEMPLATES (track C): what this company's own documents
 	// SAY — the title, the letterhead lines, the declaration, the terms, the
 	// signature label and the bank block, per document kind.

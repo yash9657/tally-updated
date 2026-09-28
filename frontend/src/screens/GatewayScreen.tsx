@@ -15,6 +15,10 @@ export const GATEWAY_MENU = [
   // "inbox" offers both inboxes, Bill Inbox first; neither label contains the
   // other.
   "Approval Inbox",
+  // Insights (W4) — what the insight engine found, and the morning digest.
+  // Beside the other AI-native doors. ⚠️ CHECKED FOR THE SUBSTRING COLLISION:
+  // "Insights" contains no shipped label and none contains it.
+  "Insights",
   "Day Book",
   "Balance Sheet",
   "Profit & Loss A/c",

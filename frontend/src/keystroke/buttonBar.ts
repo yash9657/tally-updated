@@ -661,6 +661,9 @@ export function buttonBarFor(
     // while saying nothing about the three decision keys.
     case "approval-inbox":
       return APPROVAL_INBOX_BAR;
+    // W4: a reader with screen-local letter keys; nothing on the bar applies.
+    case "insights":
+      return AI_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;

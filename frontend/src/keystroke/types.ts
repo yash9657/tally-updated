@@ -381,7 +381,16 @@ export type ScreenKind =
    * trusts are the ones that apply to an agent's work too (PLAN-AGENTIC W2: "the
    * panel pre-fills the same native screens so Ctrl+A remains the accept key").
    */
-  | "approval-inbox";
+  | "approval-inbox"
+  /**
+   * THE INSIGHTS INBOX (W4, d125): what the insight engine found, the morning
+   * digest, verdicts and suppressions; each insight drills to its vouchers.
+   *
+   * ⛔ A ScreenKind AND NOT A "report:NAME" for the bare-token reason above: the
+   * server serves it under `insights`, which a coarse `allow display report`
+   * can never match, and it carries WRITES (verdicts, suppressions, a run).
+   */
+  | "insights";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is

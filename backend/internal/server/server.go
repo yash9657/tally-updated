@@ -64,6 +64,8 @@ import (
 	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
+	"github.com/khata/cored/internal/insights"
+	"github.com/khata/cored/internal/insights/narrate"
 	"github.com/khata/cored/internal/llm"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
@@ -278,6 +280,11 @@ type Server struct {
 	agent       *agent.Engine
 	agentPoller *agent.Poller
 	agentKick   chan struct{}
+
+	// insightNarrator narrates the morning digest (W4, d125): the agent's
+	// model client under the insight.narrate feature, or the templates alone
+	// when no model is configured (the hermetic default).
+	insightNarrator insights.Narrator
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
@@ -423,6 +430,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		return nil, err
 	}
 	s.initAgent(agentLLM)
+	s.insightNarrator = narrate.Model{Client: agentLLM}
 	s.routes()
 	return s, nil
 }
@@ -1283,6 +1291,11 @@ func (s *Server) routes() {
 		// agent_http.go for the contract and routeAction's /agent/ arm for
 		// the two bare tokens (agent-run, agent-approval).
 		s.agentRoutes(r)
+
+		// THE INSIGHT ENGINE (W4, d125) — the inbox, evidence, feedback,
+		// suppressions, the digest. insights_http.go; routeAction's
+		// /insights arm maps every route to the bare token `insights`.
+		s.insightRoutes(r)
 
 		// ===================================================================
 		// PER-COMPANY PRINT TEMPLATES (track C). handler_print_templates.go.
