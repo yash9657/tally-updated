@@ -423,13 +423,18 @@ func (j *jobRun) suppliers() ([]Fact, []Edge, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	lead, err := j.leadTimes(ids)
+	if err != nil {
+		return nil, nil, err
+	}
 	var out []Fact
 	for _, p := range ps {
 		owe, hasOwe := pending[p.id]
 		b, hasBuy := bought[p.id]
-		if !hasOwe && !hasBuy && len(bills[p.id]) == 0 && len(drift[p.id]) == 0 {
+		if !hasOwe && !hasBuy && len(bills[p.id]) == 0 && len(drift[p.id]) == 0 && len(lead[p.id]) == 0 {
 			continue
 		}
+		out = append(out, leadTimeFacts(p, lead[p.id])...)
 		base := Fact{Kind: KindParty, EntityKey: p.id.String(), EntityID: p.id, EntityName: p.name}
 		f := base
 		f.Key, f.Num = "payable_outstanding", num(owe)
@@ -444,6 +449,125 @@ func (j *jobRun) suppliers() ([]Fact, []Edge, error) {
 		}
 	}
 	return out, edges, nil
+}
+
+// leadLine is one purchase order line a supplier COMPLETED in the window.
+type leadLine struct {
+	days int
+	vid  uuid.UUID // the voucher whose receipt completed the line
+}
+
+// leadTimes is W3's owed SUPPLIER LEAD TIME (d122 §6 item 6), now that order
+// lines link to the receipts that fulfil them (migration 0042's
+// order_fulfilment): per supplier, the days from a PURCHASE order line's
+// order date to the receipt that COMPLETED it.
+//
+// ⛔ COMPLETION, NOT FIRST RECEIPT — the same rule the receipt lag uses ("the
+// lag ends at the settlement that FULLY settles a bill"). A supplier who
+// ships 10 of 100 on day 2 and the other 90 on day 60 has a 60-day lead time
+// for that line; measuring the first drop would make a trickle-shipper look
+// like the fastest supplier on the books. A line never completed has no lead
+// time yet and is left out (it is the order book's business, not this
+// statistic's).
+//
+// ⛔ THE FULFILMENT SUM JOINS voucher_head.current_version_id AND DROPS
+// DELETED VOUCHERS, as reporting/orderbook.go's does and for its reason:
+// fulfilments are versioned with the voucher, and an altered receipt left in
+// the table under its superseded version would complete a line twice as
+// early as it was.
+//
+// A statistic no report prints, so it is derived here (D122-6 allows exactly
+// that); the window bounds the COMPLETING receipt's date, and receipts after
+// as-of are invisible, so a refresh "as of July" cannot see an August
+// delivery.
+func (j *jobRun) leadTimes(ids []uuid.UUID) (map[uuid.UUID][]leadLine, error) {
+	rows, err := j.tx.Query(j.ctx, `
+		SELECT oh.party_ledger_id, ol.id, oh.order_date, ol.qty, vv.voucher_date, vv.voucher_id, f.qty
+		  FROM order_line ol
+		  JOIN order_head oh ON oh.company_id = ol.company_id AND oh.id = ol.order_id
+		  JOIN order_fulfilment f ON f.company_id = ol.company_id AND f.order_line_id = ol.id
+		  JOIN voucher_version vv ON vv.id = f.voucher_version_id`+currentVoucherJoin+`
+		 WHERE vh.is_deleted = false
+		   AND oh.direction = 'PURCHASE'
+		   AND oh.party_ledger_id = ANY($1)
+		   AND vv.voucher_date <= $2::date
+		 ORDER BY ol.id, vv.voucher_date, vv.voucher_id`, ids, j.asOfS())
+	if err != nil {
+		return nil, fmt.Errorf("profile: lead times: %w", err)
+	}
+	defer rows.Close()
+	type acc struct {
+		party     uuid.UUID
+		orderDate time.Time
+		qty, got  decimal.Decimal
+		done      bool
+	}
+	lines := map[uuid.UUID]*acc{}
+	out := map[uuid.UUID][]leadLine{}
+	for rows.Next() {
+		var party, line, vid uuid.UUID
+		var orderDate, vdate time.Time
+		var qty, fq decimal.Decimal
+		if err := rows.Scan(&party, &line, &orderDate, &qty, &vdate, &vid, &fq); err != nil {
+			return nil, err
+		}
+		a := lines[line]
+		if a == nil {
+			a = &acc{party: party, orderDate: orderDate, qty: qty}
+			lines[line] = a
+		}
+		if a.done {
+			continue
+		}
+		a.got = a.got.Add(fq)
+		if a.got.GreaterThanOrEqual(a.qty) {
+			a.done = true
+			if !vdate.Before(j.from) {
+				out[party] = append(out[party], leadLine{days: int(vdate.Sub(a.orderDate).Hours() / 24), vid: vid})
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+// leadTimeFacts turns completed lines into p50/p90 and a count, keeping the
+// SLOWEST completions as evidence (they are what moved the p90).
+func leadTimeFacts(p party, ls []leadLine) []Fact {
+	if len(ls) == 0 {
+		return nil
+	}
+	slow := append([]leadLine(nil), ls...)
+	sort.SliceStable(slow, func(i, k int) bool {
+		if slow[i].days != slow[k].days {
+			return slow[i].days > slow[k].days
+		}
+		return slow[i].vid.String() < slow[k].vid.String()
+	})
+	var ev []uuid.UUID
+	seen := map[uuid.UUID]bool{}
+	for _, l := range slow {
+		if len(ev) == maxEvidence {
+			break
+		}
+		if !seen[l.vid] {
+			seen[l.vid] = true
+			ev = append(ev, l.vid)
+		}
+	}
+	ds := make([]int, len(ls))
+	for i, l := range ls {
+		ds[i] = l.days
+	}
+	sort.Ints(ds)
+	mk := func(key string, v decimal.Decimal) Fact {
+		return Fact{Kind: KindParty, EntityKey: p.id.String(), EntityID: p.id, EntityName: p.name, Key: key,
+			Num: num(v), EvidenceKind: "voucher", Evidence: ev}
+	}
+	return []Fact{
+		mk("lead_time_p50_days", decimal.NewFromInt(int64(percentile(ds, 50)))),
+		mk("lead_time_p90_days", decimal.NewFromInt(int64(percentile(ds, 90)))),
+		mk("lead_time_lines_count", decimal.NewFromInt(int64(len(ds)))),
+	}
 }
 
 // priceDrift reads every inward line of Purchase-class vouchers in the window
