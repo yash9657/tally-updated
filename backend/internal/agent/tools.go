@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -206,9 +207,12 @@ func (l *loop) search(q string) []searchHit {
 	return hits
 }
 
+// ordinalParams are the path parameters that are an ordinal, not an id.
+var ordinalParams = map[string]bool{"legNo": true}
+
 // concretePath substitutes path params into a spec's route.
 //
-// ⛔ EVERY PARAM MUST BE A UUID. A model-supplied "../members/x" or a value
+// ⛔ EVERY PARAM MUST BE A UUID (or, for ordinalParams, digits). A model-supplied "../members/x" or a value
 // carrying "?" or "/" would otherwise re-route the request to a different
 // door than the spec it claims — and although the router re-derives the ACL
 // key and refuses a mismatch, the cheapest defence is to never build such a
@@ -228,6 +232,17 @@ func concretePath(spec actions.ActionSpec, companyID uuid.UUID, params map[strin
 		v, ok := params[name]
 		if !ok {
 			return "", fmt.Errorf("path parameter %q is required for %s", name, spec.ID)
+		}
+		if ordinalParams[name] {
+			// The one non-id parameter an agent-reachable route carries: a
+			// bank-reconciliation leg's ordinal. Digits only, so it can no
+			// more re-route a request than a uuid can.
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 || n > 9999 || strconv.Itoa(n) != v {
+				return "", fmt.Errorf("path parameter %q must be a small non-negative integer", name)
+			}
+			route = route[:i] + v + route[i+j+1:]
+			continue
 		}
 		id, err := uuid.Parse(v)
 		if err != nil {

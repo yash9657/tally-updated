@@ -128,15 +128,20 @@ func TestAgentApproverIsJudgedOnTheCommittedBody(t *testing.T) {
 		}
 		edited := voucherBody("2025-05-10", "Office rent, raised",
 			[3]string{b.ledgers["Office Rent"], "D", "490000.00"}, [3]string{b.ledgers["HDFC Bank"], "C", "490000.00"})
-		if code, resp := decide(t, srv, b, pend[0]["id"].(string), map[string]any{"decision": "approve", "edited_body": edited}); code != 200 {
-			t.Fatalf("approve: %d %v", code, resp)
+		// W2 breadth: the edit is re-previewed at the decision, so the ceiling
+		// refuses it THERE (422, nothing decided) rather than as a refused
+		// commit later. The commit hook's own ceiling — the control — is
+		// pinned separately by TestAgentCommitCeilingHoldsInTheWritesOwnTransaction.
+		code, resp := decide(t, srv, b, pend[0]["id"].(string), map[string]any{"decision": "approve", "edited_body": edited})
+		if code != http.StatusUnprocessableEntity || resp["code"] != "EDIT_REFUSED" || !strings.Contains(resp["error"].(string), "ceiling") {
+			t.Fatalf("approve an over-ceiling edit: %d %v, want 422 EDIT_REFUSED naming the ceiling", code, resp)
 		}
 		pollUntilQuiet(t, srv)
 		if n := countVouchers(t, b.companyID); n != 0 {
 			t.Fatalf("an edited body of Rs 4,90,000 committed past a Rs 30,000 delegated ceiling (%d voucher(s))", n)
 		}
-		if !strings.Contains(intentKinds(t, b.companyID, runID), "commit_refused") {
-			t.Fatal("the over-ceiling commit is not recorded as refused")
+		if p := pendingApprovals(t, srv, b, runID); len(p) != 1 {
+			t.Fatalf("the refused edit decided the approval (pending = %d)", len(p))
 		}
 	})
 }

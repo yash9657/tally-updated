@@ -11,11 +11,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/khata/cored/internal/actions"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -88,6 +91,13 @@ func runToQuiet(t *testing.T, srv *server.Server, b agentBooks, s script, body m
 	srv.ConfigureAgent(server.AgentOptions{LLM: model.client(t)})
 	runID := startRun(t, srv, b, body)
 	pollUntilQuiet(t, srv)
+	if os.Getenv("AGENT_TEST_TRACE") != "" {
+		for i, r := range model.requests {
+			if n := len(r.Messages); n > 0 {
+				t.Logf("model call %d, last turn: %s", i, r.Messages[n-1].Content)
+			}
+		}
+	}
 	return runID, model
 }
 
@@ -156,6 +166,21 @@ func mustUUID(t *testing.T, s string) uuid.UUID {
 		t.Fatalf("not a uuid: %q", s)
 	}
 	return id
+}
+
+func mustSpec(t *testing.T, id string) actions.ActionSpec {
+	t.Helper()
+	s, ok := actions.ByID(id)
+	if !ok {
+		t.Fatalf("no action %q", id)
+	}
+	return s
+}
+
+// timeNowPlus is the wall clock plus secs, UTC.
+func timeNowPlus(t *testing.T, secs int) time.Time {
+	t.Helper()
+	return time.Now().UTC().Add(time.Duration(secs) * time.Second)
 }
 
 func asList(v any) []any {

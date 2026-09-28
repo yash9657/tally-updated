@@ -344,6 +344,11 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			if rolledBack == 0 {
 				return agent.Result{}, fmt.Errorf("agent: preview of %s ran no hooked transaction", req.Spec.ID)
 			}
+			if effect.Postings == nil {
+				// An order, a master or a stock voucher posts no legs; the wire
+				// says so with an empty list, never null (the inbox draws it).
+				effect.Postings = []agent.Posting{}
+			}
 			res.Effect = effect
 		}
 	case agent.ModeCommit:
