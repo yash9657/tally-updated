@@ -45,7 +45,8 @@ const (
 // property of the write path rather than of a test suite: the DB test proves
 // the constants are right on a seeded book, this proves it on the tenant's
 // book on the night it ran. A refusal is returned as Refused with the
-// mismatch, and the caller counts it; it is not an error that stops the night.
+// mismatch as the error — callers branch on the OUTCOME first and count it;
+// it is not an error that stops the night.
 func store(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, c Candidate) (uuid.UUID, WriteOutcome, error) {
 	if err := checkShape(c); err != nil {
 		return uuid.Nil, "", err

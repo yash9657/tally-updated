@@ -116,7 +116,7 @@ func RunNightly(ctx context.Context, r Runner, companyID uuid.UUID, asOf time.Ti
 		seen := map[uuid.UUID]bool{}
 		for _, c := range cands {
 			id, outcome, err := store(ctx, tx, companyID, c)
-			if err != nil {
+			if err != nil && outcome != Refused {
 				return err
 			}
 			ts := st.ByType[c.Type]
@@ -129,7 +129,10 @@ func RunNightly(ctx context.Context, r Runner, companyID uuid.UUID, asOf time.Ti
 				ts.Superseded++
 			case Refused:
 				ts.Refused++
-				st.EvidenceRefused = append(st.EvidenceRefused, c.Type+" "+c.EntityName)
+				// The mismatch is the useful half: which figure, stored vs
+				// re-derived. It goes into insight_run.stats, where an operator
+				// (and the ADR's residual list) can read it.
+				st.EvidenceRefused = append(st.EvidenceRefused, err.Error())
 			}
 			st.ByType[c.Type] = ts
 			if id != uuid.Nil {

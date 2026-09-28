@@ -511,13 +511,13 @@ func ProcessEvents(ctx context.Context, r Runner, companyID uuid.UUID, now time.
 				}
 				for _, c := range cs {
 					_, outcome, err := store(ctx, tx, companyID, c)
-					if err != nil {
+					if err != nil && outcome != Refused {
 						return err
 					}
 					st.Raised[string(outcome)]++
 					if outcome == Refused {
-						st.Refused = append(st.Refused, c.Type+" "+c.EntityName)
-						log.Printf("insights: refused %s for %s: evidence did not reproduce", c.Type, c.EntityName)
+						st.Refused = append(st.Refused, err.Error())
+						log.Printf("insights: refused %s for %s: %v", c.Type, c.EntityName, err)
 						continue
 					}
 					if outcome == Inserted || outcome == Superseded {
