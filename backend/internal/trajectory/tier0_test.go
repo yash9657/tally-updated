@@ -81,9 +81,12 @@ const (
 	// W3 wave 2 (d122 "Wave 2") added internal/nlq/testdata/cassettes/
 	// nlq.translate/: four tau nl_query utterances through the v4 prompt,
 	// one interaction each, replayed by a key re-derived from the wire in
-	// nlq's TestTranslatorReplaysItsCassettes — 8 files / 18 interactions.
-	tier0MinInteractions = 18
-	tier0MinCassettes    = 8
+	// nlq's TestTranslatorReplaysItsCassettes — 8 files / 18 interactions;
+	// and internal/embed/testdata/cassettes/embed.index/: one embeddings
+	// batch through llm.Client.Embed, keyed off the wire in embed's
+	// TestLLMEmbedderReplaysItsCassette — 9 files / 19 interactions.
+	tier0MinInteractions = 19
+	tier0MinCassettes    = 9
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way

@@ -27,6 +27,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -106,6 +107,22 @@ func runMigrate(ctx context.Context) error {
 	}
 	names, _ := migrations.Names()
 	log.Printf("migrations applied (%d files)", len(names))
+	// ⛔ LOUD, NOT SILENT (0098): a database without pgvector migrates, and
+	// retrieval runs lexical-only on it. That is a legitimate state for a
+	// dev box, and a WRONG one for production — so the operator reads which
+	// one they are in, with the fix, every time they migrate. A Postgres
+	// WARNING raised inside the migration is not enough: pgx does not print
+	// notices.
+	var enabled bool
+	var detail string
+	if err := conn.QueryRow(ctx, `SELECT enabled, detail FROM emb_vector_status()`).Scan(&enabled, &detail); err != nil {
+		return fmt.Errorf("read embeddings status: %w", err)
+	}
+	if enabled {
+		log.Printf("embeddings: %s", detail)
+	} else {
+		log.Printf("embeddings: DISABLED — %s (lexical search only; see docs/design/d122-w3-data-understanding.md, Wave 2)", strings.TrimPrefix(detail, "disabled: "))
+	}
 	return nil
 }
 

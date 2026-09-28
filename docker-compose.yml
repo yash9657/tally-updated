@@ -1,7 +1,13 @@
 # Local development services. Production runs Aurora PostgreSQL 16 in AWS ap-south-1 (see infra/).
 services:
   db:
-    image: postgres:16
+    # pgvector/pgvector:pg16 = postgres:16 + the pgvector extension (W3 wave 2,
+    # migration 0098: halfvec(1024) + HNSW). Same major version, same data
+    # directory format: an existing tally_pgdata volume starts under it
+    # unchanged. Switching an existing container: docs/design/
+    # d122-w3-data-understanding.md, "Wave 2" (recreate the container on the
+    # SAME volume, then SELECT emb_enable_vectors(); as postgres).
+    image: pgvector/pgvector:pg16
     container_name: tally_pg
     environment:
       POSTGRES_PASSWORD: postgres
