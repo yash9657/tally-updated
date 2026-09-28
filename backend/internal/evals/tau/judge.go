@@ -158,6 +158,60 @@ func checkOutputs(expected []string, answer string) []string {
 			out = append(out, fmt.Sprintf("answer does not state %s (answer: %q)", want.StringFixed(2), trimAnswer(answer)))
 		}
 	}
+	if extra := extraMoneyFigures(expected, answer); len(extra) > maxExtraFigures(len(expected)) {
+		out = append(out, fmt.Sprintf("answer states %d money figures the task did not ask for (%s…) — "+
+			"a figure found among many is not an answer (answer: %q)", len(extra), strings.Join(extra[:min(3, len(extra))], ", "), trimAnswer(answer)))
+	}
+	return out
+}
+
+// maxExtraFigures bounds how many money figures an answer may state beyond the
+// ones the task asks for: one per expected output, at least one. A sentence
+// giving context ("29,750 of the 35,000 billed") fits; a dump does not.
+//
+// ⛔ WHY A BOUND AT ALL. Without it "every expected figure appears somewhere"
+// was satisfied by an answer that listed the whole trial balance, so a
+// verbose model passed every nl_query and gst_returns task by shotgun (the
+// wave-1 review) — inflating pass^k for exactly the least useful answers.
+func maxExtraFigures(expected int) int { return max(1, expected) }
+
+// moneyShapedRe is a figure written the way money is written: a rupee sign or
+// Rs/INR before it, digit grouping, exactly two decimals, a lakh/crore word,
+// or a plain integer of four or more digits. Years (1900–2100), day and month
+// numbers, "3.1(a)", "@18%" and similar are not money-shaped and never count.
+var moneyShapedRe = regexp.MustCompile(`(?i)(₹|\brs\.?|\binr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|लाख|करोड़|करोड)?`)
+
+func extraMoneyFigures(expected []string, answer string) []string {
+	want := map[string]bool{}
+	for _, e := range expected {
+		if d, err := decimal.NewFromString(e); err == nil {
+			want[d.Abs().Round(2).StringFixed(2)] = true
+		}
+	}
+	s := devanagariDigits.Replace(answer)
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range moneyShapedRe.FindAllStringSubmatch(s, -1) {
+		raw := m[2]
+		intPart, frac, _ := strings.Cut(raw, ".")
+		shaped := m[1] != "" || m[3] != "" || strings.Contains(raw, ",") || len(frac) == 2
+		if !shaped && frac == "" && len(intPart) >= 4 {
+			if n, err := decimal.NewFromString(intPart); err == nil && !(n.GreaterThanOrEqual(decimal.NewFromInt(1900)) && n.LessThanOrEqual(decimal.NewFromInt(2100))) {
+				shaped = true
+			}
+		}
+		if !shaped {
+			continue
+		}
+		// The same figure, parsed exactly as AnswerFigures parses it.
+		for _, d := range AnswerFigures(m[0]) {
+			k := d.Round(2).StringFixed(2)
+			if !want[k] && !seen[k] {
+				seen[k] = true
+				out = append(out, k)
+			}
+		}
+	}
 	return out
 }
 

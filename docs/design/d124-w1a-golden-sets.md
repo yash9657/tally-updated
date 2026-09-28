@@ -111,6 +111,15 @@ reading it as crore would turn the most common way a balance is written into a f
 Figures are **magnitudes** (a hyphen in prose is a date separator far more often than a minus); a
 balance's *direction* is judged by the ledger state, not the prose.
 
+⚠️ **Two limits the wave-1 review found.** (1) "every expected figure appears somewhere" was satisfied
+by a *shotgun* answer — the whole trial balance — so a verbose model passed every read-only task. The
+judge now also bounds the **money-shaped figures the task did not ask for** (₹/Rs, digit grouping, two
+decimals, lakh/crore, or a plain integer of 4+ digits that is not a year) at one per expected output,
+minimum one (`TestJudgeRefusesAShotgunAnswer`; the reference agent still solves every task). (2) For a
+READ-ONLY task the ledger state is "nothing changed", so a wrong Dr/Cr in the prose is **still not
+judged**. Fixing that needs a side per output in all 204 fixtures (`outputs` → `{amount, side}`) and a
+prose side reader; it is OWED, not done.
+
 ---
 
 ## 4. The extraction set — ⛔ SYNTHETIC, and why that is stated five times

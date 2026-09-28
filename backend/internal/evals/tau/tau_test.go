@@ -262,3 +262,26 @@ func TestWrongAgentPerturbsEveryWrite(t *testing.T) {
 		t.Fatalf("no writes perturbed (writes=%d)", writes)
 	}
 }
+
+// TestJudgeRefusesAShotgunAnswer: every expected figure appearing SOMEWHERE
+// among many is not an answer. Before the bound, an answer that dumped the
+// whole trial balance passed any read-only task (the wave-1 review).
+func TestJudgeRefusesAShotgunAnswer(t *testing.T) {
+	defaults := baseState()
+	q := Expected{Outputs: []string{"29750.00"}}
+	cases := []struct {
+		answer string
+		pass   bool
+	}{
+		{"Acme Traders: 29,750.00 Dr as on 30 June 2025.", true},
+		{"Acme Traders owes ₹29,750 of the ₹35,000 billed in June 2025.", true},
+		{"HSN 998311: taxable 29,750.00.", true},
+		{"Trial balance: Cash 12,000.00 Dr; HDFC Bank 2,50,067.00 Dr; Acme Traders 29,750.00 Dr; Sales 47,500.00 Cr; Rent 21,333.00 Dr.", false},
+		{"Balances: 12000, 250067, 29750, 47500, 21333.", false},
+	}
+	for _, c := range cases {
+		if v := Judge(q, defaults, defaults, c.answer); v.Pass != c.pass {
+			t.Errorf("%q: pass=%v, want %v (%v)", c.answer, v.Pass, c.pass, v.Reasons)
+		}
+	}
+}
