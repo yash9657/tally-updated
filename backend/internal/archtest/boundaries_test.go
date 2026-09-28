@@ -256,6 +256,11 @@ var allowedDeps = map[string]map[string]bool{
 	// jobs are deterministic Go, and the ≤400-token LLM narratives the plan
 	// mentions are owed to a package that may import internal/llm.
 	"internal/profile": {"internal/platform/db": true, "internal/reporting": true, "internal/query": true},
+	// W3 Tier B: the hand-written SQL validator and the agent_ro executor.
+	// platform/db ONLY — it must not reach the query compiler (a second SQL
+	// path sharing code with the first would couple their failure modes), the
+	// llm client, or any feature package.
+	"internal/tierb": {"internal/platform/db": true},
 	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
 	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
 	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in
@@ -1000,4 +1005,47 @@ func TestQueryPackageIsNetworkFree(t *testing.T) {
 		t.Fatal("scanned no internal/query source files — the walk is vacuous")
 	}
 	t.Logf("internal/query network-free across %d source files", scanned)
+}
+
+// TestW3PackagesAreNetworkFree extends the same proof to W3's three new
+// packages. internal/tierb runs model-written SQL; internal/profile writes the
+// facts the agent believes; internal/catalogue feeds the selector. None has a
+// reason to open a socket, and the model-backed parts W3 owes (narratives,
+// embeddings) must arrive through internal/llm in a package that says so —
+// not as a quiet net/http import here. allowedDeps covers internal imports;
+// this covers the stdlib ones it cannot see. Mutation check: add
+// `_ "net/http"` to internal/tierb/exec.go and this goes red.
+func TestW3PackagesAreNetworkFree(t *testing.T) {
+	root := backendRoot(t)
+	fset := token.NewFileSet()
+	for _, pkg := range []string{"tierb", "profile", "catalogue"} {
+		scanned := 0
+		dir := filepath.Join(root, "internal", pkg)
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if perr != nil {
+				return perr
+			}
+			scanned++
+			for _, imp := range f.Imports {
+				ip := strings.Trim(imp.Path.Value, `"`)
+				if networkPkgs[ip] || strings.HasPrefix(ip, "net/") {
+					t.Errorf("internal/%s must be network-free, but %s imports %q", pkg, filepath.Base(path), ip)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk internal/%s: %v", pkg, err)
+		}
+		if scanned == 0 {
+			t.Fatalf("scanned no internal/%s source files — the walk is vacuous", pkg)
+		}
+	}
 }
