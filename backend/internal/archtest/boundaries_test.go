@@ -457,6 +457,25 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/intentlog":   true,
 		"internal/platform/db": true,
 	},
+	// mcp (W6, D126) is the MCP server: JSON-RPC over Streamable HTTP, the
+	// tool manifest, grants and sessions.
+	//
+	// ⛔ READ WHAT IS ABSENT, AS FOR internal/agent. NOT internal/server (the
+	// router is where identity is judged; mcp is mounted INTO it, never the
+	// reverse), NOT any feature package, NOT internal/llm, NOT
+	// internal/durable or internal/intentlog: its only way to act on the books
+	// is agent.Engine.Submit, which records a decision and lets the agent loop
+	// run the dispatcher. internal/actions is the registry the manifest is
+	// generated from; internal/policy the EffectiveRights filter over it and
+	// the delegation types; internal/platform/db its own two tables (0105)
+	// under RLS. TestMCPReachesNoHandlerExceptThroughTheAgent (in the package)
+	// adds what an import set cannot see: no Dispatch call, no agent.Request.
+	"internal/mcp": {
+		"internal/agent":       true,
+		"internal/actions":     true,
+		"internal/policy":      true,
+		"internal/platform/db": true,
+	},
 	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
 	// load-bearing in BOTH directions.
 	//
@@ -846,6 +865,11 @@ var allowedDeps = map[string]map[string]bool{
 		// agent: the agent package still reaches the books only through the
 		// Dispatcher and its ProfileReader seam.
 		"internal/profile": true,
+		// W6 (D126): the MCP server, mounted into this router's
+		// {companyID} subtree so companyAuthMiddleware authenticates every
+		// transport request. It drives the agent engine above; it is not a
+		// second write path.
+		"internal/mcp": true,
 	},
 	"internal/archtest": {},
 }

@@ -101,6 +101,21 @@ type finishOut struct {
 type loop struct {
 	e   *Engine
 	run Run
+	// supplied is the decision an EXTERNAL planner handed this Resume
+	// (Engine.Submit). It is consumed by the first decide step that runs, and
+	// consumedK records which one. Nil for every in-app run.
+	supplied  *ModelDecision
+	consumedK int
+	// locked is set when another process held the run's lock, so nothing ran.
+	locked bool
+}
+
+// maxDecisions is the engine's bound for this run's planner.
+func (l *loop) maxDecisions() int {
+	if l.run.External() {
+		return l.e.externalMaxDecisions()
+	}
+	return l.e.maxDecisions()
 }
 
 func splitStep(name string) (string, int) {
@@ -197,9 +212,9 @@ func (l *loop) next(done []durable.StepResult) (durable.Step, bool, error) {
 }
 
 func (l *loop) decideOrStop(k int) durable.Step {
-	if k >= l.e.maxDecisions() {
+	if k >= l.maxDecisions() {
 		return l.finishStep(finishOut{Status: string(StatusFailed),
-			Reason: fmt.Sprintf("the run did not finish within %d decisions", l.e.maxDecisions())})
+			Reason: fmt.Sprintf("the run did not finish within %d decisions", l.maxDecisions())})
 	}
 	return l.decideStep(k)
 }
@@ -283,6 +298,9 @@ func modelView(kind string, raw json.RawMessage) json.RawMessage {
 func (l *loop) decideStep(k int) durable.Step {
 	name := stepName("decide", k)
 	return durable.Step{Name: name, Run: func(ctx context.Context, prev map[string]json.RawMessage) (json.RawMessage, error) {
+		if l.run.External() {
+			return l.externalDecision(ctx, name, k)
+		}
 		req := buildRequest(l.run, l.transcript(prev, k))
 		var md ModelDecision
 		resp, err := l.e.LLM.DecodeInto(ctx, req, DecideTool, &md)

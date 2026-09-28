@@ -1385,6 +1385,26 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case strings.HasPrefix(rest, "/agent/"):
 		seg := splitPath(rest)
 		switch {
+		// THE MCP SERVER (W6, D126), one bare token `agent-mcp`. Making and
+		// revoking a grant are writes (so a WebAuthn level steps up to grant
+		// — recorded on the grant as its step_up); listing is a read.
+		//
+		// ⛔ THE TRANSPORT (POST/DELETE /agent/mcp/{grantID}) IS A DISPLAY,
+		// and that is not a loophole: the transport itself alters nothing.
+		// Every tools/call it carries becomes an in-process request through
+		// THIS middleware as the grant's user — ACL(user), the cutoff, the
+		// step-up, ACL(agent) ∩ delegation — exactly as the in-app agent's
+		// are. Mapping the transport as a write would demand a WebAuthn
+		// assertion from a desktop program that cannot make one, and prove
+		// nothing the per-call judgement does not.
+		case len(seg) == 3 && seg[1] == "mcp" && seg[2] == "grants" && method == http.MethodGet:
+			return authz.Display, "agent-mcp", "", true
+		case len(seg) == 3 && seg[1] == "mcp" && seg[2] == "grants" && method == http.MethodPost:
+			return authz.Create, "agent-mcp", "", true
+		case len(seg) == 5 && seg[1] == "mcp" && seg[2] == "grants" && seg[4] == "revoke" && method == http.MethodPost:
+			return authz.Alter, "agent-mcp", "", true
+		case len(seg) == 3 && seg[1] == "mcp" && seg[2] != "grants" && (method == http.MethodPost || method == http.MethodDelete):
+			return authz.Display, "agent-mcp", "", true
 		case len(seg) == 2 && seg[1] == "runs" && method == http.MethodGet,
 			len(seg) == 3 && seg[1] == "runs" && method == http.MethodGet,
 			len(seg) == 4 && seg[1] == "runs" && seg[3] == "events" && method == http.MethodGet:

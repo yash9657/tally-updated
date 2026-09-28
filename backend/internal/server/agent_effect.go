@@ -324,13 +324,19 @@ func qualified(alias string) string {
 
 // postingsOf reads the legs of the given voucher versions, in the order the
 // wave-1 preview used (side, ledger name, amount), keyed by version id.
+//
+// ⛔ LEFT JOIN, so a leg whose ledger this company cannot see still counts in
+// the effect (and in the delegated ceiling's debit) with an empty name, rather
+// than vanishing and making a written voucher read as "postings: [], debit 0".
+// The ledger service refuses such a leg first (ErrLedgerNotInCompany); this is
+// the readback not hiding one if a future writer does not.
 func postingsOf(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, versionIDs []uuid.UUID) (map[uuid.UUID][]agent.Posting, error) {
 	out := map[uuid.UUID][]agent.Posting{}
 	rows, err := tx.Query(ctx, `
-		SELECT p.voucher_version_id, p.ledger_id, l.name, p.dr_cr::text, p.amount::text
-		  FROM posting p JOIN ledger l ON l.id = p.ledger_id AND l.company_id = p.company_id
+		SELECT p.voucher_version_id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount::text
+		  FROM posting p LEFT JOIN ledger l ON l.id = p.ledger_id AND l.company_id = p.company_id
 		 WHERE p.company_id = $1 AND p.voucher_version_id = ANY($2)
-		 ORDER BY p.voucher_version_id, p.dr_cr, l.name, p.amount`, companyID, versionIDs)
+		 ORDER BY p.voucher_version_id, p.dr_cr, COALESCE(l.name, ''), p.amount`, companyID, versionIDs)
 	if err != nil {
 		return nil, fmt.Errorf("read postings: %w", err)
 	}

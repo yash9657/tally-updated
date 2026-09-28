@@ -264,6 +264,12 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			// edit is re-previewed at the decision, but this is the one place
 			// the amount of the body that COMMITS is known for certain. Above
 			// the ceiling the write rolls back.
+			//
+			// The figure is the effect READBACK's debit (paise, summed in Go
+			// from what the transaction wrote), not a SQL sum over the
+			// postings' TEXT amount column — the sum(text) form failed every
+			// commit of a run with a ceiling until W6 caught it (D126 §8);
+			// W2 breadth's readback replaced that query outright.
 			if req.MaxDebitPaise != nil && te.effect.DebitPaise > *req.MaxDebitPaise {
 				overCeil = fmt.Sprintf("the committed debit of %d paise exceeds this run's delegated ceiling of %d paise",
 					te.effect.DebitPaise, *req.MaxDebitPaise)

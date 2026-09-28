@@ -57,6 +57,11 @@ type Engine struct {
 	MaxDecisions   int
 	ParkedPoll     time.Duration
 	MaxAttempts    int
+	// ExternalMaxDecisions bounds the decisions of a run whose planner is
+	// OUTSIDE the server (StartExternal): an MCP session makes one decision
+	// per tool call, so the in-app bound of eight would end it after eight
+	// reads. Zero means DefaultExternalMaxDecisions.
+	ExternalMaxDecisions int
 }
 
 func (e *Engine) now() time.Time {
@@ -126,6 +131,13 @@ func (e *Engine) Start(ctx context.Context, req StartRequest) (Run, error) {
 	if e.LLM == nil {
 		return Run{}, ErrNoModel
 	}
+	return e.start(ctx, req, policy.AgentID, time.Time{})
+}
+
+// start is Start without the model check: the one door both an in-app run and
+// an external-planner run (StartExternal) are created through, so an MCP run's
+// delegation is validated by exactly the rules a panel run's is.
+func (e *Engine) start(ctx context.Context, req StartRequest, agentID string, expiresAt time.Time) (Run, error) {
 	instr := strings.TrimSpace(req.Instruction)
 	switch {
 	case instr == "":
@@ -175,14 +187,20 @@ func (e *Engine) Start(ctx context.Context, req StartRequest) (Run, error) {
 	if inputs == nil {
 		inputs = []Input{}
 	}
+	if expiresAt.IsZero() {
+		// Long enough for the approval window plus a working day, so a
+		// commit approved in the window's last hour is not then refused
+		// because the grant lapsed.
+		expiresAt = now.Add(e.window() + 24*time.Hour)
+	}
+	if !now.Before(expiresAt) {
+		return Run{}, fmt.Errorf("%w: the delegation has already expired", ErrInvalid)
+	}
 	run := Run{
-		CompanyID: req.CompanyID, CreatedBy: req.UserID, Subject: req.Subject, AgentID: policy.AgentID,
+		CompanyID: req.CompanyID, CreatedBy: req.UserID, Subject: req.Subject, AgentID: agentID,
 		Channel: req.Channel, Instruction: instr, Inputs: inputs, Status: StatusRunning, NextPollAt: &now,
 		Delegation: policy.Delegation{ACLKeys: keys, MaxAmountPaise: req.MaxAmountPaise, StepUp: req.StepUp,
-			// Long enough for the approval window plus a working day, so a
-			// commit approved in the window's last hour is not then refused
-			// because the grant lapsed.
-			ExpiresAt: now.Add(e.window() + 24*time.Hour)},
+			ExpiresAt: expiresAt},
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if run.Delegation.ACLKeys == nil {
@@ -238,6 +256,15 @@ func allStructural(specs []actions.ActionSpec) bool {
 // any number of processes at once — durable.RunDynamic's advisory lock makes
 // all but one of them return immediately.
 func (e *Engine) Resume(ctx context.Context, companyID, runID uuid.UUID) (Status, error) {
+	st, _, err := e.resume(ctx, companyID, runID, nil)
+	return st, err
+}
+
+// resume is Resume with an optional decision SUPPLIED by an external planner
+// (Submit). supplied == nil is exactly Resume. The loop is returned so Submit
+// can learn whether its decision was consumed; it is nil when the run had
+// already finished (nothing executed here).
+func (e *Engine) resume(ctx context.Context, companyID, runID uuid.UUID, supplied *ModelDecision) (Status, *loop, error) {
 	ctx = db.WithCompany(ctx, companyID)
 	var run Run
 	if err := e.Pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -245,12 +272,19 @@ func (e *Engine) Resume(ctx context.Context, companyID, runID uuid.UUID) (Status
 		run, err = loadRun(ctx, tx, companyID, runID)
 		return err
 	}); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if run.Status.Finished() {
-		return run.Status, nil
+		return run.Status, nil, nil
 	}
-	lp := &loop{e: e, run: run}
+	lp := &loop{e: e, run: run, supplied: supplied, consumedK: -1}
+	st, err := e.advance(ctx, companyID, runID, run, lp)
+	return st, lp, err
+}
+
+// advance is the body Resume always had: run the loop until it finishes,
+// parks or fails, and write the run row accordingly.
+func (e *Engine) advance(ctx context.Context, companyID, runID uuid.UUID, run Run, lp *loop) (Status, error) {
 	done, err := durable.RunDynamic(ctx, e.store(), runID.String(), e.stopWhenEnded(companyID, runID, lp.next))
 	now := e.now()
 	switch {
@@ -263,6 +297,7 @@ func (e *Engine) Resume(ctx context.Context, companyID, runID uuid.UUID) (Status
 		return StatusCancelled, nil
 	case errors.Is(err, durable.ErrLocked):
 		// Another poller holds the run; it is doing the work.
+		lp.locked = true
 		return run.Status, nil
 	case errors.Is(err, durable.ErrParked):
 		next := now.Add(e.parkedPoll())

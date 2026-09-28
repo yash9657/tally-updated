@@ -111,6 +111,18 @@ var actionsWithNoHumanPathYet = map[string]string{
 	// ScreenKind (list, the pre-approve re-read, decision). The cross-check in
 	// TestNoHumanPathOptOutsAreDeclared is what forced the deletion: a row
 	// that is both exempt and reachable fails it.
+
+	// ---- The W6 MCP server (D126). The TRANSPORT is machine-facing by
+	// definition — an MCP client, not a person, speaks JSON-RPC to it — and
+	// every tools/call it carries is re-judged in process as the grant's
+	// user, so these two rows are permanent, not half-wired.
+	"post.agent.mcp._grantid":   "the MCP Streamable-HTTP transport: an MCP client (Claude Desktop, ChatGPT, an IDE) posts JSON-RPC here, never a screen; each tools/call is an agent decision re-judged through the router as the grant's user",
+	"delete.agent.mcp._grantid": "the MCP transport's session teardown, sent by the MCP client",
+	// The GRANT routes are the half that needs a person, and have none yet:
+	// the grant screen is D126's owed frontend. Wiring it deletes these rows.
+	"post.agent.mcp.grants":                 "making an MCP grant: backend-only until the grant screen lands (D126 owed); today an owner calls it directly",
+	"get.agent.mcp.grants":                  "listing MCP grants: backend-only until the grant screen lands (D126 owed)",
+	"post.agent.mcp.grants._grantid.revoke": "revoking an MCP grant: backend-only until the grant screen lands (D126 owed)",
 }
 
 // maxActionsWithNoHumanPathYet is the ceiling on that map.
@@ -130,7 +142,11 @@ var actionsWithNoHumanPathYet = map[string]string{
 // W2 (D121) RAISED IT TO 35, by exactly the eight agent-plane routes, because
 // the backend lane landed before the frontend lane that wires them; the W2
 // frontend lane wired all eight and put it back to 27.
-const maxActionsWithNoHumanPathYet = 27
+//
+// W6 (D126) RAISED IT TO 32, by exactly the five MCP routes: two are the
+// machine-facing transport (permanent), three are the grant routes that wait
+// for their screen.
+const maxActionsWithNoHumanPathYet = 32
 
 // ---------------------------------------------------------------------------
 // Vacuity floors

@@ -520,6 +520,20 @@ var KnownResources = append([]Resource{
 	// arrears and which user back-dated what.
 	"insights",
 
+	// THE MCP SERVER (W6, D126): the delegations a human grants an outside
+	// MCP client, and the transport that client speaks through.
+	//
+	// ⛔ A THIRD BARE TOKEN, NOT A REUSE OF `agent-run`. Letting an operator
+	// ask the in-app agent for things is not the same authority as letting a
+	// program on somebody's laptop do so for days under a standing grant; an
+	// owner must be able to allow the first and not the second. Bare for the
+	// block above's reason: no seeded rule names it and Data Entry's
+	// default_access is 'none', so it ships refused for every seeded non-Owner
+	// level with zero acl_rule rows. Governance-class (risk.go) and disallowed
+	// in policy.AgentRules: an agent that could mint its own MCP grant could
+	// widen its own delegation.
+	"agent-mcp",
+
 	// THE e-INVOICE / IRN: the Invoice Reference Number the NIC portal issues
 	// against a B2B tax invoice, statutorily mandatory in India above a turnover
 	// threshold.

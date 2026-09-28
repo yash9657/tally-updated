@@ -32,7 +32,10 @@ export type AgentProvenanceSource =
   | "whatsapp"
   | "tally_xml"
   | "email"
-  | "stored_text";
+  | "stored_text"
+  // W6 (D126): the context of an outside MCP client, which this server never
+  // saw. Every MCP run carries it, so its approvals always show it.
+  | "mcp_client";
 
 /** One piece of UNTRUSTED material a run is handed (agent.Input). */
 export interface AgentInput {

@@ -108,6 +108,9 @@ var resourceRisk = map[authz.Resource]Risk{
 	// W4: a verdict, a suppression or a digest trains and steers what the
 	// owner is shown; an agent doing either would be grading its own ranker.
 	"insights": RiskGovernance,
+	// W6 (D126): MCP grants are delegations, so minting or revoking one is
+	// the agent control plane, and so is the transport that spends them.
+	"agent-mcp": RiskGovernance,
 }
 
 // governanceReads are DISPLAY actions that are nevertheless governance: a
@@ -131,6 +134,9 @@ var governanceReads = map[authz.Resource]bool{
 	// insight TOOLS are W2-breadth's to add, with a provenance class of their
 	// own (d125 OWED), not a read inherited from a route.
 	"insights": true,
+	// W6: an agent reading the MCP grants would learn which outside clients
+	// hold standing authority, and the transport's reads are for the client.
+	"agent-mcp": true,
 	// The ACL itself.
 	"security": true,
 }

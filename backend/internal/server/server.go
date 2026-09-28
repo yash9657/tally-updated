@@ -48,6 +48,7 @@ import (
 	"github.com/khata/cored/internal/agent"
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
+	"github.com/khata/cored/internal/mcp"
 
 	"github.com/khata/cored/internal/backup"
 	"github.com/khata/cored/internal/banking"
@@ -285,6 +286,10 @@ type Server struct {
 	// model client under the insight.narrate feature, or the templates alone
 	// when no model is configured (the hermetic default).
 	insightNarrator insights.Narrator
+
+	// mcp is the MCP server (W6, D126): the same engine, driven by an outside
+	// client's tools/call instead of the model. It holds no dispatcher.
+	mcp *mcp.Server
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
@@ -444,6 +449,7 @@ func (s *Server) initAgent(model *llm.Client) {
 	s.agent.Profiles = agentProfiles{s: s}
 	s.agentPoller = &agent.Poller{Engine: s.agent}
 	s.agentKick = make(chan struct{}, 1)
+	s.mcp = &mcp.Server{Pool: s.pool, Engine: s.agent, AllowedOrigins: mcpAllowedOrigins()}
 }
 
 // buildAgentLLM builds the agent's model client from the SAME LLM_PROVIDER
@@ -1292,6 +1298,10 @@ func (s *Server) routes() {
 		// agent_http.go for the contract and routeAction's /agent/ arm for
 		// the two bare tokens (agent-run, agent-approval).
 		s.agentRoutes(r)
+		// THE MCP SERVER (W6, D126): grants (a human's delegation to an
+		// outside client) and the Streamable HTTP transport that spends one.
+		// See mcp_http.go and routeAction's /agent/mcp arms (`agent-mcp`).
+		s.mcpRoutes(r)
 
 		// THE INSIGHT ENGINE (W4, d125) — the inbox, evidence, feedback,
 		// suppressions, the digest. insights_http.go; routeAction's

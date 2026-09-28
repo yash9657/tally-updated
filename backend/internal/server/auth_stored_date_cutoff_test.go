@@ -839,6 +839,10 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 	"DELETE /v1/companies/{companyID}/insights/suppressions/{suppressionID}": "" +
 		"lifting a suppression deletes an insight_suppression row — which findings reach the " +
 		"digest — and nothing in the books; no date",
+	// W6 (D126): revoking an MCP grant stamps revoked_at on the grant, closes
+	// its sessions and cancels their runs — the cancel above, for each.
+	"POST /v1/companies/{companyID}/agent/mcp/grants/{grantID}/revoke": "" +
+		"revoking an MCP grant writes the grant's revocation and cancels its runs; it commits nothing and carries no date",
 
 	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
 	//
