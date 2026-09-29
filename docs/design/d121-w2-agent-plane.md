@@ -739,3 +739,20 @@ Closed from §9 / wave-1 review: items 8 (autonomy route + screen), 9 (custom-le
 (`created_by`), 11 (VerifyAnchors exposed, half — number provenance of the summary is still W4's), the
 review's #2 owed half (re-preview), and §9 item 2/3 in the breadth above; §9 item 7 ("born blocked" as a
 ledger flag) is now structural.
+
+## Wave-2 review amendments (session/t32-and-close-7-3)
+
+- **The delegated ceiling holds for writes that post no legs.** The gate's amount was the preview's ledger
+  debit, zero for an order, a stock voucher or a master alter, so a run capped at Rs 1,000 committed a
+  Rs 10 crore purchase order at L3. `Effect.ValuePaise` now measures an order (Σ qty × rate) and a stock
+  voucher (the larger of in and out); the gate, the approver-edit re-preview and the commit hook judge the
+  ceiling on it; and `policy.Decide` holds any write whose value cannot be measured when the run has a
+  ceiling. Gates: `TestAgentDelegatedCeilingHoldsForOrdersAndMasters`, `TestGateMatrix` (ceiling cases),
+  `TestValuePaise`.
+- **A books read is projected before the model sees it.** `get.ledgers` was labelled books but carried the
+  postal block and bank details, so an instruction planted in an address reached the model through a
+  clean-looking read. Every books-labelled `actions.read` now drops `proseKeys` (address, city, pincode,
+  mailing name, bank details, email, phone, designation, description, narration, note, remarks) at any
+  depth; a body that is not JSON is labelled `stored_text`. Gates: `TestBooksReadIsProjected`,
+  `TestAgentLedgerReadCarriesNoPlantedAddress`. ⚠️ Residual: a ledger or item NAME is still free text
+  and still books; the rule "books = master identifiers" accepts that.

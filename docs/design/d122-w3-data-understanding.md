@@ -632,3 +632,14 @@ periods per supplier first.
 Commits on `agentic/w3-followons`: `c71a63f` (0099, Tier B), `a40aabe` (migrate lock), `d32d451`
 (catalogue → nlq v4), `6685b58` + `60376e5` (0098, embed, llm.Embed), `07e413e` (pg16-trixie pin),
 `63d2dce` (supplier lead time), and this ADR / §2.5 row.
+
+## Wave-2 review amendments (session/t32-and-close-7-3)
+
+- **`agent.tier_b_plan` opens a cursor.** It used `EXECUTE 'EXPLAIN (FORMAT JSON) ' || p_sql INTO p`,
+  which runs every statement of a multi-statement string: a DO ran as agent_ro and a PREPARE survived the
+  Tier-B rollback on the pooled connection. It now uses `FOR … IN EXECUTE` like `tier_b_run`
+  (`TestTierBPlanRunsOneStatementOrNone`). 0099 is edited in place; a database migrated before the fix
+  keeps the old function until 0099's `tier_b_plan` block is re-run as admin or the database is re-created.
+- **Stated, not closed:** agent_ro may read the cluster-wide `pg_stat_*` views, so raw text can read
+  per-table insert counts across tenants (no rows). The validator's views-only grammar is the wall.
+- **The degrade message names `pgvector/pgvector:pg16-trixie`** (0098 edited in place; same caveat).
