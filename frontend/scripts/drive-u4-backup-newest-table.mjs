@@ -244,7 +244,7 @@ END $$;`);
   // -------------------------------------------------------------------------
   const { readFileSync } = await import("node:fs");
   const bytes = readFileSync(archivePath);
-  const restore = await fetch(`${CORED}/v1/companies/restore`, {
+  const restore = await fetch(`${CORED}/v1/companies/restore`, {  // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- drive script against the local dev stack (CORED is http://localhost)
     method: "POST",
     headers: {
       Authorization: `Bearer ${TOK}`,

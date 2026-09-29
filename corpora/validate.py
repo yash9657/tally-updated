@@ -722,7 +722,7 @@ def _check_xml(path: Path, case: dict) -> None:
         fail(path, f"tallyExportFile {case['tallyExportFile']!r} does not exist next to fixture")
         return
     try:
-        tree = ET.parse(xml_path)
+        tree = ET.parse(xml_path)  # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse -- dev validator over the repo's own committed fixtures, never user input
     except ET.ParseError as exc:
         fail(path, f"referenced XML {xml_path.name} does not parse: {exc}")
         return
@@ -766,7 +766,7 @@ def validate_migration(path: Path, case: dict) -> None:
         fail(path, f"tallyExportFile {case['tallyExportFile']!r} does not exist next to fixture")
         return
     try:
-        tree = ET.parse(xml_path)
+        tree = ET.parse(xml_path)  # nosemgrep: python.lang.security.use-defused-xml-parse.use-defused-xml-parse -- dev validator over the repo's own committed fixtures, never user input
     except ET.ParseError as exc:
         fail(path, f"referenced XML {xml_path.name} does not parse: {exc}")
         return

@@ -286,7 +286,7 @@ SELECT string_agg(format('SELECT %L t, count(*) n FROM %I WHERE company_id::text
   // =========================================================================
   // 4. RESTORING IT IS REFUSED, 409 — the company is still here.
   // =========================================================================
-  const conflict = await fetch(`${CORED}/v1/companies/restore`, {
+  const conflict = await fetch(`${CORED}/v1/companies/restore`, {  // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- drive script against the local dev stack (CORED is http://localhost)
     method: "POST",
     headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/gzip" },
     body: raw,
@@ -347,7 +347,7 @@ END $$;`);
   // 6. NOW the truncated archive, with nothing else able to refuse it first.
   // =========================================================================
   const short = raw.subarray(0, Math.floor(raw.length * 0.7));
-  const truncated = await fetch(`${CORED}/v1/companies/restore`, {
+  const truncated = await fetch(`${CORED}/v1/companies/restore`, {  // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- drive script against the local dev stack (CORED is http://localhost)
     method: "POST",
     headers: { Authorization: `Bearer ${TOK}`, "Content-Type": "application/gzip" },
     body: short,

@@ -20,7 +20,10 @@ rules:
       app role is NOBYPASSRLS; tenant isolation is default-deny RLS keyed by
       app.current_company_id. See PLAN.md A.4 (#1 risk).
     patterns:
-      - pattern-regex: "(?i)(bypassrls|user=postgres|tally_admin)"
+      # (?<!no): the word NOBYPASSRLS, which is how every comment describing
+      # the SAFE role spells it, is not a BYPASSRLS role. Before the lookbehind
+      # this rule fired on the three comments that document the protection.
+      - pattern-regex: "(?i)((?<!no)bypassrls|user=postgres|tally_admin)"
     paths:
       include:
         - "backend/internal/**"

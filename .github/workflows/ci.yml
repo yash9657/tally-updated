@@ -325,13 +325,19 @@ jobs:
           # PR would need pull-requests: write, which this job does not hold.
           GITLEAKS_ENABLE_COMMENTS: "false"
 
+      # ⛔ semgrep-action@v1 ran semgrep 1.36 (2023). It CRASHED on today's
+      # registry rules ("invalid rule severity value: MEDIUM") and the step
+      # still reported success, so SAST had never scanned this tree. Now a
+      # pinned current image: every finding is printed, and ERROR-severity
+      # findings fail the job.
       - name: semgrep (SAST)
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            infra/security/semgrep.yml
-            p/default
-            p/secrets
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:1.177.0 \
+            semgrep scan --metrics=off \
+              --config infra/security/semgrep.yml --config p/default --config p/secrets
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:1.177.0 \
+            semgrep scan --metrics=off --quiet --error --severity ERROR \
+              --config infra/security/semgrep.yml --config p/default --config p/secrets
 
       - name: trivy (filesystem vuln + secret + misconfig)
         # Upstream moved to v-prefixed tags; the bare "0.24.0" no longer
@@ -346,6 +352,20 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
+      # The SARIF above is for the dashboard; this prints the same findings in
+      # the log, where a failing run can actually be read.
+      - name: trivy findings (table)
+        if: failure()
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
 
       # The UPLOAD is best-effort; the SCAN is the gate. trivy's exit-code "1"
       # above still fails this job on any CRITICAL/HIGH finding. Code scanning
@@ -384,13 +404,12 @@ jobs:
           terraform init -backend=false
           terraform validate
 
-      - name: Install kustomize
-        run: |
-          curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-
+      # kubectl ships kustomize built in and is preinstalled on the runner. The
+      # old step piped kustomize's install script from its MASTER branch into
+      # bash, which executed whatever was on master at that moment (semgrep
+      # gha-curl-pipe-shell).
       - name: kustomize build dev overlay
-        run: kustomize build infra/k8s/overlays/dev > /dev/null
+        run: kubectl kustomize infra/k8s/overlays/dev > /dev/null
 
       - name: Validate YAML parses (observability, k8s, security)
         run: |

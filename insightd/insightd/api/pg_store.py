@@ -154,7 +154,7 @@ class PGDraftStore:
         body_json = draft.model_dump_json()  # jsonb accepts the JSON text
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(_SET_COMPANY_SQL, (draft.company_id,))
+                cur.execute(_SET_COMPANY_SQL, (draft.company_id,))  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- constant SQL, values bound as %s (psycopg, not SQLAlchemy)
                 cur.execute(
                     _INSERT_SQL, (draft.company_id, draft.draft_id, body_json)
                 )
@@ -168,7 +168,7 @@ class PGDraftStore:
         """
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(_SET_COMPANY_SQL, (company_id,))
+                cur.execute(_SET_COMPANY_SQL, (company_id,))  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- constant SQL, values bound as %s (psycopg, not SQLAlchemy)
                 cur.execute(_SELECT_ONE_SQL, (company_id, draft_id))
                 row = cur.fetchone()
         if row is None:
@@ -180,7 +180,7 @@ class PGDraftStore:
         unknown company yields [] (an empty collection, not an error)."""
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(_SET_COMPANY_SQL, (company_id,))
+                cur.execute(_SET_COMPANY_SQL, (company_id,))  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- constant SQL, values bound as %s (psycopg, not SQLAlchemy)
                 cur.execute(_SELECT_LIST_SQL, (company_id,))
                 rows = cur.fetchall()
         return [_to_draft(r[0]) for r in rows]
@@ -219,7 +219,7 @@ class PGDraftStore:
         """
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(_SET_COMPANY_SQL, (company_id,))
+                cur.execute(_SET_COMPANY_SQL, (company_id,))  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- constant SQL, values bound as %s (psycopg, not SQLAlchemy)
                 cur.execute(_SELECT_ONE_FOR_UPDATE_SQL, (company_id, draft_id))
                 row = cur.fetchone()
                 if row is None:

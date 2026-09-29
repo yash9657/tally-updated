@@ -685,7 +685,7 @@ func (r *voucherRenderer) carriesValue() bool {
 }
 
 func vdLayoutColumns(cols []vdColumn) {
-	var total float64
+	var total float64  // nosemgrep: infra.security.money-must-not-be-float -- print-layout column weights, not money
 	for _, c := range cols {
 		total += c.weight
 	}
