@@ -32,7 +32,9 @@
 -- (a) THE UNTRUSTED TEXT RUNS ONLY INSIDE A SECURITY DEFINER FUNCTION.
 --     agent.tier_b_run(sql, max_rows) and agent.tier_b_plan(sql) are
 --     SECURITY DEFINER, owned by agent_ro, and EXECUTE the caller's text with
---     `FOR r IN EXECUTE`. Inside a security-definer function Postgres refuses
+--     `FOR r IN EXECUTE` (tier_b_plan too, since the wave-2 review: it
+--     used `EXECUTE … INTO`, which runs every statement of a multi-statement
+--     string — see its body). Inside a security-definer function Postgres refuses
 --     to change `role` or `session_authorization` at all ("cannot set
 --     parameter "role" within security-definer function") — by SET, RESET,
 --     set_config, or a function's SET clause — so the text cannot leave
@@ -41,6 +43,13 @@
 --     as cursor"). internal/tierb never sends model or caller text to
 --     Postgres any other way: it is the $1 of these two functions (and a
 --     Parse/Describe, which executes nothing — see tierb/exec.go).
+--     ⚠️ WHAT THE DATABASE ALONE DOES NOT CLOSE (the wave-2 review): the
+--     text runs with search_path = pg_catalog and agent_ro may read the
+--     cluster-wide statistics views, so `SELECT relname, n_tup_ins FROM
+--     pg_stat_user_tables` returns insert counts for ledger / posting /
+--     voucher_version across EVERY tenant — an activity side channel, no rows.
+--     Revoking PUBLIC's SELECT on the pg_stat_* views is cluster-wide and is
+--     not attempted here; the validator (views-only grammar) is the wall.
 -- (b) THE TENANT IS BOUND BY SOMETHING agent_ro CANNOT WRITE.
 --     agent.tier_b_binding holds (backend pid, transaction id) -> company.
 --     tally_app writes it through agent.tier_b_bind() at the top of the
@@ -234,7 +243,7 @@ CREATE OR REPLACE FUNCTION agent.tier_b_plan(p_sql TEXT) RETURNS JSON
     SET search_path = pg_catalog
 AS $$
 DECLARE
-    p JSON;
+    r RECORD;
 BEGIN
     IF agent.tier_b_company() IS NULL THEN
         RAISE EXCEPTION 'tier_b_plan: no tenant binding in this transaction'
@@ -244,8 +253,16 @@ BEGIN
         RAISE EXCEPTION 'tier_b_plan: the transaction must be READ ONLY'
             USING ERRCODE = '25006';
     END IF;
-    EXECUTE 'EXPLAIN (FORMAT JSON) ' || p_sql INTO p;
-    RETURN p;
+    -- ⛔ A CURSOR, LIKE tier_b_run — NOT `EXECUTE … INTO` (the wave-2 review).
+    -- EXECUTE … INTO runs EVERY statement of a multi-statement string: measured,
+    -- 'SELECT 1; PREPARE planted AS SELECT 42; DO $d$…$d$; SET …; SELECT …'
+    -- ran the DO as agent_ro, re-pointed the GUC, and left 'planted' prepared
+    -- on the pooled connection after the Tier-B rollback. FOR … IN EXECUTE
+    -- opens a cursor, which refuses a multi-query string before any of it runs.
+    FOR r IN EXECUTE 'EXPLAIN (FORMAT JSON) ' || p_sql LOOP
+        RETURN r."QUERY PLAN";
+    END LOOP;
+    RETURN NULL;
 END
 $$;
 
