@@ -14,6 +14,8 @@ import pathlib
 
 from insightd.api.app import create_app
 
+from route_table import flat_routes
+
 PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 
 
@@ -66,9 +68,7 @@ _ALLOWED_MUTATING_PATHS = {
 
 def test_no_route_targets_cored_vouchers_write():
     app = create_app()
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        methods = getattr(route, "methods", set()) or set()
+    for path, methods in flat_routes(app):
         # No route may target a cored /vouchers path at all.
         assert "/vouchers" not in path, f"forbidden route: {path}"
         # The only mutating routes are the drafts write and the draft lifecycle.
@@ -79,11 +79,7 @@ def test_no_route_targets_cored_vouchers_write():
 
 def test_only_allowed_routes_mutate():
     app = create_app()
-    paths = {
-        getattr(r, "path", "")
-        for r in app.routes
-        if (getattr(r, "methods", set()) or set()) & {"POST", "PUT", "PATCH", "DELETE"}
-    }
+    paths = {path for path, methods in flat_routes(app) if methods & {"POST", "PUT", "PATCH", "DELETE"}}
     # Every mutating path is allowlisted, and /drafts is always present.
     assert paths <= _ALLOWED_MUTATING_PATHS, paths
     assert "/companies/{company_id}/drafts" in paths

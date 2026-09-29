@@ -318,6 +318,8 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITLEAKS_CONFIG: infra/security/.gitleaks.toml
+          # gitleaks-action v2 refuses to scan a pull request without it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: semgrep (SAST)
         uses: semgrep/semgrep-action@v1
@@ -341,8 +343,14 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
 
+      # The UPLOAD is best-effort; the SCAN is the gate. trivy's exit-code "1"
+      # above still fails this job on any CRITICAL/HIGH finding. Code scanning
+      # on a private repository needs GitHub Advanced Security, which this
+      # repo may not have, and a missing dashboard must not fail a scan that
+      # found nothing — nor mask one that did.
       - name: Upload Trivy SARIF
-        if: always()
+        if: always() && hashFiles('trivy.sarif') != ''
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
