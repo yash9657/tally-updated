@@ -352,7 +352,12 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
-          trivyignores: .trivyignore.yaml
+        # NOT the action's `trivyignores` input: it concatenates the files into
+        # ./trivyignores, which trivy reads as the PLAIN format, so a YAML
+        # file's path-scoped entries were silently dropped (measured on PR #1).
+        # The env var keeps the .yaml name, and with it the format.
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
 
       # The SARIF above is for the dashboard; this prints the same findings in
       # the log, where a failing run can actually be read.
@@ -365,7 +370,8 @@ jobs:
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
-          trivyignores: .trivyignore.yaml
+        env:
+          TRIVY_IGNOREFILE: .trivyignore.yaml
 
       # The UPLOAD is best-effort; the SCAN is the gate. trivy's exit-code "1"
       # above still fails this job on any CRITICAL/HIGH finding. Code scanning
