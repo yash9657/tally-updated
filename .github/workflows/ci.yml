@@ -328,7 +328,10 @@ jobs:
             p/secrets
 
       - name: trivy (filesystem vuln + secret + misconfig)
-        uses: aquasecurity/trivy-action@0.24.0
+        # Upstream moved to v-prefixed tags; the bare "0.24.0" no longer
+        # resolves, and the job died in setup before scanning anything. Same
+        # release, pinned by commit so a moved tag cannot change what runs.
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
