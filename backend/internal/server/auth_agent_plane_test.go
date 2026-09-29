@@ -39,11 +39,18 @@ func TestDataEntryIsRefusedTheAgentPlane(t *testing.T) {
 		{http.MethodPost, base + "/agent/mcp/grants"},
 		{http.MethodGet, base + "/agent/mcp/grants"},
 		{http.MethodPost, base + "/agent/mcp/grants/" + someID + "/revoke"},
-		{http.MethodPost, base + "/agent/mcp/" + someID},
-		{http.MethodDelete, base + "/agent/mcp/" + someID},
 	} {
 		if rec, _ := aclRequest(t, s, c.method, c.path, dataEntry, map[string]any{}); rec.Code != http.StatusForbidden {
 			t.Errorf("Data Entry %s %s = %d, want 403", c.method, c.path, rec.Code)
+		}
+	}
+	// The transport itself takes only a grant's transport token (0106, the
+	// wave-2 review), so a person's JWT — Data Entry's included — is refused
+	// there before the PDP runs (401). A Data Entry user cannot hold a
+	// transport token either: making a grant is the 403 row above.
+	for _, m := range []string{http.MethodPost, http.MethodDelete} {
+		if rec, _ := aclRequest(t, s, m, base+"/agent/mcp/"+someID, dataEntry, map[string]any{}); rec.Code != http.StatusUnauthorized {
+			t.Errorf("Data Entry %s the MCP transport with a JWT = %d, want 401", m, rec.Code)
 		}
 	}
 	// And the Owner reaches the same doors (a 404 for an unknown run is the

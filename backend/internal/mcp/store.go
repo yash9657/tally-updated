@@ -2,6 +2,10 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,6 +36,9 @@ type Grant struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	RevokedAt      *time.Time `json:"revoked_at,omitempty"`
 	RevokedBy      *uuid.UUID `json:"revoked_by,omitempty"`
+	// TransportToken is set ONLY on the Grant CreateGrant returns — the one
+	// time the human sees it. The database holds its SHA-256 (0106).
+	TransportToken string `json:"transport_token,omitempty"`
 }
 
 // AgentID is the agent identity a grant's runs carry.
@@ -74,6 +81,54 @@ type NewGrant struct {
 	MaxAmountPaise *int64
 	ExpiresAt      time.Time
 	StepUp         bool
+	// Subject is the grant-maker's JWT subject: what the transport token
+	// authenticates as (0106).
+	Subject string
+}
+
+// TransportTokenPrefix marks a grant's transport token, so the router can
+// tell it from a JWT before it tries to verify one.
+const TransportTokenPrefix = "mcpt_"
+
+// ⛔ THE MCP CLIENT HOLDS A CREDENTIAL THAT IS NOT THE PERSON (0106, the
+// wave-2 review). With the human's JWT in its config, a prompt-injected client
+// could approve its own proposals at POST /agent/approvals/{id}/decision, or
+// skip the agent and POST /vouchers/payment. The transport token authenticates
+// this grant's transport and nothing else (server/auth_middleware.go).
+func newTransportToken() (token string, sum []byte, err error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", nil, err
+	}
+	token = TransportTokenPrefix + base64.RawURLEncoding.EncodeToString(b)
+	h := sha256.Sum256([]byte(token))
+	return token, h[:], nil
+}
+
+// TransportIdentity resolves a transport token for grantID in companyID to
+// the subject it authenticates as and the issued-at it carries (the grant's
+// creation, so a lock after the grant revokes it). ErrNotFound for any
+// mismatch — no grant, another company's, a grant made before 0106, or the
+// wrong token — so the caller cannot tell which.
+func (s *Server) TransportIdentity(ctx context.Context, companyID, grantID uuid.UUID, token string) (string, time.Time, error) {
+	var sum []byte
+	var subject *string
+	var created time.Time
+	err := s.Pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT transport_token_sha256, user_subject, created_at FROM agent_mcp_grant WHERE id = $1`,
+			grantID).Scan(&sum, &subject, &created)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	h := sha256.Sum256([]byte(token))
+	if len(sum) != len(h) || subject == nil || *subject == "" || subtle.ConstantTimeCompare(sum, h[:]) != 1 {
+		return "", time.Time{}, ErrNotFound
+	}
+	return *subject, created, nil
 }
 
 // ValidateKeys is the delegation check at the door: every key must be one some
@@ -128,7 +183,14 @@ func (s *Server) createGrant(ctx context.Context, in NewGrant) (Grant, error) {
 	if err != nil {
 		return Grant{}, err
 	}
+	if strings.TrimSpace(in.Subject) == "" {
+		return Grant{}, fmt.Errorf("%w: a grant is made by an authenticated person", ErrInvalid)
+	}
 	id, err := uuid.NewV7()
+	if err != nil {
+		return Grant{}, err
+	}
+	token, sum, err := newTransportToken()
 	if err != nil {
 		return Grant{}, err
 	}
@@ -136,14 +198,17 @@ func (s *Server) createGrant(ctx context.Context, in NewGrant) (Grant, error) {
 		MaxAmountPaise: in.MaxAmountPaise, StepUp: in.StepUp, ExpiresAt: in.ExpiresAt.UTC(), CreatedAt: now}
 	err = s.Pool.RunInTx(db.WithCompany(ctx, in.CompanyID), func(ctx context.Context, tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
-			`INSERT INTO agent_mcp_grant (id, company_id, user_id, client_name, acl_keys, max_amount_paise, step_up, expires_at, created_at)
-			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			g.ID, g.CompanyID, g.UserID, g.ClientName, g.ACLKeys, g.MaxAmountPaise, g.StepUp, g.ExpiresAt, g.CreatedAt)
+			`INSERT INTO agent_mcp_grant (id, company_id, user_id, client_name, acl_keys, max_amount_paise, step_up, expires_at, created_at,
+			                              transport_token_sha256, user_subject)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			g.ID, g.CompanyID, g.UserID, g.ClientName, g.ACLKeys, g.MaxAmountPaise, g.StepUp, g.ExpiresAt, g.CreatedAt,
+			sum, in.Subject)
 		return err
 	})
 	if err != nil {
 		return Grant{}, fmt.Errorf("mcp: create grant: %w", err)
 	}
+	g.TransportToken = token
 	return g, nil
 }
 

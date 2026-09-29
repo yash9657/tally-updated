@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,7 +83,28 @@ func createMCPGrant(t *testing.T, srv *server.Server, base string, keys []string
 	if p, _ := resp["mcp_path"].(string); p != base+"/agent/mcp/"+id {
 		t.Fatalf("mcp_path = %q, want %q", p, base+"/agent/mcp/"+id)
 	}
+	tok, _ := resp["transport_token"].(string)
+	if !strings.HasPrefix(tok, mcp.TransportTokenPrefix) {
+		t.Fatalf("grant has no transport token: %s", rec.Body.String())
+	}
+	grantTokens.Store(id, tok)
 	return id
+}
+
+// grantTokens holds each test grant's transport token (0106), returned once
+// by the create route, as a real MCP client's config would.
+var grantTokens sync.Map
+
+// grantToken is the transport token createMCPGrant received for grantID —
+// what an MCP client is configured with. ⛔ Never the owner's JWT: the
+// transport refuses that (the wave-2 review).
+func grantToken(t *testing.T, grantID string) string {
+	t.Helper()
+	v, ok := grantTokens.Load(grantID)
+	if !ok {
+		t.Fatalf("no transport token recorded for grant %s", grantID)
+	}
+	return v.(string)
 }
 
 func newMCPClient(t *testing.T, srv *server.Server, base, grantID, token string) *mcpClient {

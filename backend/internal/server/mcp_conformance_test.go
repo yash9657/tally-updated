@@ -3,7 +3,7 @@ package server_test
 // mcp_conformance_test.go — the W6 protocol gate (D126 §6): the lifecycle,
 // capabilities, tools/list, tools/call, the error codes and the Streamable
 // HTTP transport rules, for protocol versions 2025-11-25 and 2025-06-18, over
-// the real router with the owner's real bearer token.
+// the real router with the grant's real transport token (0106).
 //
 // Every assertion names the spec rule it checks. "Batching" is checked as
 // REFUSED: both versions removed JSON-RPC batches, so an array is one Invalid
@@ -42,7 +42,7 @@ func TestMCPProtocolConformance(t *testing.T) {
 	srv := newAgentServer(t)
 	b := newAgentBooks(t, srv)
 	grant := createMCPGrant(t, srv, b.base, []string{"create payment"}, nil)
-	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 
 	// ---- lifecycle ---------------------------------------------------------
 	t.Run("initialize negotiates each supported version", func(t *testing.T) {
@@ -154,7 +154,7 @@ func TestMCPProtocolConformance(t *testing.T) {
 		}
 	})
 	t.Run("GET (a server stream) is 405, which the transport allows", func(t *testing.T) {
-		rec, _ := doRaw(t, srv, http.MethodGet, b.base+"/agent/mcp/"+grant, ownerToken(t, srv), nil)
+		rec, _ := doRaw(t, srv, http.MethodGet, b.base+"/agent/mcp/"+grant, grantToken(t, grant), nil)
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("GET = %d, want 405", rec.Code)
 		}

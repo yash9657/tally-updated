@@ -24,6 +24,7 @@ import (
 	// to be altered or tombstoned. Same reason server.go imports it for the DATE
 	// peek.
 	"github.com/khata/cored/internal/integration"
+	"github.com/khata/cored/internal/mcp"
 	"github.com/khata/cored/internal/platform/db"
 	// sync is imported for its Op CONSTANTS only, so the op filter in
 	// peekSyncSupersededVoucherIDs cannot drift from the switch in
@@ -97,6 +98,45 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*authn.Cl
 		writeError(w, http.StatusUnauthorized, "missing bearer token")
 		return nil, false
 	}
+	// ⛔ THE MCP TRANSPORT HAS ITS OWN CREDENTIAL, AND ONLY IT HAS IT (0106,
+	// the wave-2 review). The transport used to take the person's JWT, which
+	// made "every money commit waits for a human" a boundary against the model
+	// but not against the MCP client: the client held the very token that
+	// decides approvals, so a prompt-injected IDE agent could approve its own
+	// proposal. Now the grant's transport token is accepted on that grant's
+	// transport route and NOWHERE else, and a JWT is refused THERE — so the
+	// thing in the client's config can drive the agent loop and do nothing a
+	// person does. It becomes the grant-maker's claims (issued-at = the
+	// grant's creation) and then passes everything a JWT would: the
+	// revocation check below and the whole of companyAuthMiddleware.
+	companyID, grantID, onTransport := mcpTransportTarget(r)
+	if strings.HasPrefix(raw, mcp.TransportTokenPrefix) {
+		if !onTransport || s.mcp == nil {
+			writeError(w, http.StatusUnauthorized, "an MCP transport token authenticates only its grant's MCP transport")
+			return nil, false
+		}
+		sub, iat, err := s.mcp.TransportIdentity(r.Context(), companyID, grantID, raw)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid MCP transport token")
+			return nil, false
+		}
+		claims := &authn.Claims{Subject: sub, IssuedAt: iat.Unix()}
+		revoked, rerr := s.sessionRevoked(r.Context(), claims)
+		if rerr != nil {
+			writeError(w, http.StatusUnauthorized, "session state unavailable")
+			return nil, false
+		}
+		if revoked {
+			writeError(w, http.StatusUnauthorized, "session revoked: this account was locked")
+			return nil, false
+		}
+		return claims, true
+	}
+	if onTransport {
+		writeError(w, http.StatusUnauthorized, "the MCP transport takes its grant's transport token (returned once when the "+
+			"grant was made), not a person's sign-in token")
+		return nil, false
+	}
 	claims, err := s.verifier.Verify(r.Context(), raw)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid token")
@@ -127,6 +167,24 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*authn.Cl
 		return nil, false
 	}
 	return claims, true
+}
+
+// mcpTransportTarget reports whether r addresses an MCP grant's transport,
+// /v1/companies/{companyID}/agent/mcp/{grantID} (any method: the router
+// answers the ones it does not serve), and which. It is read from the path
+// itself because authenticate runs before the {grantID} route is matched;
+// "grants" is not a UUID, so the grant-management routes never match.
+func mcpTransportTarget(r *http.Request) (uuid.UUID, uuid.UUID, bool) {
+	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	if len(parts) != 7 || parts[0] != "" || parts[1] != "v1" || parts[2] != "companies" || parts[4] != "agent" || parts[5] != "mcp" {
+		return uuid.Nil, uuid.Nil, false
+	}
+	c, err1 := uuid.Parse(parts[3])
+	g, err2 := uuid.Parse(parts[6])
+	if err1 != nil || err2 != nil {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return c, g, true
 }
 
 // authnOnlyMiddleware guards POST /v1/companies: verify the JWT, set the subject

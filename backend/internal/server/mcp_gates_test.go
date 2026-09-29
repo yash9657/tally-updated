@@ -77,7 +77,7 @@ func TestMCPPreviewThenCommitWaitsForTheInbox(t *testing.T) {
 	b := newAgentBooks(t, srv)
 	setAutonomy(t, b.companyID, "create payment", policy.L3)
 	grant := createMCPGrant(t, srv, b.base, []string{"create payment"}, nil)
-	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 	c.initialize("2025-11-25")
 	runID := sessionRunID(t, c)
 
@@ -255,7 +255,7 @@ func TestMCPInjectionSuiteCommitsNothing(t *testing.T) {
 			if tc.atk == atkNotDelegated {
 				g = salesOnly
 			}
-			c := newMCPClient(t, srv, b.base, g, ownerToken(t, srv))
+			c := newMCPClient(t, srv, b.base, g, grantToken(t, g))
 			c.initialize("2025-06-18")
 			runID := sessionRunID(t, c)
 			unknown += mcpAttack(t, c, attackScript(tc.atk, "5000.00", fx))
@@ -326,19 +326,19 @@ func TestMCPCrossTenantRefusal(t *testing.T) {
 	setAutonomy(t, a.companyID, "create payment", policy.L3)
 	gA := createMCPGrant(t, srv, a.base, []string{"create payment"}, nil)
 	gB := createMCPGrant(t, srv, bb.base, []string{"create payment"}, nil)
-	owner := ownerToken(t, srv)
-	ca := newMCPClient(t, srv, a.base, gA, owner)
+	ca := newMCPClient(t, srv, a.base, gA, grantToken(t, gA))
 	ca.initialize("2025-06-18")
 
 	t.Run("company A's grant does not exist in company B", func(t *testing.T) {
-		wrong := newMCPClient(t, srv, bb.base, gA, owner)
+		// Its token is looked up under B's scope, where the grant is not.
+		wrong := newMCPClient(t, srv, bb.base, gA, grantToken(t, gA))
 		r := wrong.call("initialize", map[string]any{"protocolVersion": "2025-06-18"})
-		if r.code != http.StatusNotFound {
+		if r.code != http.StatusUnauthorized {
 			t.Fatalf("A's grant under B's URL: %d %s", r.code, r.raw)
 		}
 	})
 	t.Run("company A's session does not exist under company B's grant", func(t *testing.T) {
-		cb := newMCPClient(t, srv, bb.base, gB, owner)
+		cb := newMCPClient(t, srv, bb.base, gB, grantToken(t, gB))
 		cb.session, cb.version = ca.session, ca.version
 		if r := cb.call("tools/list", nil); r.code != http.StatusNotFound {
 			t.Fatalf("A's session on B's grant: %d %s", r.code, r.raw)
@@ -346,21 +346,29 @@ func TestMCPCrossTenantRefusal(t *testing.T) {
 	})
 	t.Run("a session of one grant is refused on another grant of the same company", func(t *testing.T) {
 		g2 := createMCPGrant(t, srv, a.base, []string{"create payment"}, nil)
-		c2 := newMCPClient(t, srv, a.base, g2, owner)
+		c2 := newMCPClient(t, srv, a.base, g2, grantToken(t, g2))
 		c2.session, c2.version = ca.session, ca.version
 		if r := c2.call("ping", nil); r.code != http.StatusNotFound {
 			t.Fatalf("A's session on A's other grant: %d %s", r.code, r.raw)
 		}
 	})
+	t.Run("one grant's token does not open another grant's transport", func(t *testing.T) {
+		g3 := createMCPGrant(t, srv, a.base, []string{"create payment"}, nil)
+		cross := newMCPClient(t, srv, a.base, gA, grantToken(t, g3))
+		if r := cross.call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); r.code != http.StatusUnauthorized {
+			t.Fatalf("g3's token on gA's transport: %d %s", r.code, r.raw)
+		}
+	})
 	t.Run("another member of the same company may not spend the owner's grant", func(t *testing.T) {
+		// Their own sign-in token is not a transport credential at all.
 		other := newMCPClient(t, srv, a.base, gA, inviteOwner(t, srv, a.base))
-		if r := other.call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); r.code != http.StatusForbidden {
+		if r := other.call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); r.code != http.StatusUnauthorized {
 			t.Fatalf("second owner on the first owner's grant: %d %s", r.code, r.raw)
 		}
 	})
-	t.Run("a non-member is refused by the router before the MCP server runs", func(t *testing.T) {
+	t.Run("a non-member's token is refused before the MCP server runs", func(t *testing.T) {
 		stranger := newMCPClient(t, srv, a.base, gA, mintToken(t, srv, "mcp-stranger-"+uuid.NewString()[:8], "webauthn"))
-		if r := stranger.call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); r.code != http.StatusForbidden {
+		if r := stranger.call("initialize", map[string]any{"protocolVersion": "2025-06-18"}); r.code != http.StatusUnauthorized {
 			t.Fatalf("non-member: %d %s", r.code, r.raw)
 		}
 	})
@@ -377,7 +385,7 @@ func TestMCPCrossTenantRefusal(t *testing.T) {
 			t.Fatalf("A's session read B's voucher: %s", r.raw)
 		}
 		// The control: B's session reads the same id.
-		cbc := newMCPClient(t, srv, bb.base, gB, owner)
+		cbc := newMCPClient(t, srv, bb.base, gB, grantToken(t, gB))
 		cbc.initialize("2025-06-18")
 		if r := cbc.tool("get_vouchers__voucherid", map[string]any{"path_params": map[string]string{"voucherID": bVoucher}}); r.isError() || !strings.Contains(r.raw, "B's own payment") {
 			t.Fatalf("CONTROL: B's own session cannot read B's voucher, so the refusal above proves nothing: %s", r.raw)
@@ -405,7 +413,7 @@ func TestMCPManifestChangeIsRefused(t *testing.T) {
 	srv := newAgentServer(t)
 	b := newAgentBooks(t, srv)
 	grant := createMCPGrant(t, srv, b.base, []string{"create payment"}, nil)
-	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 	init := c.initialize("2025-06-18")
 	pinned, _ := init.result()["_meta"].(map[string]any)["khata/manifest_hash"].(string)
 	runID := sessionRunID(t, c)
@@ -440,7 +448,7 @@ func TestMCPManifestChangeIsRefused(t *testing.T) {
 		t.Fatalf("refused calls recorded %d decision(s)", n-before)
 	}
 	// A new session sees (and pins) the new manifest.
-	c2 := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c2 := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 	h2, _ := c2.initialize("2025-06-18").result()["_meta"].(map[string]any)["khata/manifest_hash"].(string)
 	if h2 == pinned {
 		t.Fatal("the changed registry produced the same manifest hash")
@@ -487,7 +495,7 @@ func TestMCPDelegationCeiling(t *testing.T) {
 		}
 	})
 
-	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 	c.initialize("2025-06-18")
 	runID := sessionRunID(t, c)
 	t.Run("an undelegated write is not a tool", func(t *testing.T) {
@@ -568,7 +576,7 @@ func TestMCPRevokingAGrantStopsItsRuns(t *testing.T) {
 	srv := newAgentServer(t)
 	b := newAgentBooks(t, srv)
 	grant := createMCPGrant(t, srv, b.base, []string{"create payment"}, nil)
-	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 	c.initialize("2025-06-18")
 	runID := sessionRunID(t, c)
 	pv := c.tool("post_vouchers_payment", paymentArgs(b, "Office Rent", "HDFC Bank", "900.00"))
@@ -614,7 +622,7 @@ func TestMCPIdleRunNeverAsksAModel(t *testing.T) {
 	})
 	srv.ConfigureAgent(server.AgentOptions{LLM: model.client(t), Now: clock.Now})
 	grant := createMCPGrant(t, srv, b.base, []string{"create payment"}, nil)
-	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, grant, grantToken(t, grant))
 	c.initialize("2025-06-18")
 	runID := sessionRunID(t, c)
 	for i := 0; i < 5; i++ {

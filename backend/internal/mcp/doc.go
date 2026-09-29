@@ -7,9 +7,14 @@
 //
 // An agent principal acting for ONE human under a standing grant that human
 // made (0105's agent_mcp_grant): ACL keys, a paise ceiling, an expiry. It
-// authenticates with that human's own bearer token through internal/authn and
-// the router's companyAuthMiddleware — there is no second identity system,
-// and a grant is usable only with its own user's token, in its own company.
+// authenticates with the grant's TRANSPORT TOKEN (0106), returned once when
+// the grant is made and accepted on that grant's transport route and nowhere
+// else; the router turns it into the grant-maker's claims and runs the whole
+// of companyAuthMiddleware on them. ⛔ Not the human's own JWT, which the
+// transport refuses: wave 2 shipped with the client holding the person's
+// token, and that token could decide the client's own approvals (the wave-2
+// review) — so "every commit waits for a human" held against the model but
+// not against the client.
 //
 // # ⛔ THE SAME PATH AS THE IN-APP AGENT, BY CONSTRUCTION
 //

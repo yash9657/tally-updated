@@ -17,7 +17,7 @@ Resource Metadata, Client ID Metadata Documents) is **not** built; §4 says what
 ## 1. The shape in one screen
 
 ```
- MCP client ──POST /v1/companies/{c}/agent/mcp/{grant}──► companyAuthMiddleware (bearer = the human's JWT;
+ MCP client ──POST /v1/companies/{c}/agent/mcp/{grant}──► companyAuthMiddleware (bearer = the grant's transport token, 0106;
    (Claude Desktop, ChatGPT, an IDE)                       membership; `display agent-mcp`)
                                                                    │
                                                    internal/mcp.Server.Serve
@@ -122,6 +122,20 @@ before, so it narrows nothing). The frontend's `AgentProvenanceSource` union gai
 ---
 
 ## 4. Decision 3 — identity: the human's own bearer token, plus a grant; no second identity system
+
+> ⛔ **AMENDED BY THE WAVE-2 REVIEW (migration 0106).** The human's own JWT was not a boundary: the MCP
+> client held the very token that decides approvals (`POST /agent/approvals/{id}/decision`) and posts
+> vouchers, so a prompt-injected client could approve its own `commit_preview`. A grant now carries a
+> **transport token** (`mcpt_` + 32 random bytes, returned once by `POST /agent/mcp/grants`, stored as
+> SHA-256 with the grant-maker's subject). `authenticate` accepts it **only** on
+> `/v1/companies/{c}/agent/mcp/{grant}` for that grant, and **refuses a JWT there** (401); off the
+> transport it is 401. It becomes the grant-maker's claims with `iat` = the grant's `created_at`, so
+> membership, level, PDP and lock-revocation all still apply. Gate: `TestMCPTransportTokenCannotActAsThePerson`
+> (the token cannot decide its own approval, post a voucher or make a grant; the owner's JWT cannot drive
+> the transport; a forged token is refused; control: the human approves with their JWT, 1 voucher).
+> A grant made before 0106 has no token and is unusable; make a new one. The text below is the original
+> decision, kept for the record; where it says "the human's JWT" on the transport, read "the grant's
+> transport token".
 
 - **Authentication** is the existing `internal/authn` + `companyAuthMiddleware`, unmodified: the MCP
   client sends the human's IdP JWT. Membership, level, session revocation all apply before the MCP

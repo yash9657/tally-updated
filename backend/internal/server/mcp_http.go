@@ -13,6 +13,7 @@ import (
 
 	"github.com/khata/cored/internal/actions"
 	"github.com/khata/cored/internal/mcp"
+	"github.com/khata/cored/internal/platform/db"
 )
 
 // mcp_http.go mounts the MCP server (W6, D126) inside /v1/companies/{companyID},
@@ -27,8 +28,11 @@ import (
 //	DELETE /agent/mcp/{grantID}              display agent-mcp  end a session
 //
 // The transport URL an MCP client is configured with is therefore
-// https://<host>/v1/companies/<company>/agent/mcp/<grant>, with the human's
-// bearer token.
+// https://<host>/v1/companies/<company>/agent/mcp/<grant>, with the grant's
+// TRANSPORT TOKEN as its bearer (0106) — returned once when the grant is made,
+// accepted on that URL and nowhere else. ⛔ Not the human's JWT: the transport
+// refuses it, because a client holding the person's token could decide its
+// own approvals (the wave-2 review).
 
 func (s *Server) mcpRoutes(r chi.Router) {
 	r.Post("/agent/mcp/grants", s.handleMCPCreateGrant)
@@ -97,16 +101,21 @@ func (s *Server) handleMCPCreateGrant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "expires_at is required: a standing grant must say when it ends")
 		return
 	}
+	sub, _ := db.SubjectFromContext(ctx)
 	g, err := s.mcp.CreateGrant(ctx, mcp.NewGrant{CompanyID: companyID, UserID: userID, ClientName: req.ClientName,
 		ACLKeys: req.Delegate, MaxAmountPaise: req.MaxAmountPaise, ExpiresAt: *req.ExpiresAt,
 		// The grant carries the step-up of the request that MADE it, as a
 		// run's delegation carries its starter's (policy.Delegation.StepUp).
-		StepUp: stepUpFrom(ctx)})
+		StepUp: stepUpFrom(ctx), Subject: sub})
 	if err != nil {
 		writeMCPErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"grant": g, "mcp_path": s.mcpPath(companyID, g.ID)})
+	// ⛔ THE TRANSPORT TOKEN IS SHOWN HERE ONCE, and is what the MCP client is
+	// configured with — never the person's own sign-in token, which the
+	// transport refuses (0106).
+	writeJSON(w, http.StatusCreated, map[string]any{"grant": g, "mcp_path": s.mcpPath(companyID, g.ID),
+		"transport_token": g.TransportToken})
 }
 
 func (s *Server) handleMCPListGrants(w http.ResponseWriter, r *http.Request) {

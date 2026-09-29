@@ -22,7 +22,7 @@ func TestMCPProfileToolsReachW3ThroughTheAgent(t *testing.T) {
 	srv := newAgentServer(t)
 	b := profiledBooks(t, srv)
 	g := createMCPGrant(t, srv, b.base, nil, nil) // read-only: profiles need no write key
-	c := newMCPClient(t, srv, b.base, g, ownerToken(t, srv))
+	c := newMCPClient(t, srv, b.base, g, grantToken(t, g))
 	c.initialize("2025-06-18")
 
 	names := c.toolNames()
