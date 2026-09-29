@@ -120,6 +120,12 @@ func detectRealtime(ctx context.Context, tx pgx.Tx, v voucherFacts, now time.Tim
 
 // The balance is re-derived from POSTINGS here; the detector reads it from
 // ledger_balance (the incrementally maintained total). Two roads to one figure.
+//
+// ⛔ voucher_ids IS EVERY VOUCHER THAT MOVED THE BALANCE, up to MaxVoucherIDs
+// (5000, 0104; the wave-2 review): the balance is the opening balance plus
+// the party's legs on exactly these vouchers. A LIMIT 200 on both sides kept
+// the evidence gate green while an auditor summing the list could not reach
+// the figure; the 5000 cut, on both sides, is the stated residual.
 const evidenceCreditLimit = `
 	WITH l AS (
 	  SELECT credit_limit,
@@ -137,7 +143,7 @@ const evidenceCreditLimit = `
 	     AND EXISTS (SELECT 1 FROM posting p WHERE p.voucher_version_id = vh.current_version_id
 	                                           AND p.ledger_id = $1::uuid)
 	   ORDER BY vh.voucher_date DESC NULLS LAST, vh.voucher_id DESC
-	   LIMIT 200)
+	   LIMIT 5000)
 	SELECT l.credit_limit, l.op + mv.net AS balance, l.op + mv.net - l.credit_limit AS excess,
 	       ARRAY(SELECT voucher_id FROM vs) AS voucher_ids
 	  FROM l, mv
@@ -206,7 +212,7 @@ func creditLimitCandidate(ctx context.Context, tx pgx.Tx, ledgerID uuid.UUID, vo
 		SELECT vh.voucher_id FROM voucher_head vh
 		 WHERE vh.is_deleted = false
 		   AND EXISTS (SELECT 1 FROM posting p WHERE p.voucher_version_id = vh.current_version_id AND p.ledger_id = $1)
-		 ORDER BY vh.voucher_date DESC NULLS LAST, vh.voucher_id DESC LIMIT 200`, ledgerID)
+		 ORDER BY vh.voucher_date DESC NULLS LAST, vh.voucher_id DESC LIMIT 5000`, ledgerID)
 	if err != nil {
 		return Candidate{}, false, err
 	}

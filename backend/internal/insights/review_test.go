@@ -4,8 +4,11 @@ package insights_test
 // scenario that broke. Mutation proofs are listed per test.
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/insights"
 	"github.com/khata/cored/internal/ledger"
@@ -135,5 +138,75 @@ func TestTheMorningDigestIsNeverLost(t *testing.T) {
 	}
 	if len(d.Items) == 0 {
 		t.Fatal("the digest has no items though the night found insights")
+	}
+}
+
+// TestEvidenceVoucherIDsAddUpToTheFigures: the W4 contract is that an
+// insight's voucher_ids reproduce its numbers. Before the review the credit
+// breach listed only the 200 most recent vouchers (the balance summed them
+// all), and customer_slower listed only the raising invoices of bills that
+// receipts had part-paid.
+//
+// Mutations (run for the review): LIMIT 200 restored on the credit-limit
+// list turns the "sum of the listed vouchers" check red once the party has
+// more than 200; customer_slower's list back to the raising invoices only
+// turns the receipt check red.
+func TestEvidenceVoucherIDsAddUpToTheFigures(t *testing.T) {
+	b := newBook(t)
+	b.seed()
+	// A part-payment against one of Kaveri's overdue bills (KT-5).
+	b.settle(ledger.Receipt, b.kaveri, b.day(-100), "KT-5", dec("100"))
+	// 201 small debits to Ganga: more than the old 200 cap.
+	for i := 0; i < 201; i++ {
+		b.post("", ledger.VoucherInput{Class: ledger.Journal, VoucherDate: b.day(0),
+			Postings: []ledger.PostingInput{{LedgerID: b.ganga, DrCr: ledger.Debit, Amount: dec("1")},
+				{LedgerID: b.sales, DrCr: ledger.Credit, Amount: dec("1")}}})
+	}
+	b.drain()
+	b.night(b.T)
+
+	var breach, slow *insights.Insight
+	for _, in := range b.open() {
+		in := in
+		switch in.Type {
+		case insights.TypeCreditLimitBreach:
+			breach = &in
+		case insights.TypeCustomerSlower:
+			slow = &in
+		}
+	}
+	if breach == nil || slow == nil {
+		t.Fatalf("seed: breach %v, slower %v", breach != nil, slow != nil)
+	}
+	sum := func(sql string, args ...any) string {
+		var s string
+		if err := b.pool.RunInReadOnlyTx(b.ctx, func(ctx context.Context, tx pgx.Tx) error {
+			return tx.QueryRow(ctx, sql, args...).Scan(&s)
+		}); err != nil {
+			t.Fatalf("sum: %v", err)
+		}
+		return s
+	}
+	// Balance = opening + the party's legs on exactly the listed vouchers.
+	got := sum(`SELECT to_char(
+	             (SELECT CASE WHEN opening_dc = 'D' THEN opening_balance ELSE -opening_balance END FROM ledger WHERE id = $1)
+	           + COALESCE((SELECT SUM(CASE WHEN p.dr_cr = 'D' THEN p.amount ELSE -p.amount END)
+	                         FROM posting p JOIN voucher_head vh ON vh.current_version_id = p.voucher_version_id
+	                        WHERE p.ledger_id = $1 AND vh.voucher_id = ANY($2)), 0), 'FM999999990.00')`,
+		b.ganga, breach.VoucherIDs)
+	if got != breach.Payload["balance"] {
+		t.Errorf("credit breach: opening + the %d listed vouchers = %s, payload balance %s", len(breach.VoucherIDs), got, breach.Payload["balance"])
+	}
+	// Overdue amount = the net of the listed vouchers' allocations on the
+	// overdue bills, receipts included.
+	got = sum(`SELECT to_char(COALESCE(SUM(CASE WHEN ba.dr_cr = 'D' THEN ba.amount ELSE -ba.amount END), 0), 'FM999999990.00')
+	             FROM bill_allocation ba JOIN voucher_head vh ON vh.current_version_id = ba.voucher_version_id
+	            WHERE ba.ledger_id = $1 AND vh.voucher_id = ANY($2) AND ba.ref_name <> 'On Account'
+	              AND ba.ref_name IN (SELECT ba2.ref_name FROM bill_allocation ba2
+	                                   JOIN voucher_head vh2 ON vh2.current_version_id = ba2.voucher_version_id
+	                                  WHERE vh2.voucher_id = ANY($2) AND ba2.ref_type = 'NEW' AND ba2.ledger_id = $1)`,
+		b.kaveri, slow.VoucherIDs)
+	if got != slow.Payload["overdue_amount"] {
+		t.Errorf("customer_slower: the %d listed vouchers net to %s, payload overdue_amount %s", len(slow.VoucherIDs), got, slow.Payload["overdue_amount"])
 	}
 }

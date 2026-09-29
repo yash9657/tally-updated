@@ -365,7 +365,11 @@ func sortedKeys(m map[string]fact) []string {
 // 3): a 60-day bill is normal for Ganga and alarming for Kaveri.
 //
 // Pending comes from reporting.Outstandings (via the detector); the evidence
-// re-nets bill_allocation itself. Opening bills are out of both: they have no
+// re-nets bill_allocation itself. voucher_ids is every voucher with an
+// allocation on an overdue bill — the invoice that raised it AND the receipts
+// and notes that part-settled it — so the listed vouchers net to
+// overdue_amount (the wave-2 review: the raising invoices alone overstated it
+// by every part-payment). Opening bills are out of both: they have no
 // raise date, and an age measured from the books' first day is not a habit.
 const evidenceCustomerSlower = `
 	WITH p90 AS (SELECT value_num AS d FROM entity_facts WHERE id = $3::uuid),
@@ -383,7 +387,12 @@ const evidenceCustomerSlower = `
 	       (SELECT count(*) FROM o) AS overdue_bills,
 	       (SELECT max($2::date - raised) FROM o) AS oldest_days,
 	       (SELECT COALESCE(sum(pending), 0) FROM o) AS overdue_amount,
-	       ARRAY(SELECT raised_by FROM o) AS voucher_ids`
+	       ARRAY(SELECT DISTINCT vv.voucher_id
+	               FROM bill_allocation ba
+	               JOIN voucher_version vv ON vv.id = ba.voucher_version_id` + currentJoin + `
+	              WHERE ba.ledger_id = $1::uuid AND vv.voucher_date <= $2::date
+	                AND ba.ref_name IN (SELECT ref_name FROM o)
+	              ORDER BY 1 LIMIT 5000) AS voucher_ids`
 
 func (n *night) customerSlower() ([]Candidate, error) {
 	p90s, err := n.facts("receipt_lag_p90_days")
@@ -417,7 +426,7 @@ func (n *night) customerSlower() ([]Candidate, error) {
 			bills  int
 			oldest int
 			amount = decimal.Zero
-			ids    []uuid.UUID
+			refs   []string
 		)
 		for _, b := range party.Bills {
 			if b.OnAccount || !b.Pending.IsPositive() {
@@ -436,10 +445,20 @@ func (n *night) customerSlower() ([]Candidate, error) {
 			if age > oldest {
 				oldest = age
 			}
-			ids = append(ids, rd.voucher)
+			refs = append(refs, b.RefName)
 		}
 		if bills == 0 {
 			continue
+		}
+		ids, err := uuidList(n.ctx, n.tx, `
+			SELECT DISTINCT vv.voucher_id
+			  FROM bill_allocation ba
+			  JOIN voucher_version vv ON vv.id = ba.voucher_version_id`+currentJoin+`
+			 WHERE ba.ledger_id = $1 AND vv.voucher_date <= $2::date AND ba.ref_name = ANY($3)
+			 ORDER BY 1 LIMIT 5000`,
+			party.LedgerID, n.asOfS(), refs)
+		if err != nil {
+			return nil, err
 		}
 		cands = append(cands, Candidate{
 			Type: TypeCustomerSlower, EntityKind: "party", EntityKey: key, EntityName: party.LedgerName,
@@ -1122,7 +1141,7 @@ const evidenceGSTLiability = `
 	SELECT ($1::date + interval '1 month' + interval '19 days')::date AS due_date,
 	       t.o AS output_tax, t.i AS itc_available,
 	       GREATEST(t.o - t.i, 0) AS net_payable, GREATEST(t.i - t.o, 0) AS itc_carried_forward,
-	       ARRAY(SELECT voucher_id FROM c ORDER BY tax DESC, voucher_id LIMIT 200) AS voucher_ids
+	       ARRAY(SELECT voucher_id FROM c ORDER BY tax DESC, voucher_id LIMIT 5000) AS voucher_ids
 	  FROM t
 	 WHERE NOT EXISTS (SELECT 1 FROM gst_return_filing f WHERE f.form = 'GSTR3B' AND f.return_period = $2)`
 
@@ -1200,8 +1219,10 @@ func (n *night) gstLiability() ([]Candidate, error) {
 		}
 		return cs[i].id.String() < cs[j].id.String()
 	})
-	if len(cs) > 200 {
-		cs = cs[:200]
+	// Every contributing voucher up to MaxVoucherIDs (was 200): the two
+	// figures are sums over exactly this list (the wave-2 review).
+	if len(cs) > MaxVoucherIDs {
+		cs = cs[:MaxVoucherIDs]
 	}
 	ids := make([]uuid.UUID, len(cs))
 	for i, c := range cs {

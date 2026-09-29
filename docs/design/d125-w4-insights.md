@@ -186,6 +186,14 @@ insightd/requirements.txt | wc -l`: **0**. insightd is not touched.
    instead of misleading silently (`TestTheReviewsNarrationsAreRefusedOrBound`). The model's words can
    still say something false about a correctly-labelled figure; Go-owned sentence frames (the model
    choosing among vetted phrasings) would close that and are OWED.
+4b. **voucher_ids reproduce the figures, up to 5000 (wave-2 review, 0104).** The credit breach listed the
+   200 most recent vouchers while its balance summed every one, customer_slower listed only the raising
+   invoices of part-paid bills, and GST liability cut at 200 — the gate passed because both sides cut the
+   same way. Now: the credit breach lists every voucher that moved the balance (balance = opening + the
+   party's legs on exactly those), customer_slower every voucher with an allocation on an overdue bill
+   (receipts and notes included), GST every contributing voucher; 0104 raises `insight_voucher_ids_capped`
+   to 5000 (`TestEvidenceVoucherIDsAddUpToTheFigures`, 201 extra vouchers and a part-payment). A party with
+   more than 5000 vouchers is still raised, cut at 5000 on both sides, and cannot be summed from its list.
 5. **Priors are judgement**, not measurement; the 0.70 floor is only as good as the feedback that moves
    them. No false-positive rate has been measured on real books (§6 item 3).
 6. `insight_nightly_due_companies` returns EVERY company without a run today; on a large tenant base the

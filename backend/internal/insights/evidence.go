@@ -289,8 +289,15 @@ func checkShape(c Candidate) error {
 	if strings.TrimSpace(c.Fingerprint) == "" {
 		return fmt.Errorf("insights: %s has no fingerprint", c.Type)
 	}
-	if len(c.VoucherIDs) > 200 {
-		return fmt.Errorf("insights: %s names %d vouchers (cap 200)", c.Type, len(c.VoucherIDs))
+	if len(c.VoucherIDs) > MaxVoucherIDs {
+		return fmt.Errorf("insights: %s names %d vouchers (cap %d)", c.Type, len(c.VoucherIDs), MaxVoucherIDs)
 	}
 	return nil
 }
+
+// MaxVoucherIDs is 0104's insight_voucher_ids_capped. A list is complete up to
+// it — the listed vouchers reproduce the figures — and the detectors whose
+// lists are unbounded (a party's whole history) cut at it on BOTH sides, so a
+// party beyond it is still raised; that it then cannot be summed from the
+// list is d125's stated residual.
+const MaxVoucherIDs = 5000
