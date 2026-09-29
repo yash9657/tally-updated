@@ -307,7 +307,9 @@ def build_all() -> list[dict]:
     ))
     fx.append(make(
         "adv-missing-gstin",
-        "No GSTIN present; supplier can't be matched -> manual",
+        (
+        "No GSTIN present; no candidate supplier ledger at all -> the supplier's state is genuinely unknowable from this document, so the derivation reaches no intra conclusion and the whole tax sits in IGST. That is the no-conclusion DEFAULT, not a derived claim about this vendor: the amount is 180 either way and only the split is unasserted, which the draft says via unresolved 'supplier_state'. Contrast adv-ambiguous-supplier: candidates exist there and agree on a state, so it is resolved despite the ledger being unresolved. Ambiguous is not unknown."
+        ),
         supplier_state="27", pos="27", rcm=False, exempt=False,
         lines=[line("Item", "8471", 2, 500, "18.00")],
         plant_pii=False,
@@ -316,7 +318,9 @@ def build_all() -> list[dict]:
     ))
     fx.append(make(
         "adv-ambiguous-supplier",
-        "Two party ledgers match -> no auto-select -> manual",
+        (
+        "Two party ledgers match -> no auto-select -> manual. Both candidates are the SAME vendor's ledgers and both sit in state 27, so which account to credit is unresolved but the supplier's STATE is not: the document's own place of supply is 27 too, and the split is the ordinary intra-state cgst 90 / sgst 90. This fixture previously expected igst 180 on the reasoning that an unmatched supplier has an unknown state — true when there is NO candidate (see adv-missing-gstin), false here, where every candidate agrees. 'supplier' is therefore NOT unresolved; only 'party' is."
+        ),
         supplier_state="27", pos="27", rcm=False, exempt=False,
         lines=[line("Item", "8471", 2, 500, "18.00")],
         classify={"doc_type": "purchase_invoice", "is_purchase": True, "supplier": "ambiguous"},
@@ -334,7 +338,9 @@ def build_all() -> list[dict]:
     fx.append(bad)
     fx.append(make(
         "adv-non-purchase-doc",
-        "Delivery challan / quotation -> not a purchase -> manual",
+        (
+        "Delivery challan / quotation -> not a purchase -> manual, and NOTHING is posted. The derived_gst block below is therefore not a claim about this document's tax at all — a challan has none to claim. It records the no-conclusion default the pipeline reaches when there is no candidate supplier ledger (contrast adv-ambiguous-supplier, where candidates exist and agree, so the state IS known). The value is retained only so the oracle has something to check; a challan that carried no derived_gst at all would be more honest, and is tracked in HANDOFF §6."
+        ),
         supplier_state="27", pos="27", rcm=False, exempt=False,
         lines=[line("Item", "8471", 2, 500, "18.00")],
         classify={"doc_type": "other", "is_purchase": False},
@@ -368,6 +374,24 @@ def build_all() -> list[dict]:
     empty["ground_truth"]["line_items"] = []
     empty["ground_truth"]["derived_gst"] = {"cgst": "0.0000", "sgst": "0.0000", "igst": "0.0000"}
     fx.append(empty)
+
+    # The no-conclusion GST default (c3aca5d): when there is NO candidate
+    # supplier ledger the supplier's state is unknowable from the document, so
+    # the derivation reaches no intra conclusion and the whole tax sits in IGST,
+    # with the unasserted split named in expected_unresolved. Ambiguous is not
+    # unknown: adv-ambiguous-supplier's candidates agree on state 27, so it
+    # stays intra-state and only the party is unresolved. These three fixtures
+    # were corrected by hand in July and this generator was not, so every CI
+    # run regenerated the old expectations and failed validation against the
+    # oracle; the generator now states what the fixtures state.
+    by_id = {f["id"]: f for f in fx}
+    no_candidate_default = {"cgst": "0.0000", "sgst": "0.0000", "igst": "180.0000"}
+    for fid in ("adv-missing-gstin", "adv-non-purchase-doc"):
+        by_id[fid]["ground_truth"]["derived_gst"] = dict(no_candidate_default)
+        by_id[fid]["ground_truth"]["expected_unresolved"] = ["party", "supplier"]
+    amb = by_id["adv-ambiguous-supplier"]
+    amb["classify"]["supplier_candidates"] = ["L-PARTY-1", "L-PARTY-2"]
+    amb["ground_truth"]["expected_unresolved"] = ["party"]
 
     return fx
 
