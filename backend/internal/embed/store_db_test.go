@@ -24,7 +24,7 @@ import (
 //   - without pgvector (postgres:16, the shared tally_pg today): the store
 //     works lexically and every vector path is refused or marked Degraded
 //     with the database's own reason;
-//   - with pgvector (pgvector/pgvector:pg16): vectors are written, ranked by
+//   - with pgvector (pgvector/pgvector:pg16-trixie): vectors are written, ranked by
 //     HNSW, and scoped by FORCE RLS like everything else.
 //
 // ⛔ EMB_REQUIRE_VECTOR=1 turns "no pgvector" into a FAILURE. CI sets it once
@@ -124,7 +124,10 @@ func TestTheStoreOnThisCluster(t *testing.T) {
 			t.Errorf("no vectors may be written, and the provider not called, without pgvector: %+v calls=%d", res, emb.calls)
 		}
 		_, vErr := s.Vector(a, KindNarration, emb.Version(), trigramVector("kaveri"), 3)
-		if !errors.Is(vErr, ErrVectorUnavailable) || !strings.Contains(vErr.Error(), "pgvector/pgvector:pg16") {
+		// The fix it names is the -trixie tag: the bare pg16 tag is Debian 12
+		// and raises a collation mismatch on an existing volume (the wave-2
+		// review; docker-compose.yml).
+		if !errors.Is(vErr, ErrVectorUnavailable) || !strings.Contains(vErr.Error(), "pgvector/pgvector:pg16-trixie") {
 			t.Errorf("Vector without pgvector: %v, want ErrVectorUnavailable naming the fix", vErr)
 		}
 		sr, err := s.Search(a, KindNarration, "bijli bill", 3)

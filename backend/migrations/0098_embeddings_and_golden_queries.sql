@@ -10,7 +10,12 @@
 -- ⛔ IT DEGRADES LOUDLY, NOT SILENTLY, WHEN pgvector IS ABSENT
 -- ===========================================================================
 -- The shared dev container (tally_pg) and CI ran postgres:16, which has no
--- pgvector; docker-compose.yml and ci.yml now name pgvector/pgvector:pg16,
+-- pgvector; docker-compose.yml and ci.yml now name pgvector/pgvector:pg16-trixie
+-- (⛔ the -trixie tag: the bare pg16 tag is Debian 12, glibc 2.36, and on a
+-- volume initialised by postgres:16 — Debian 13, glibc 2.41 — it raises a
+-- collation-version mismatch that needs a REINDEX of every text index;
+-- docker-compose.yml says why; this file's advice named the bare tag until
+-- the wave-2 review),
 -- but a database created before the switch — or a managed Postgres without
 -- the extension — must still migrate, because every other lane's tests run
 -- on it. So this file splits the store in two:
@@ -161,7 +166,7 @@ DECLARE
     v TEXT;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
-        RAISE WARNING 'embeddings DISABLED: pgvector is not installed on this server, so emb_vector was not created and only lexical (pg_trgm) search works. Fix: run Postgres from pgvector/pgvector:pg16, then SELECT emb_enable_vectors(); (docs/design/d122-w3-data-understanding.md, Wave 2).';
+        RAISE WARNING 'embeddings DISABLED: pgvector is not installed on this server, so emb_vector was not created and only lexical (pg_trgm) search works. Fix: run Postgres from pgvector/pgvector:pg16-trixie (NOT the bare pg16 tag: a collation mismatch on an existing volume), then SELECT emb_enable_vectors(); (docs/design/d122-w3-data-understanding.md, Wave 2).';
         RETURN 'disabled: pgvector is not installed on this server';
     END IF;
     CREATE EXTENSION IF NOT EXISTS vector;
@@ -214,7 +219,7 @@ CREATE OR REPLACE FUNCTION emb_vector_status(OUT enabled BOOLEAN, OUT detail TEX
                    THEN 'enabled: pgvector ' || (SELECT extversion FROM pg_extension WHERE extname = 'vector')
                WHEN EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector')
                    THEN 'disabled: pgvector is available on this server but not enabled; run SELECT emb_enable_vectors(); as the migration role'
-               ELSE 'disabled: pgvector is not installed on this server; run Postgres from pgvector/pgvector:pg16, then SELECT emb_enable_vectors();'
+               ELSE 'disabled: pgvector is not installed on this server; run Postgres from pgvector/pgvector:pg16-trixie (NOT the bare pg16 tag: a collation mismatch on an existing volume), then SELECT emb_enable_vectors();'
            END
 $$;
 GRANT EXECUTE ON FUNCTION emb_vector_status() TO tally_app;
