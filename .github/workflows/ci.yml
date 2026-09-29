@@ -350,6 +350,10 @@ jobs:
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
+          # Without this the action DROPS `severity` for SARIF output, so every
+          # MEDIUM/LOW finding tripped exit-code 1 while the table step, which
+          # does honour it, reported 0 failures (measured on PR #1).
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
         # NOT the action's `trivyignores` input: it concatenates the files into
