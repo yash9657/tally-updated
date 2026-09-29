@@ -374,11 +374,44 @@ func TestAcceptedAdversarialQueriesLeakNothing(t *testing.T) {
 		return out
 	}
 	baseline := runAll(b)
+	// Every value B can see in any published view. A changed answer
+	// to an ORDER-UNSTABLE, non-aggregating query is a different choice among
+	// B's own rows only if every cell in it is a value B could already see;
+	// anything else is a leak.
+	universe := func(tn tenant) map[string]bool {
+		set := map[string]bool{}
+		for _, v := range tierb.Views {
+			res, err := tierb.RunRawAsAgent(tn.ctx, pool, "SELECT * FROM agent."+v.Name)
+			if err != nil {
+				t.Fatalf("read agent.%s: %v", v.Name, err)
+			}
+			for _, r := range res.Rows {
+				for _, c := range r {
+					set[c] = true
+				}
+			}
+		}
+		return set
+	}
+	// B's universe is read BEFORE A's books exist, so a leak cannot
+	// contaminate the very set that is meant to recognise B's own values.
+	bSees := universe(b)
+	onlyB := func(res tierb.Result) bool {
+		for _, r := range res.Rows {
+			for _, c := range r {
+				if !bSees[c] {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
 	seedA(t, a)
 	after := runAll(b)
 	asA := runAll(a)
 
-	ran, dbErr, leaked, marker, sensitive := 0, 0, 0, 0, 0
+	ran, dbErr, leaked, marker, sensitive, unstable := 0, 0, 0, 0, 0, 0
 	for i, q := range corpus {
 		if !after[i].ok {
 			dbErr++
@@ -388,7 +421,14 @@ func TestAcceptedAdversarialQueriesLeakNothing(t *testing.T) {
 		if leaks(after[i].res) {
 			marker++
 		}
-		if !baseline[i].ok || baseline[i].key != after[i].key || leaks(after[i].res) {
+		changed := !baseline[i].ok || baseline[i].key != after[i].key
+		if changed && !leaks(after[i].res) && q.OrderUnstable() && !q.Aggregates() && onlyB(after[i].res) {
+			// SQL leaves which rows a LIMIT without ORDER BY returns
+			// unspecified; a different row of B's own is not a leak.
+			unstable++
+			changed = false
+		}
+		if changed || leaks(after[i].res) {
 			leaked++
 			if leaked <= 10 {
 				t.Errorf("CROSS-TENANT LEAK: tenant B's answer changed when tenant A's books were added: %s", q.SQL(200))
@@ -399,8 +439,9 @@ func TestAcceptedAdversarialQueriesLeakNothing(t *testing.T) {
 		}
 	}
 	t.Logf("accepted corpus: %d queries, %d ran as tenant B, %d refused by Postgres (type errors), %d leaked (%d by marker); "+
-		"%d of the %d that ran would register a leak of A's rows (their answer as A differs from B's)",
-		len(corpus), ran, dbErr, leaked, marker, sensitive, ran)
+		"%d of the %d that ran would register a leak of A's rows (their answer as A differs from B's); "+
+		"%d order-unstable answers moved among B's own rows",
+		len(corpus), ran, dbErr, leaked, marker, sensitive, ran, unstable)
 	if ran < 200 {
 		t.Errorf("only %d accepted queries actually ran — the replay is too thin to mean anything", ran)
 	}
