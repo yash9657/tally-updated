@@ -391,7 +391,7 @@ The 6.x numbers continue from `HANDOFF-AGENTIC-WAVE-1.md` §7.
   - **NEW (review, 0106): the MCP client holds a grant-bound transport token, not the person's JWT.**
     It is shown once when the grant is made; the transport refuses a JWT. Ratify, or replace with the
     OAuth 2.1 resource-server flow d126 §9 item 3 owes (which would supersede it).
-- **6.10 NEW: `/query` bypasses report-level grants.** It is authorized by a single `query` right, so a
+- **6.10 ✅ RESOLVED 2026-09-28 (`internal/server/query_authz.go`): `/query` now requires Display on every report its entity can reveal** — ledger_balances→trial-balance, vouchers/postings→day-book, outstandings→outstandings + bills-payable (receivables only when pinned `nature = ASSET`), stock_movements→stock-movement, bank_statement_lines→bank-statement, profile_facts→every report a fact summarises. An undeclared entity is refused (`TestEveryQueryEntityDeclaresItsReports`). The check judges the HUMAN's ACL; an agent's delegation is still judged only on `display query` — that narrowing is owed if delegations should name reports. Original finding: **`/query` bypassed report-level grants.** It is authorized by a single `query` right, so a
   level that has `query` but is denied Bills Payable can still read payables through the outstandings
   entity. The fix belongs in the PDP. The decision is whether to gate per entity (recommended) or accept
   the current rule until then.

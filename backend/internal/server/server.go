@@ -5093,6 +5093,19 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeQueryInvalid(w)
 		return
 	}
+
+	// (2b) The route right admitted the DOOR; the entity decides the BYTES. A
+	// caller must be able to open every report whose figures this entity can
+	// reveal (query_authz.go, §6.10). After the compile, so a malformed
+	// DSL keeps its 422 and only a valid query is judged; before Run, so a
+	// refused query reads nothing.
+	if reason, err := s.queryReportDenial(ctx, companyID, q); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check report access")
+		return
+	} else if reason != "" {
+		writeError(w, http.StatusForbidden, reason)
+		return
+	}
 	res, err := s.query.Run(ctx, q)
 	if err != nil {
 		if errors.Is(err, db.ErrNoCompany) {
