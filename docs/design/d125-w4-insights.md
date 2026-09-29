@@ -66,8 +66,12 @@ insightd/requirements.txt | wc -l`: **0**. insightd is not touched.
   transaction.
 - **D125-5. The scheduler is the repo's pattern, not River.** `insights.Poller` ticks every 5 s in
   `cored serve`: `insight_event_pending_companies()` → `ProcessEvents` (claimed `FOR UPDATE SKIP LOCKED`),
-  and after 02:00 IST `insight_nightly_due_companies(today)` → `RunNightly` → `ComposeDigest`. River is a
-  module dependency (§1.1).
+  and after 02:00 IST `insight_nightly_due_companies(today)` → `RunNightly`, then (wave-2 review, 0104)
+  `insight_digest_due_companies(today)` — the night ran, no company digest yet — → `ComposeDigest`, so a
+  night run by `POST /insights/run`, or a compose that failed, is followed by the digest on the next tick.
+  `ComposeDigest` refuses a date whose night has not run (`ErrNightlyNotRun`, HTTP 409
+  `NIGHTLY_NOT_RUN`): the first digest wins under UNIQUE, and one composed before 02:00 froze the day
+  without that night's findings (`TestTheMorningDigestIsNeverLost`). River is a module dependency (§1.1).
 - **D125-6. The model never sees a value and never writes a number.** The narrator sends each item's
   title and payload KEYS with labels and units — no figure and no name (so no tenant data leaves for
   narration). The model returns `{{key}}` templates. `Accept` refuses any Unicode numeral
@@ -154,14 +158,34 @@ insightd/requirements.txt | wc -l`: **0**. insightd is not touched.
 1. **Staleness is not wrongness.** An insight's evidence describes the books when it was found; a later
    voucher moves a balance and `V` / `GET …/evidence` answers `reproduces: false` with the diff. The
    nightly run retires a real-time insight whose evidence no longer holds and every nightly insight not
-   re-detected.
+   re-detected — **with three exceptions added by the wave-2 review**, each a case that withdrew a still-true
+   insight: (a) `credit_limit_breach` is re-judged on ANY leg to the party (a part-payment supersedes it
+   with the new balance) and, when its evidence stops reproducing, the night re-derives it and keeps it
+   while the party is still over (`TestAPartPaymentDoesNotWithdrawATrueBreach`: Rs 1,000 receipt, then a
+   limit raised to Rs 20,000, both keep one breach; a limit above the balance clears it); (b) an insight
+   detected at a LATER as-of than the night's is never retired by it (backfill via `NightlyFor`, a clock
+   stepped back); (c) a fact-backed nightly type (customer-slower, price creep, reorder-now, dead stock)
+   is not retired on a night whose facts are behind (`ErrAsOfBehind`)
+   (`TestAnEarlierNightDoesNotExpireLaterInsights`: night(T) then night(T−1) expired 5 before, 0 after).
+   The other real-time types are still withdrawn on any evidence mismatch; re-deriving them is OWED.
 2. **Cash evidence and currency-split refs.** The report nets a ref per currency, the evidence per ref;
    the due date could then differ. Such a night shows up as `evidence_refused`, never as a wrong figure.
 3. **GST liability is books-basis.** Voucher-level ITC eligibility only (the ledger-level default and
    Rule 36(4)'s 2B cap are not applied); RCM excluded; monthly filers only (QRMP owed).
 4. **Number words** in languages other than English / Hindi / Devanagari pass the raw check; "do" (Hindi
-   two) is not listed because it is an English verb. The model is never told a value, so such a word would
-   be invented, not copied.
+   two), "saath" (sixty) and first/second/third are not listed because they are everyday words, and Hindi
+   number words above twenty other than the tens are not listed. The model is never told a value, so such a
+   word would be invented, not copied. ⚠️ **Corrected by the wave-2 review**: this residual used to say
+   only other languages pass; in fact "gyarah", "tees" (both scripts), "dedh guna", "thrice", "halved",
+   "tenfold" and "IX" passed too. The list now carries Hindi 11–20, the tens, fractions and multiplicatives,
+   English multiplicatives, any `<number>fold`, and all-capitals Roman numerals.
+4a. **Roles (wave-2 review).** `CheckRendered` proves each figure is SOME payload value, not that the
+   model's words name the right one: "owes Rs {{credit_limit}}, within a credit limit of Rs {{balance}}"
+   passed. A model line now renders every figure that shares its unit with another figure of the same
+   finding WITH its declared label — "Rs 10000.00 (credit limit)" — so a swap contradicts itself on screen
+   instead of misleading silently (`TestTheReviewsNarrationsAreRefusedOrBound`). The model's words can
+   still say something false about a correctly-labelled figure; Go-owned sentence frames (the model
+   choosing among vetted phrasings) would close that and are OWED.
 5. **Priors are judgement**, not measurement; the 0.70 floor is only as good as the feedback that moves
    them. No false-positive rate has been measured on real books (§6 item 3).
 6. `insight_nightly_due_companies` returns EVERY company without a run today; on a large tenant base the

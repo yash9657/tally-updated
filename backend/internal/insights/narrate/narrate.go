@@ -6,8 +6,10 @@
 // It is sent, per item, the insight's title and its payload KEYS with their
 // labels and units — not one value, not even the party's name (so no tenant
 // data leaves for narration at all, and there is nothing for it to copy
-// wrong). It returns one line per item in which every figure and every name
-// is a {{key}} placeholder. Go then:
+// wrong — it cannot copy a value it was never shown, though it can still
+// misattribute a placeholder, which renderBound makes visible). It returns
+// one line per item in which every figure and every name is a {{key}}
+// placeholder. Go then:
 //
 //  1. REFUSES the narration if the model's raw text contains any digit in any
 //     script (ASCII, Devanagari, full-width, superscript — unicode.IsNumber),
@@ -25,12 +27,23 @@
 // records narrator = 'template' with narration_rejected saying why. No model
 // configured is the same path with an empty reason.
 //
+// ⛔ AND A FIGURE'S ROLE IS GO'S (the wave-2 review). Step 3 checks that each
+// figure is SOME payload value, not that the model's words around it name the
+// right one: "owes Rs {{credit_limit}}, within a limit of Rs {{balance}}"
+// passed. So where a finding has two figures of one unit, a model line renders
+// each with its declared label ("Rs 10000.00 (credit limit)"), see renderBound.
+//
 // ⚠️ RESIDUAL, STATED: a number spelled in a language this checker does not
-// list (Tamil words, say) passes step 1 — the English, Hindi and Devanagari
-// lists here are not every language. Step 3 cannot see a spelled number
-// either. The structural defence is upstream: the model is never TOLD a
-// value, so a spelled number it produces is invented, not copied — and an
-// invented number in words is what the adversarial list tries to close.
+// list (Tamil words, say), or a Hindi number word above twenty other than the
+// tens, passes step 1 — the lists here are not every word of every language.
+// Step 3 cannot see a spelled number either. And the model's words can still
+// SAY something false about a correctly-labelled figure ("only Rs 69384.00
+// (balance now owed), well within the limit"); the label makes that
+// contradiction visible, it does not prevent it. The structural defence is
+// upstream: the model is never TOLD a value, so a spelled number it produces
+// is invented, not copied. Go-owned sentence frames (the model choosing among
+// vetted phrasings rather than writing one) would close the last case and are
+// OWED (d125).
 package narrate
 
 import (
@@ -197,8 +210,18 @@ func Accept(ans Answer, items []insights.DigestItem) ([]string, error) {
 		if err := CheckRaw(ln.Text, it); err != nil {
 			return nil, fmt.Errorf("%w: %s: %v", ErrRejected, ln.Ref, err)
 		}
-		rendered := insights.RenderTemplate(ln.Text, it.Payload)
-		if err := CheckRendered(rendered, it.Payload); err != nil {
+		rendered, labels := renderBound(ln.Text, it)
+		// The role labels are Go's constants (types.go), so their own tokens
+		// ("their 90th-percentile days to pay") are allowed beside the
+		// payload's.
+		check := make(map[string]string, len(it.Payload)+len(labels))
+		for k, v := range it.Payload {
+			check[k] = v
+		}
+		for i, l := range labels {
+			check[fmt.Sprintf("\x00label%d", i)] = l
+		}
+		if err := CheckRendered(rendered, check); err != nil {
 			return nil, fmt.Errorf("%w: %s: %v", ErrRejected, ln.Ref, err)
 		}
 		out[i] = rendered
@@ -206,24 +229,98 @@ func Accept(ans Answer, items []insights.DigestItem) ([]string, error) {
 	return out, nil
 }
 
+// renderBound renders a MODEL line, binding every ambiguous figure to its role.
+//
+// ⛔ A FIGURE'S ROLE IS GO'S, NOT THE MODEL'S (the wave-2 review). The
+// placeholder rule guarantees every figure is a payload value; it cannot
+// guarantee the words the model put around it name the RIGHT value. "{{party}}
+// owes Rs {{credit_limit}}, within a credit limit of Rs {{balance}}" rendered
+// as "Ganga owes Rs 10000.00, within a credit limit of Rs 69384.00" — every
+// figure real, the meaning inverted — and passed both walls. Lexical checks on
+// the model's words are an arms race; so instead, wherever a finding has two
+// or more figures of the same unit (the only place roles can be swapped: two
+// amounts, two rates, two day counts), each is rendered WITH its declared
+// label: "Rs 10000.00 (credit limit)". A model that swaps them now writes a
+// sentence that contradicts itself on the owner's screen instead of one that
+// silently misleads, and the figure always carries its true role. A figure
+// alone in its unit cannot be confused with another and is rendered bare.
+// Templates are Go's own words and are rendered by RenderTemplate unchanged.
+func renderBound(text string, it insights.DigestItem) (string, []string) {
+	td, _ := insights.ByCode(it.Type)
+	perUnit := map[insights.Unit]int{}
+	for _, f := range td.Fields {
+		if f.Unit != insights.UnitText {
+			perUnit[f.Unit]++
+		}
+	}
+	var labels []string
+	out := boundRE.ReplaceAllStringFunc(text, func(m string) string {
+		sm := boundRE.FindStringSubmatch(m)
+		k, pct := sm[1], sm[2]
+		v, ok := it.Payload[k]
+		if !ok {
+			return "?"
+		}
+		f, ok := td.Field(k)
+		if !ok || f.Unit == insights.UnitText || perUnit[f.Unit] < 2 {
+			return v + pct
+		}
+		labels = append(labels, f.Label)
+		return v + pct + " (" + f.Label + ")"
+	})
+	return out, labels
+}
+
+var boundRE = regexp.MustCompile(`\{\{\s*([a-z][a-z0-9_]*)\s*\}\}(\s*%)?`)
+
 // numberWords are refused anywhere in a model's raw line: English, romanised
-// Hindi/Hinglish and Devanagari numerals and magnitudes. ("do" — Hindi two —
-// is left out on purpose: it is also the English verb, and refusing every
-// "do" would refuse honest sentences; its residual is the header's.)
+// Hindi/Hinglish and Devanagari numerals (1–20 and the tens), magnitudes,
+// fractions (dedh, dhai, sava, paune, aadha) and multiplicatives (thrice,
+// halved, dugna, guna). ⚠️ LEFT OUT ON PURPOSE, each also an everyday word:
+// "do" (Hindi two; the English verb), "saath" (sixty; "with"), "first" /
+// "second" / "third" (ordinals; "a second look"). Their residual is the
+// header's. The wave-2 review found "gyarah", "tees", "dedh guna", "thrice",
+// "halved", "tenfold" and "IX" all accepted by the first list.
 var numberWords = map[string]bool{}
 
 func init() {
 	for _, w := range strings.Fields(`zero one two three four five six seven eight nine ten eleven twelve
 		thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty
 		seventy eighty ninety hundred hundreds thousand thousands million millions billion billions
-		lakh lakhs lac lacs crore crores cr k mn bn dozen dozens half halves double doubled twice
-		triple tripled quarter percent
+		lakh lakhs lac lacs crore crores cr k mn bn dozen dozens half halves halved halving double doubled
+		doubling twice thrice triple tripled tripling quadruple quadrupled quintuple quarter quarters
+		thirds percent fourth fifth sixth seventh eighth ninth tenth hundredth thousandth
 		ek teen char chaar paanch panch chhe chhah saat aath nau das bees pachaas pachas sau hazaar
 		hazar hajar lakhon karod karor karodon arab
-		एक दो तीन चार पाँच पांच छह सात आठ नौ दस बीस पचास सौ हज़ार हजार लाख करोड़ करोड अरब`) {
+		gyarah gyaarah barah baarah terah chaudah pandrah pandrah solah satrah atharah unnis unees
+		ikkis bais teis chaubis pachis pachchis chhabbis sattais atthais untis tees chalis chaalis
+		sattar assi nabbe hazaron
+		dedh dhai dhaai sava savaa paune pauna aadha adha aadhi adhi dugna dugana doguna tigna tiguna
+		chauguna guna gunaa
+		एक दो तीन चार पाँच पांच छह छः सात आठ नौ दस ग्यारह बारह तेरह चौदह पंद्रह पन्द्रह सोलह सत्रह अठारह
+		उन्नीस बीस इक्कीस बाईस तेईस चौबीस पच्चीस तीस चालीस पचास साठ सत्तर अस्सी नब्बे सौ हज़ार हजार
+		लाख करोड़ करोड अरब डेढ़ डेढ ढाई सवा पौने आधा आधी दुगना दोगुना तिगुना चौगुना गुना`) {
 		numberWords[strings.ToLower(w)] = true
 	}
 }
+
+// isNumberWord is numberWords plus two open families no list can enumerate:
+// multiplicatives ("tenfold", "twentyfold") and Roman numerals written in
+// capitals ("IX times"). Lower-case roman letters are ordinary words ("mild",
+// "civil"), and a lone "I" is the pronoun, so only an all-capitals token of
+// two or more valid roman letters counts.
+func isNumberWord(w string) bool {
+	lw := strings.ToLower(w)
+	if numberWords[lw] {
+		return true
+	}
+	if p, ok := strings.CutSuffix(lw, "fold"); ok && (numberWords[p] || p == "many" || p == "multi") && p != "" {
+		return true
+	}
+	return len(w) >= 2 && romanRE.MatchString(w)
+}
+
+var romanRE = regexp.MustCompile(`^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$`)
 
 var wordRE = regexp.MustCompile(`[\p{L}\p{M}]+`)
 
@@ -272,7 +369,7 @@ func CheckRaw(text string, it insights.DigestItem) error {
 		}
 	}
 	for _, w := range wordRE.FindAllString(rest, -1) {
-		if numberWords[strings.ToLower(w)] {
+		if isNumberWord(w) {
 			return fmt.Errorf("a number word %q", w)
 		}
 	}

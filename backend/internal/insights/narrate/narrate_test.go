@@ -80,7 +80,9 @@ func TestAGoodNarrationIsAcceptedAndRenderedFromThePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a clean narration was refused: %v", err)
 	}
-	want := "Shop 21 Traders is Rs 59384.00 over its Rs 10000.00 limit after SAL-007."
+	// Two amounts of one finding carry their roles (renderBound, the wave-2
+	// review): the model's words cannot swap which is which unseen.
+	want := "Shop 21 Traders is Rs 59384.00 (amount over the limit) over its Rs 10000.00 (credit limit) limit after SAL-007."
 	if texts[0] != want {
 		t.Errorf("rendered %q, want %q", texts[0], want)
 	}
@@ -294,4 +296,57 @@ func TestNarrateCassette(t *testing.T) {
 		t.Errorf("the client sent %d requests; the replay must be the request BuildRequest makes", len(f.bodies))
 	}
 	t.Logf("replayed %s: %q", key[:12], n.Texts[1])
+}
+
+// TestTheReviewsNarrationsAreRefusedOrBound is the wave-2 review's list.
+// Mutations (run for the review): the pre-review word list restored turns
+// thrice / halved / dedh guna / gyarah-tees (both scripts) red; isNumberWord
+// reduced to the list lookup turns tenfold and IX red; renderBound rendering
+// bare values turns both "roles" lines red.
+func TestTheReviewsNarrationsAreRefusedOrBound(t *testing.T) {
+	for _, c := range []struct{ name, line string }{
+		{"English multiplicative", "{{party}} is tenfold over."},
+		{"thrice", "{{party}} crossed it thrice."},
+		{"halved", "{{party}} halved its payments."},
+		{"Hindi fraction and multiple", "{{party}} ka baaki dedh guna hai."},
+		{"Hindi eleven, thirty", "{{party}} ne gyarah baar tees din mein kharida."},
+		{"Devanagari eleven, thirty", "{{party}} ने ग्यारह बार तीस दिन में खरीदा।"},
+		{"Roman numeral", "{{party}} is over the limit IX times."},
+	} {
+		ans := narrate.Answer{Lines: append([]narrate.Line{{Ref: "i1", Text: c.line}}, good.Lines[1:]...)}
+		if _, err := narrate.Accept(ans, items()); err == nil {
+			t.Errorf("number word, %s: ACCEPTED %q", c.name, c.line)
+		}
+	}
+	// Ordinary words that merely look roman or numeric stay accepted.
+	ok := narrate.Answer{Lines: append([]narrate.Line{{Ref: "i1",
+		Text: "I would call {{party}}: a mild civil reminder, with its Rs {{excess}} over the limit, after {{voucher_no}}."}},
+		good.Lines[1:]...)}
+	if _, err := narrate.Accept(ok, items()); err != nil {
+		t.Errorf("an honest sentence was refused: %v", err)
+	}
+
+	// Roles: a swapped balance / limit, and a swapped first / last rate,
+	// render with each figure's TRUE label beside it.
+	swapped := narrate.Answer{Lines: []narrate.Line{
+		{Ref: "i1", Text: "{{party}} owes Rs {{credit_limit}}, within a credit limit of Rs {{balance}}."},
+		{Ref: "i2", Text: "{{party}} cut {{item}} from Rs {{last_rate}} to Rs {{first_rate}}."},
+		good.Lines[2]}}
+	texts, err := narrate.Accept(swapped, items())
+	if err != nil {
+		t.Fatalf("the swapped lines were refused outright (%v); they should render bound", err)
+	}
+	for i, want := range []string{
+		"Shop 21 Traders owes Rs 10000.00 (credit limit), within a credit limit of Rs 69384.00 (balance now owed).",
+		"Bharat Metals cut Widget from Rs 55.00 (latest rate) to Rs 50.00 (first rate in the year).",
+	} {
+		if texts[i] != want {
+			t.Errorf("line %d rendered %q, want %q", i+1, texts[i], want)
+		}
+	}
+	// A figure alone in its unit is rendered bare (TDS: one amount, one day
+	// count, one count).
+	if texts[2] != "TDS of Rs 1000.00 from 2026-07 is 53 days late; deposit it now." {
+		t.Errorf("an unambiguous line was labelled: %q", texts[2])
+	}
 }
