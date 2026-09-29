@@ -37,19 +37,40 @@ var ErrLedgerBlocked = errors.New("ledger: blocked")
 // so another tenant's ledger is simply absent.
 var ErrLedgerNotInCompany = errors.New("ledger: no such ledger in this company")
 
-// refuseBlockedLedgers refuses a voucher any of whose postings names a ledger
-// this company does not have (ErrLedgerNotInCompany) or a blocked ledger. One query for the whole voucher, inside the post transaction, so a
-// ledger unblocked concurrently is judged at the moment the postings are
-// written.
-func refuseBlockedLedgers(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, postings []PostingInput) error {
-	if len(postings) == 0 {
-		return nil
-	}
-	ids := make([]uuid.UUID, 0, len(postings))
+// refuseBlockedLedgers refuses a voucher any of whose postings, party or bill
+// allocations names a ledger this company does not have
+// (ErrLedgerNotInCompany) or a blocked ledger. One query for the whole
+// voucher, inside the post transaction, so a ledger unblocked concurrently is
+// judged at the moment the postings are written.
+//
+// ⛔ THE PARTY AND THE BILL LINES TOO, NOT ONLY THE LEGS (the wave-2 review).
+// voucher_version.party_ledger_id and bill_allocation.ledger_id are the same
+// single-column FKs as posting.ledger_id, and the first cut of this check read
+// only the postings: A's payment naming B's ledger as its party returned 201
+// (A's GST and party reports then join that id under RLS and drop the party),
+// and a born-blocked, agent-created party could be named as a voucher's party
+// before any person had unblocked it. A party that takes no posting is still
+// the voucher's party.
+func refuseBlockedLedgers(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, postings []PostingInput,
+	party uuid.UUID, bills []BillAllocationInput) error {
+	ids := make([]uuid.UUID, 0, len(postings)+len(bills)+1)
 	seen := map[uuid.UUID]bool{}
+	add := func(id uuid.UUID) {
+		if id == uuid.Nil || seen[id] {
+			return
+		}
+		ids = append(ids, id)
+		seen[id] = true
+	}
 	for _, p := range postings {
-		ids = append(ids, p.LedgerID)
-		seen[p.LedgerID] = true
+		add(p.LedgerID)
+	}
+	add(party)
+	for _, b := range bills {
+		add(b.LedgerID)
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 	var found int
 	if err := tx.QueryRow(ctx,
@@ -58,7 +79,7 @@ func refuseBlockedLedgers(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, p
 		return fmt.Errorf("ledger: read posting ledgers: %w", err)
 	}
 	if found != len(seen) {
-		return fmt.Errorf("%w: %d of the %d ledger(s) this voucher posts to do not exist in this company",
+		return fmt.Errorf("%w: %d of the %d ledger(s) this voucher names do not exist in this company",
 			ErrLedgerNotInCompany, len(seen)-found, len(seen))
 	}
 	var name, reason string

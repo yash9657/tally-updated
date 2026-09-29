@@ -2561,7 +2561,13 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// rows can be indistinguishable in SQL and distinguishable in the request.
 		// A re-query that guessed would attribute one department's cost to another
 		// with nothing anywhere to detect it.
-		if err := refuseBlockedLedgers(ctx, tx, companyID, postings); err != nil {
+		// A tombstone names nothing new: a voucher whose party was blocked
+		// after it was posted may still be deleted.
+		party, bills := in.PartyLedgerID, in.BillAllocations
+		if op == OpDelete {
+			party, bills = uuid.Nil, nil
+		}
+		if err := refuseBlockedLedgers(ctx, tx, companyID, postings, party, bills); err != nil {
 			return err
 		}
 		postingIDs := make([]uuid.UUID, 0, len(postings))
