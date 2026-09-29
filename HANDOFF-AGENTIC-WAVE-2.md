@@ -438,3 +438,33 @@ is shown). `go.mod`/`go.sum`, `frontend/` and `insightd/` diff: 0 lines.
 **Migrations consumed by the fixes:** 0104 (W4's reserve) and 0106 (W6's reserve); PLAN-TALLY-PARITY §2.5
 rows updated. 0098 and 0099 edited in place (both lanes' numbers were used up); see rows 5 and 11 for what
 that means for databases already migrated.
+
+---
+
+## 9. First CI runs on GitHub (PR #1, 2026-09-29): what they found
+
+The repo first got a remote here (`yash9657/tally-updated`, private). **These are the first runs of CI on this code.** Every earlier "all gates green" figure came from local runs. The first runs found problems no local gate could see:
+
+- ⛔ **Three gates were silently blind:**
+  - **semgrep** had never scanned. semgrep-action@v1 ran semgrep 1.36, which crashed on the current registry rules while the step still reported success. It now runs a pinned 1.177 container.
+  - **The insightd HITL route invariant** asserted nothing on FastAPI 0.14x, because included routers carry no path or methods. `tests/route_table.py` now walks them.
+  - **trivy** never ran: its `0.24.0` tag no longer resolves. After that was fixed, the action's `trivyignores` input dropped the YAML file's scoping, and it ignored `severity` for SARIF output.
+- **Real fixes:**
+  - `golang.org/x/text` 0.29 → 0.39 (CVE-2026-56852; it decodes the uploaded Tally XML).
+  - The EKS API is private by default.
+  - Aurora egress is confined to the VPC.
+  - The iac job no longer pipes kustomize's master-branch script into bash.
+  - The insightd corpus generator was stale since `c3aca5d`.
+- **Test fixes:**
+  - The Tier B leak oracle now tells a different row of B's own data, which `LIMIT` without `ORDER BY` can return, from a leak. It was mutation-proved with BYPASSRLS.
+  - The `no-bypassrls` semgrep rule matched `NOBYPASSRLS`.
+- **False positives, left in place:**
+  - GitGuardian's 5 "secrets": comments mentioning `--api-key`, and a drive-script test password. These are **for the user to mark in the GitGuardian dashboard.**
+  - gitleaks' synthetic GSTINs/PANs, which are allowed by value.
+- ⚠️ **UNEXPLAINED INTERMITTENT FAILURE: `internal/insights` `TestTheMorningDigestIsNeverLost`.** It failed once on CI (run of `aed7f17`, ~00:20 IST), with no digest after run-now plus a poller tick and no compose error logged, then passed on the next run. It is not fixed and not understood. Ruled out:
+  - the IST date rollover: every date path uses the passed date;
+  - due-list starvation: the only cross-package callers are 6 tests;
+  - concurrent server-package pollers: it did not reproduce with both packages at `-p 4` on a fresh DB.
+
+  Worth knowing: `insight_digest_due_companies` orders by `company_id LIMIT 100`, and ids are UUIDv7, so the newest company is served last. A persistently failing compose at the head of the queue would starve later companies in production. One orphan `insight_run` row survives test cleanup. Start there if it recurs.
+- **Not blocking yet:** semgrep's ~30 WARNING findings, 17 of them GitHub Actions pinned by mutable tag rather than SHA.
