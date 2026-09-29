@@ -22,7 +22,8 @@ import (
 //   - REAL TIME: insight_event_pending_companies() → ProcessEvents. Seconds of
 //     latency, by the tick.
 //   - NIGHTLY: once the IST clock passes NightlyHour, insight_nightly_due_companies
-//     (today) → RunNightly then ComposeDigest. Idempotent per (company, day) by
+//     (today) → RunNightly; then insight_digest_due_companies (today: the night
+//     ran, no digest yet) → ComposeDigest. Idempotent per (company, day) by
 //     insight_run's UNIQUE and the digest's, so every replica may run the same
 //     loop: the loser of a race finds the row and does nothing.
 
@@ -88,11 +89,22 @@ func (p *Poller) NightlyFor(ctx context.Context, date time.Time) (int, error) {
 			log.Printf("insights: nightly for %s: %v", c, err)
 			continue
 		}
-		if _, err := ComposeDigest(cctx, p.Pool, c, date, "", p.Narrator); err != nil {
-			log.Printf("insights: digest for %s: %v", c, err)
-			continue
-		}
 		n++
+	}
+	// ⛔ THE DIGEST IS DUE ON ITS OWN CONDITION (0104, the wave-2 review):
+	// the night for the date ran and the digest does not exist — whichever
+	// road ran the night. Composed in the nightly pass alone, a night run by
+	// POST /insights/run was never followed by a digest, and a compose that
+	// failed after its night was never retried.
+	due, err := p.ids(ctx, `SELECT company_id FROM insight_digest_due_companies($1::date, $2)`,
+		date.Format(isoDate), p.batch())
+	if err != nil {
+		return n, err
+	}
+	for _, c := range due {
+		if _, err := ComposeDigest(db.WithCompany(ctx, c), p.Pool, c, date, "", p.Narrator); err != nil {
+			log.Printf("insights: digest for %s: %v", c, err)
+		}
 	}
 	return n, nil
 }

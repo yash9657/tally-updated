@@ -139,6 +139,7 @@ func RunNightly(ctx context.Context, r Runner, companyID uuid.UUID, asOf time.Ti
 				seen[id] = true
 			}
 		}
+		n.factsBehind = st.ProfileFacts == -1
 		exp, reval, err := n.retire(seen)
 		if err != nil {
 			return err
@@ -162,6 +163,16 @@ type night struct {
 	companyID uuid.UUID
 	asOf      time.Time
 	from      time.Time
+	// factsBehind: profile.Refresh refused tonight's as-of (ErrAsOfBehind), so
+	// the fact-backed detectors ran on nothing and their silence proves no
+	// insight cleared.
+	factsBehind bool
+}
+
+// factBacked are the nightly types whose detector reads entity_facts at the
+// run's as-of — the ones that find nothing when the facts are behind.
+var factBacked = map[string]bool{
+	TypeCustomerSlower: true, TypeSupplierPriceCreep: true, TypeReorderNow: true, TypeDeadStock: true,
 }
 
 func (n *night) asOfS() string { return n.asOf.Format(isoDate) }
@@ -191,6 +202,25 @@ func (n *night) detectAll() ([]Candidate, error) {
 // numbers (the e-way bill was raised, the duplicate deleted), it is withdrawn.
 // Either way the row is 'expired', never deleted: the feedback given on it
 // stays attached to what the owner was actually shown.
+//
+// ⛔ ABSENCE IS EVIDENCE ONLY WHEN THE DETECTOR COULD HAVE SEEN IT (the wave-2
+// review). Three cases withdrew insights that were still true:
+//
+//   - a NIGHTLY insight detected at a LATER as-of than tonight's (an operator
+//     backfilling a missed day with NightlyFor, a clock stepped back): tonight
+//     judged an earlier book, so its not finding it says nothing. Kept.
+//   - a fact-backed nightly insight on a night whose facts were behind
+//     (ErrAsOfBehind): its detector ran on nothing. Kept.
+//   - a REAL-TIME credit-limit breach whose evidence stopped reproducing
+//     because the balance moved (a part-payment, a limit change) while the
+//     party is still over: re-derived from the books and superseded with the
+//     new figures, not expired. Only a party back within its limit clears.
+func (n *night) retireKeeps(in Insight) bool {
+	if in.AsOf > n.asOfS() {
+		return true
+	}
+	return in.Cadence == string(Nightly) && n.factsBehind && factBacked[in.Type]
+}
 func (n *night) retire(seen map[uuid.UUID]bool) (expired, revalidated int, err error) {
 	rows, err := n.tx.Query(n.ctx, selectInsight+` WHERE i.state = 'open'`)
 	if err != nil {
@@ -210,7 +240,7 @@ func (n *night) retire(seen map[uuid.UUID]bool) (expired, revalidated int, err e
 		return 0, 0, err
 	}
 	for _, in := range open {
-		if seen[in.ID] {
+		if seen[in.ID] || n.retireKeeps(in) {
 			continue
 		}
 		withdraw := false
@@ -226,6 +256,13 @@ func (n *night) retire(seen map[uuid.UUID]bool) (expired, revalidated int, err e
 			verr := Verify(n.ctx, sp, in.Candidate())
 			_ = sp.Rollback(n.ctx)
 			withdraw = verr != nil
+			if withdraw && in.Type == TypeCreditLimitBreach {
+				kept, err := n.rederiveCreditLimit(in)
+				if err != nil {
+					return 0, 0, err
+				}
+				withdraw = !kept
+			}
 		}
 		if !withdraw {
 			continue
@@ -244,6 +281,30 @@ func (n *night) retire(seen map[uuid.UUID]bool) (expired, revalidated int, err e
 		expired += int(tag.RowsAffected())
 	}
 	return expired, revalidated, nil
+}
+
+// rederiveCreditLimit re-judges a breach whose evidence no longer reproduces:
+// if the party is still over its limit the breach is stored afresh (store
+// supersedes the old row, re-running the evidence first); kept reports that.
+func (n *night) rederiveCreditLimit(in Insight) (bool, error) {
+	id, err := uuid.Parse(in.EntityKey)
+	if err != nil {
+		return false, nil
+	}
+	c, ok, err := creditLimitCandidate(n.ctx, n.tx, id, in.Payload["voucher_no"])
+	if err != nil || !ok {
+		return false, err
+	}
+	exp := n.asOf.Add(RealtimeExpiry)
+	c.AsOf, c.ExpiresAt = n.asOf, &exp
+	_, outcome, err := store(n.ctx, n.tx, n.companyID, c)
+	if outcome == Refused {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // fact is one current entity_facts row at the run's as-of.

@@ -60,6 +60,9 @@ func writeInsightsErr(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, insights.ErrBadVerdict):
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, insights.ErrNightlyNotRun):
+		writeJSON(w, http.StatusConflict, map[string]string{"code": "NIGHTLY_NOT_RUN",
+			"error": "that day's nightly run has not happened yet; run it now (R) or wait for the 02:00 IST run, and the digest follows"})
 	default:
 		writeError(w, http.StatusInternalServerError, "insights: internal error")
 		log.Printf("insights: %v", err)

@@ -143,60 +143,83 @@ const evidenceCreditLimit = `
 	  FROM l, mv
 	 WHERE l.credit_limit IS NOT NULL`
 
+// detectCreditLimit judges every party with a credit limit the voucher
+// POSTS TO, on either side.
+//
+// ⛔ EITHER SIDE, NOT ONLY THE DEBIT (the wave-2 review). A breach is raised by
+// a sale, but a part-payment or a credit note changes the balance too — and
+// with it the figures of the open insight, which then no longer reproduce, so
+// the night withdrew a breach that was still true (Ganga, Rs 59k over a Rs 10k
+// limit, paid Rs 1,000 on account and dropped out of the owner's inbox). A
+// credit leg now re-judges the party: still over, the insight is superseded
+// with the new balance; back under, nothing is raised and the night's
+// revalidation withdraws the old one.
 func detectCreditLimit(ctx context.Context, tx pgx.Tx, v voucherFacts) ([]Candidate, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT DISTINCT l.id, l.name, l.credit_limit,
-		       CASE WHEN l.opening_dc = 'D' THEN l.opening_balance ELSE -l.opening_balance END
-		         + COALESCE(lb.debit, 0) - COALESCE(lb.credit, 0)
+	ids, err := uuidList(ctx, tx, `
+		SELECT DISTINCT l.id
 		  FROM posting p
 		  JOIN ledger l ON l.id = p.ledger_id
-		  LEFT JOIN ledger_balance lb ON lb.ledger_id = l.id
-		 WHERE p.voucher_version_id = $1 AND p.dr_cr = 'D' AND l.credit_limit IS NOT NULL`, v.versionID)
+		 WHERE p.voucher_version_id = $1 AND l.credit_limit IS NOT NULL
+		 ORDER BY l.id`, v.versionID)
 	if err != nil {
 		return nil, fmt.Errorf("insights: credit limit: %w", err)
 	}
-	type hit struct {
-		id         uuid.UUID
-		name       string
-		limit, bal decimal.Decimal
-	}
-	var hits []hit
-	for rows.Next() {
-		var h hit
-		if err := rows.Scan(&h.id, &h.name, &h.limit, &h.bal); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if h.bal.GreaterThan(h.limit) {
-			hits = append(hits, h)
-		}
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
 	var out []Candidate
-	for _, h := range hits {
-		ids, err := uuidList(ctx, tx, `
-			SELECT vh.voucher_id FROM voucher_head vh
-			 WHERE vh.is_deleted = false
-			   AND EXISTS (SELECT 1 FROM posting p WHERE p.voucher_version_id = vh.current_version_id AND p.ledger_id = $1)
-			 ORDER BY vh.voucher_date DESC NULLS LAST, vh.voucher_id DESC LIMIT 200`, h.id)
+	for _, id := range ids {
+		c, ok, err := creditLimitCandidate(ctx, tx, id, v.voucherNo)
 		if err != nil {
 			return nil, err
 		}
-		excess := h.bal.Sub(h.limit)
-		out = append(out, Candidate{
-			Type: TypeCreditLimitBreach, EntityKind: "party", EntityKey: h.id.String(), EntityName: h.name,
-			Fingerprint: TypeCreditLimitBreach + ":" + h.id.String(),
-			Impact:      excess,
-			Payload: map[string]string{"party": h.name, "voucher_no": v.voucherNo,
-				"credit_limit": Canonical(UnitINR, h.limit), "balance": Canonical(UnitINR, h.bal),
-				"excess": Canonical(UnitINR, excess)},
-			EvidenceSQL: evidenceCreditLimit, EvidenceArgs: []string{h.id.String()}, VoucherIDs: ids,
-		})
+		if ok {
+			out = append(out, c)
+		}
 	}
 	return out, nil
+}
+
+// creditLimitCandidate is the breach for one party as the books stand, or
+// ok=false when the party is within its limit (or has none). The balance is
+// read from ledger_balance; evidenceCreditLimit re-derives it from postings.
+// voucherNo is the voucher the insight names as the latest move.
+func creditLimitCandidate(ctx context.Context, tx pgx.Tx, ledgerID uuid.UUID, voucherNo string) (Candidate, bool, error) {
+	var (
+		name       string
+		limit, bal decimal.Decimal
+	)
+	err := tx.QueryRow(ctx, `
+		SELECT l.name, l.credit_limit,
+		       CASE WHEN l.opening_dc = 'D' THEN l.opening_balance ELSE -l.opening_balance END
+		         + COALESCE(lb.debit, 0) - COALESCE(lb.credit, 0)
+		  FROM ledger l
+		  LEFT JOIN ledger_balance lb ON lb.ledger_id = l.id
+		 WHERE l.id = $1 AND l.credit_limit IS NOT NULL`, ledgerID).Scan(&name, &limit, &bal)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Candidate{}, false, nil
+	}
+	if err != nil {
+		return Candidate{}, false, fmt.Errorf("insights: credit limit: %w", err)
+	}
+	if !bal.GreaterThan(limit) {
+		return Candidate{}, false, nil
+	}
+	ids, err := uuidList(ctx, tx, `
+		SELECT vh.voucher_id FROM voucher_head vh
+		 WHERE vh.is_deleted = false
+		   AND EXISTS (SELECT 1 FROM posting p WHERE p.voucher_version_id = vh.current_version_id AND p.ledger_id = $1)
+		 ORDER BY vh.voucher_date DESC NULLS LAST, vh.voucher_id DESC LIMIT 200`, ledgerID)
+	if err != nil {
+		return Candidate{}, false, err
+	}
+	excess := bal.Sub(limit)
+	return Candidate{
+		Type: TypeCreditLimitBreach, EntityKind: "party", EntityKey: ledgerID.String(), EntityName: name,
+		Fingerprint: TypeCreditLimitBreach + ":" + ledgerID.String(),
+		Impact:      excess,
+		Payload: map[string]string{"party": name, "voucher_no": voucherNo,
+			"credit_limit": Canonical(UnitINR, limit), "balance": Canonical(UnitINR, bal),
+			"excess": Canonical(UnitINR, excess)},
+		EvidenceSQL: evidenceCreditLimit, EvidenceArgs: []string{ledgerID.String()}, VoucherIDs: ids,
+	}, true, nil
 }
 
 // --- duplicate purchase bill -------------------------------------------------

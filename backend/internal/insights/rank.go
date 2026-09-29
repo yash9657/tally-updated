@@ -347,6 +347,19 @@ func ComposeDigest(ctx context.Context, r Runner, companyID uuid.UUID, date time
 	}
 	var items []DigestItem
 	if err := r.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// ⛔ NOT BEFORE ITS NIGHT (the wave-2 review). The first digest for a
+		// date wins under UNIQUE, so one composed before that night's run (D
+		// pressed between midnight and 02:00 IST) froze the day WITHOUT the
+		// night's findings. Refused instead; the poller composes it once the
+		// night has run (0104's due list).
+		var ran bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM insight_run WHERE run_date = $1::date AND kind = 'nightly')`,
+			ds).Scan(&ran); err != nil {
+			return err
+		}
+		if !ran {
+			return ErrNightlyNotRun
+		}
 		var err error
 		items, err = SelectDigest(ctx, tx, date, recipient)
 		return err
@@ -377,3 +390,7 @@ func ComposeDigest(ctx context.Context, r Runner, companyID uuid.UUID, date time
 	})
 	return out, err
 }
+
+// ErrNightlyNotRun is ComposeDigest's refusal for a date whose nightly run
+// has not happened: see ComposeDigest. The HTTP layer answers it 409.
+var ErrNightlyNotRun = errors.New("insights: the nightly run for that date has not happened yet")
