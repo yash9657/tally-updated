@@ -308,6 +308,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read # gitleaks-action lists the PR's commits through the API
       security-events: write # upload SARIF to code scanning
     steps:
       - uses: actions/checkout@v4
@@ -320,6 +321,9 @@ jobs:
           GITLEAKS_CONFIG: infra/security/.gitleaks.toml
           # gitleaks-action v2 refuses to scan a pull request without it.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Findings fail the job and are printed in its log; commenting on the
+          # PR would need pull-requests: write, which this job does not hold.
+          GITLEAKS_ENABLE_COMMENTS: "false"
 
       - name: semgrep (SAST)
         uses: semgrep/semgrep-action@v1
