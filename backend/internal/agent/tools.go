@@ -388,7 +388,18 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		}
 		// ⛔ THE LABEL IS THE SPEC'S, NOT "books" (readsource.go): a bank
 		// statement or a day book read is untrusted text reaching the model.
-		return toolOut{Tool: d.Tool, OK: res.OK(), Result: trimBody(res.Body), Sources: []policy.Source{readSourceFor(spec)},
+		// And a books read is PROJECTED to what makes that label true — its
+		// prose fields (a ledger's address, bank details) never reach the
+		// model; a body the projection cannot walk is labelled stored_text.
+		src, body := readSourceFor(spec), res.Body
+		if src == policy.SourceBooks {
+			if p, ok := projectBooks(body); ok {
+				body = p
+			} else {
+				src = policy.SourceStoredText
+			}
+		}
+		return toolOut{Tool: d.Tool, OK: res.OK(), Result: trimBody(body), Sources: []policy.Source{src},
 			Error: map[bool]string{false: fmt.Sprintf("status %d", res.Status)}[res.OK()]}, nil
 
 	case ToolStatus, ToolListPending:
