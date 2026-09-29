@@ -1,0 +1,14 @@
+# Accepted trivy findings. Each entry is SCOPED (by path) and ARGUED; an
+# unscoped ID here would hide the same class of finding everywhere.
+misconfigurations:
+  # EKS worker nodes' egress-all rule comes from terraform-aws-eks's recommended
+  # node rules. Nodes pull images from ECR and public registries and call AWS
+  # APIs through the NAT gateway; without VPC endpoints for every one of those
+  # services, blocking egress breaks node bootstrap. Revisit when the VPC gets
+  # interface endpoints (ECR, STS, EC2, logs) and the NAT can be removed.
+  # Aurora's egress-all, the other instance of this ID, was FIXED rather than
+  # accepted (infra/terraform/aurora.tf).
+  - id: AVD-AWS-0104
+    paths:
+      - "git::https:/github.com/terraform-aws-modules/terraform-aws-eks*/node_groups.tf"
+    statement: "EKS nodes need NAT egress for image pulls and AWS APIs until VPC endpoints exist."

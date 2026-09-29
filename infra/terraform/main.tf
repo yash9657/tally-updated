@@ -100,10 +100,15 @@ module "eks" {
   cluster_name    = "${local.name_prefix}-eks"
   cluster_version = var.kubernetes_version
 
-  # Private API endpoint; public access only for bootstrap convenience in
-  # non-prod. Lock public access down in prod via the overlay/tfvars.
-  cluster_endpoint_public_access  = var.environment != "prod"
-  cluster_endpoint_private_access = true
+  # PRIVATE API endpoint by default, in every environment. It used to be public
+  # in all non-prod environments to 0.0.0.0/0 (the module's default CIDRs),
+  # which trivy flags CRITICAL (AVD-AWS-0040/0041). A staging cluster holding
+  # real pilot books is no less sensitive than prod. Public access is now an
+  # explicit opt-in that must name the admin CIDRs, and the variable refuses
+  # 0.0.0.0/0.
+  cluster_endpoint_public_access       = var.cluster_endpoint_public_access
+  cluster_endpoint_public_access_cidrs = var.cluster_endpoint_public_access_cidrs
+  cluster_endpoint_private_access      = true
 
   vpc_id     = module.vpc.vpc_id
   subnet_ids = module.vpc.private_subnets
