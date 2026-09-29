@@ -388,6 +388,9 @@ The 6.x numbers continue from `HANDOFF-AGENTIC-WAVE-1.md` §7.
   - The transport route maps to `display agent-mcp`, and each call is re-judged in process.
   - Protocol versions 2025-11-25 / 2025-06-18, not 2026-07-28.
   - A session parked on an approval accepts no other call.
+  - **NEW (review, 0106): the MCP client holds a grant-bound transport token, not the person's JWT.**
+    It is shown once when the grant is made; the transport refuses a JWT. Ratify, or replace with the
+    OAuth 2.1 resource-server flow d126 §9 item 3 owes (which would supersede it).
 - **6.10 NEW: `/query` bypasses report-level grants.** It is authorized by a single `query` right, so a
   level that has `query` but is denied Bills Payable can still read payables through the outstandings
   entity. The fix belongs in the PDP. The decision is whether to gate per entity (recommended) or accept
@@ -397,7 +400,41 @@ The 6.x numbers continue from `HANDOFF-AGENTIC-WAVE-1.md` §7.
     digest.
   - p_real priors are judgement, not measurement.
   - The `voucher_head` trigger adds one INSERT per voucher post.
-- **6.12 NEW: a migration number for the integrator's composite FK** `posting (company_id, ledger_id)`.
-  Every number up to 0109 belongs to a lane. Either allocate a new range (for example 0110) or give it to
+- **6.12 NEW: a migration number for the integrator's composite FK** `posting (company_id, ledger_id)`
+  (and, from the review, `voucher_version.party_ledger_id`, `bill_allocation.ledger_id`,
+  `ledger.group_id`, `stock_item.unit_id`). Every number up to 0109 belongs to a lane (0104 and 0106 are
+  now consumed by the review fixes; only W7's 0107–0109 are unused). Either allocate a new range (for example 0110) or give it to
   W2 breadth's next lane.
 - **Carried: the budget-variance deny (0086).**
+
+---
+
+## 8. Review outcome (wave-2 review, verified then fixed on `session/t32-and-close-7-3`)
+
+Twelve findings. Each was re-checked against this HEAD before any change; each fix has a test that failed
+before it (the failure is quoted) and a mutation that turns it red again (run, then restored). Gates at the
+end on a fresh, un-migrated `tally_w2_fix` (dropped afterwards): `make migrate` **"migrations applied (86
+files)"**; `go build ./... && go vet ./...` clean; `go test ./... -count=1 -p 4` **exit 0, 51 packages ok,
+7 with no test files** (server 81 s, sync 63 s, insights 35 s, evals/tau 35 s); `make tier0` ok, **"replayed
+29 interactions across 12 cassettes in 5 directories"** (unchanged counts; the four `agent.decide` cassettes
+were re-recorded against the in-repo scripted fake because the books-read projection changes what the model
+is shown). `go.mod`/`go.sum`, `frontend/` and `insightd/` diff: 0 lines.
+
+| # | Finding | Verdict | Commit | Test (failure before the fix) · mutation |
+|---|---|---|---|---|
+| 1 | Delegated ceiling never applies to orders / stock vouchers / master alters | **fixed** | `b3da872` | `TestAgentDelegatedCeilingHoldsForOrdersAndMasters` (before: the policy half, `TestGateMatrix`, "post.purchase-orders under a Rs 1,000 ceiling with no measurable amount went autonomous", same for physical-stock and a bank tick). `Effect.ValuePaise` (order Σ qty×rate; stock max(in, out)) feeds the gate, the edit re-preview and the commit hook; `policy.Decide` holds an unmeasurable write under a ceiling. Mutations: gate back to debit-only → approval `amount_paise` nil and a Rs 800 order waits; the unmeasurable rule dropped → the valuation-method alter commits; orders unmeasured → both order cases red; a stock journal counted both ways → `TestValuePaise` red |
+| 2 | `get.ledgers` labelled books but carries address / bank prose | **fixed** | `e51e7f2`, `468d018` | `TestAgentLedgerReadCarriesNoPlantedAddress` (real handler: planted address in the model's 2nd request) and `TestBooksReadIsProjected`. Every books read drops `proseKeys` at any depth; a non-JSON body is `stored_text`. Mutation: projection skipped → "the planted address reached the model". ⚠️ Names stay free text (d121) |
+| 3 | MCP client holds the human's JWT, so it can approve its own proposal | **fixed** | `908b2e0` | `TestMCPTransportTokenCannotActAsThePerson`. Migration **0106**: a grant returns a transport token once (SHA-256 + subject stored); `authenticate` accepts it only on that grant's transport and refuses a JWT there. Mutations: token accepted off-transport → the decision route answers 403 step-up instead of 401 (and 201-class at a non-WebAuthn level); JWT accepted on transport → 200. Existing MCP tests moved to the token; `TestDataEntryIsRefusedTheAgentPlane`'s two transport rows now expect 401. ⚠️ A grant made before 0106 has no token: make a new one |
+| 4 | `party_ledger_id` accepts another company's / a blocked ledger | **fixed** | `7ff036e` | `TestAVoucherPartyMustBeAnUnblockedLedgerOfItsCompany` (before: "A's payment naming B's ledger as its party = 201"). `refuseBlockedLedgers` takes the party and the bill lines (not on a tombstone). Mutations: party dropped → 201; blocked party → 201. The bill-line case is not independently proven (the sum-to-posting validator already refuses it). Composite FKs still OWED (6.12) |
+| 5 | `tier_b_plan` runs multi-statement text; 0099's "database alone" overstated | **fixed** | `13ab229` | `TestTierBPlanRunsOneStatementOrNone` (before: "tier_b_plan ran a multi-statement string … and returned a plan", 1 prepared statement left on the connection). `FOR … IN EXECUTE`. The pg_stat side channel is **stated** in 0099's header, not closed (cluster-wide revoke). ⚠️ 0099 edited in place: a database migrated earlier keeps the old `tier_b_plan` until 0099's function block is re-run as admin or it is re-created (the shared `tally` and every `tally_w2_*` lane DB) |
+| 6 | Night retires a still-true credit breach after a part-payment | **fixed** | `b3b5130` | `TestAPartPaymentDoesNotWithdrawATrueBreach` (before: "0 open breaches (night expired 1), want 1"). The detector re-judges on any leg; retire re-derives a breach whose evidence moved. Mutations: both halves reverted → 0 open; re-derivation alone reverted → the limit-change step fails. The any-leg half alone is not independently caught (re-derivation rescues it) |
+| 7 | `POST /insights/run` loses the day's digest; an early `D` freezes it | **fixed** | `b3b5130` | `TestTheMorningDigestIsNeverLost` (before: "a digest composed before its night = <nil>, want ErrNightlyNotRun"). Migration **0104**: `insight_digest_due_companies`; the poller composes from it; `ComposeDigest` refuses a date whose night has not run (HTTP 409 `NIGHTLY_NOT_RUN`). Mutations: digest pass removed → "the day has no digest"; nightly check removed → early compose stored |
+| 8 | Narration gate accepts wrong-role bindings and listed-as-refused number words | **fixed (roles: mitigated)** | `4135cad` | `TestTheReviewsNarrationsAreRefusedOrBound`. Hindi 11–20 and tens (both scripts), fractions, multiplicatives, English thrice/halved/-fold, capital Roman numerals refused. Roles: a model line renders each figure that shares its unit with another with its label ("Rs 10000.00 (credit limit)"), so a swap contradicts itself on screen. Mutations: old word list → 5 cases accepted; list-only lookup → tenfold, IX accepted; bare rendering → both role lines red. ⚠️ Go-owned sentence frames, which would close it, are OWED (d125 4a) |
+| 9 | `ErrAsOfBehind` / backfill night expires fact-backed insights | **fixed** | `b3b5130` | `TestAnEarlierNightDoesNotExpireLaterInsights` (before: "customer_slower 1 -> 0 after a backfill night (expired 5)"). retire keeps an insight with a later as-of, and a fact-backed one when facts are behind. Mutations: as-of guard dropped → expired 1; both → 1 → 0, expired 5 |
+| 10 | Evidence `voucher_ids` do not add up to the figures | **fixed (cap 5000)** | `2eb7aa2` | `TestEvidenceVoucherIDsAddUpToTheFigures` (before: "opening + the 200 listed vouchers = 200.00, payload balance 69589.00"; "the 2 listed vouchers net to 1888.00, payload overdue_amount 1788.00"). Complete lists; 0104 raises `insight_voucher_ids_capped` 200 → 5000. Mutations: cap 200 restored → red; raising-only list → red. >5000 vouchers is the stated residual |
+| 11 | 0098's degrade message names the bare `pgvector:pg16` tag | **fixed** | `cdd4c17` | `internal/embed` store test now asserts `pg16-trixie` (red on a database migrated before the fix, green on a fresh one). ⚠️ 0098 edited in place: existing databases keep the old wording |
+| 12 | `supplier_price_creep` declares `party` / `item` twice | **not a defect** | — | At this HEAD `TypeSupplierPriceCreep.Fields` lists each key once, and `TestEveryTypeIsWellFormed` already fails on a duplicate key ("field %s twice", types_test.go:47–50). Nothing changed |
+
+**Migrations consumed by the fixes:** 0104 (W4's reserve) and 0106 (W6's reserve); PLAN-TALLY-PARITY §2.5
+rows updated. 0098 and 0099 edited in place (both lanes' numbers were used up); see rows 5 and 11 for what
+that means for databases already migrated.
