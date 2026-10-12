@@ -3,11 +3,11 @@
   "rewrites": [
     {
       "source": "/v1/:path*",
-      "destination": "https://CORED_HOST_PLACEHOLDER/v1/:path*"
+      "destination": "https://api.tallyweb.world/v1/:path*"
     },
     {
       "source": "/auth/:path*",
-      "destination": "https://CORED_HOST_PLACEHOLDER/auth/:path*"
+      "destination": "https://api.tallyweb.world/auth/:path*"
     }
   ]
 }
