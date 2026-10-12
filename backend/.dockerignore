@@ -1,0 +1,7 @@
+# Build context for Dockerfile.vercel: only the Go module is needed.
+bin/
+cored
+*.test
+*.out
+.env
+.env.*

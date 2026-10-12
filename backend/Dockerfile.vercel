@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# cored on Vercel (Container Runtime). Vercel builds this file when the Vercel
+# project's Root Directory is `backend`; see docs/DEPLOY_VERCEL.md.
+#
+#   - serves HTTP on $PORT. Vercel routes container traffic to port 80 unless
+#     the PROJECT env var PORT says otherwise, and the image runs as non-root,
+#     so the project MUST set PORT=8080 (the value baked in below).
+#   - stateless: every durable thing is in Postgres. Migrations are NOT run on
+#     boot (`cored serve` never migrates); run `cored migrate` separately.
+#   - SIGTERM: cored drains in-flight requests for up to 15s (Vercel allows 30s).
+#
+# Local check (Vercel runs x86_64):
+#   docker buildx build --platform linux/amd64 -f Dockerfile.vercel -t tally-cored .
+
+# Plain FROM (no --platform=$BUILDPLATFORM cross-compile trick) so the file
+# builds the same under any OCI builder Vercel uses. On an ARM laptop the
+# amd64 build therefore runs the Go compiler under emulation: expect minutes.
+FROM golang:1.26-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Static binary: no libc needed at runtime. Migrations are go:embed-ed, so the
+# same binary also runs `cored migrate`.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/cored ./cmd/cored
+
+# distroless/static ships CA certificates (TLS to Neon / LLM APIs) and tzdata.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/cored /cored
+ENV PORT=8080
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/cored"]
+CMD ["serve"]
