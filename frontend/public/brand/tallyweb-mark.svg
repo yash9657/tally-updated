@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>Tallyweb</title>
+  <rect width="64" height="64" rx="12" fill="#13287a"/>
+  <path d="M16 18v28m11-28v28m11-28v28m11-28v28" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+  <path d="m11 45 42-27" stroke="#ffd24d" stroke-width="5" stroke-linecap="round"/>
+</svg>

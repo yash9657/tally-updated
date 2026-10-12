@@ -1,3 +1,6 @@
+@import "./design-system/tokens.css";
+@import "./design-system/components.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -10,5 +13,16 @@ body,
 }
 
 body {
-  background: #0a1e5e;
+  background: rgb(var(--tw-color-canvas));
+  scrollbar-color: rgb(var(--tw-color-border)) rgb(var(--tw-color-canvas));
+}
+
+:focus-visible {
+  outline: var(--tw-focus-width) solid rgb(var(--tw-focus-color)) !important;
+  outline-offset: var(--tw-focus-offset);
+}
+
+::selection {
+  background: rgb(var(--tw-color-accent));
+  color: rgb(var(--tw-color-canvas));
 }
