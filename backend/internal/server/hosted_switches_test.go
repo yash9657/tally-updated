@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,8 +40,17 @@ func TestDevTokenRouteDisabled(t *testing.T) {
 	}
 }
 
-// TestCronRoutes: unmounted without CRON_SECRET; with it, bearer-gated and a
-// pass of every poller succeeds against a migrated database.
+// TestCronRoutes: unmounted without CRON_SECRET; with it, bearer-gated.
+//
+// ⛔ THE AUTHORIZED CALL RUNS ON A CANCELLED CONTEXT, ON PURPOSE. A real tick
+// runs the insight nightly pass and the agent poller over EVERY company in the
+// shared test database, which rewrites other packages' in-flight fixtures
+// (measured: internal/tierb's leak oracle went red when a real tick ran
+// alongside it after 02:00 IST). With the context already cancelled every job
+// fails at its first query, so the handler answers 500 — which proves the
+// bearer was accepted (not 401) and the route is mounted (not 404) without
+// touching a row. The passes themselves are exercised by the container smoke
+// test in docs/DEPLOY_VERCEL.md §9 and by each poller's own tests.
 func TestCronRoutes(t *testing.T) {
 	t.Run("no CRON_SECRET -> not mounted", func(t *testing.T) {
 		t.Setenv("CRON_SECRET", "")
@@ -49,7 +59,7 @@ func TestCronRoutes(t *testing.T) {
 			t.Fatalf("tick without CRON_SECRET = %d, want 404", got)
 		}
 	})
-	t.Run("CRON_SECRET set -> gated and working", func(t *testing.T) {
+	t.Run("CRON_SECRET set -> bearer-gated", func(t *testing.T) {
 		t.Setenv("CRON_SECRET", "test-cron-secret")
 		srv := newServer(t)
 		h := srv.Router()
@@ -60,8 +70,15 @@ func TestCronRoutes(t *testing.T) {
 			if got := hostedStatus(t, h, http.MethodGet, path, "Bearer wrong", ""); got != http.StatusUnauthorized {
 				t.Fatalf("%s with wrong bearer = %d, want 401", path, got)
 			}
-			if got := hostedStatus(t, h, http.MethodGet, path, "Bearer test-cron-secret", ""); got != http.StatusOK {
-				t.Fatalf("%s with the secret = %d, want 200", path, got)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+			req.Header.Set("Authorization", "Bearer test-cron-secret")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("%s with the secret on a cancelled context = %d, want 500 (auth passed, jobs refused to run): %s",
+					path, rec.Code, rec.Body.String())
 			}
 		}
 	})
