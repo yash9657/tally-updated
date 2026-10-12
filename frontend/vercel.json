@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/v1/:path*",
+      "destination": "https://CORED_HOST_PLACEHOLDER/v1/:path*"
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "https://CORED_HOST_PLACEHOLDER/auth/:path*"
+    }
+  ]
+}
