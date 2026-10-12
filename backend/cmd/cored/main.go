@@ -7,6 +7,11 @@
 // Connection strings come from the environment:
 //
 //	ADMIN_DSN  used by `migrate` (default points at the local dev Postgres)
+//	TALLY_APP_ROLE_PASSWORD        `migrate` only: the password migration 0001
+//	TALLY_STATUTORY_ROLE_PASSWORD  / 0024 give tally_app / tally_statutory when
+//	                               they CREATE the roles. Unset = the dev values.
+//	                               Required on managed Postgres (Neon rejects
+//	                               the dev values); see docs/DEPLOY_VERCEL.md.
 //	APP_DSN    used by `serve`   (least-privilege tally_app role)
 //	PORT       HTTP listen port for `serve` (default 8080)
 //
@@ -101,6 +106,40 @@ func runMigrate(ctx context.Context) error {
 		return fmt.Errorf("connect admin: %w", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
+
+	// Role passwords for a hosted database (0001 / 0024 read these session
+	// settings). Passed as bind parameters to set_config, so the secret never
+	// appears in statement text or a server log.
+	for envName, setting := range map[string]string{
+		"TALLY_APP_ROLE_PASSWORD":       "tally.app_role_password",
+		"TALLY_STATUTORY_ROLE_PASSWORD": "tally.statutory_role_password",
+	} {
+		if v := os.Getenv(envName); v != "" {
+			if _, err := conn.Exec(ctx, "SELECT set_config($1, $2, false)", setting, v); err != nil {
+				return fmt.Errorf("set %s: %w", setting, err)
+			}
+		}
+	}
+
+	// A NON-SUPERUSER MIGRATOR (Neon's neondb_owner: CREATEROLE + BYPASSRLS,
+	// not SUPERUSER). Migrations 0097/0099 create roles and then hand objects
+	// to them (ALTER ... OWNER TO agent_view_owner), which PostgreSQL 16+
+	// allows only if the migrator can SET ROLE to the new owner, and then
+	// REVOKE/GRANT on the handed-over objects, which needs the owner's
+	// privileges INHERITED. A CREATEROLE user is granted both on every role it
+	// creates when createrole_self_grant = 'set, inherit'. Those roles are
+	// NOLOGIN/NOBYPASSRLS and own nothing the migrator does not already own or
+	// read, so the membership adds no privilege. A superuser (local dev, CI)
+	// needs none of this and is left untouched.
+	var super bool
+	if err := conn.QueryRow(ctx, `SELECT rolsuper FROM pg_roles WHERE rolname = current_user`).Scan(&super); err != nil {
+		return fmt.Errorf("read migrator role: %w", err)
+	}
+	if !super {
+		if _, err := conn.Exec(ctx, "SET createrole_self_grant = 'set, inherit'"); err != nil {
+			return fmt.Errorf("non-superuser migrator: set createrole_self_grant (needs PostgreSQL 16+): %w", err)
+		}
+	}
 
 	if err := migrations.Apply(ctx, conn); err != nil {
 		return err

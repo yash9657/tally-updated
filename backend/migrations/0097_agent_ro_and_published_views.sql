@@ -220,6 +220,14 @@ SELECT f.entity_kind, f.entity_name, f.fact_key, f.qualifier_name, f.value_num, 
   FROM entity_facts f
  WHERE f.superseded_at IS NULL AND f.valid_to IS NULL;
 
+-- ⚠️ A NON-SUPERUSER MIGRATOR (managed Postgres, e.g. Neon's neondb_owner):
+-- ALTER ... OWNER TO requires the NEW owner to hold CREATE on the schema, a
+-- check superusers skip. agent_view_owner must create nothing, so CREATE is
+-- granted for the hand-over only and revoked straight after, inside this
+-- migration's transaction — the committed privileges are exactly what a
+-- superuser migrator leaves behind. (docs/DEPLOY_VERCEL.md)
+GRANT CREATE ON SCHEMA agent TO agent_view_owner;
+
 DO $$
 DECLARE v TEXT;
 BEGIN
@@ -231,6 +239,8 @@ BEGIN
     END LOOP;
 END
 $$;
+
+REVOKE CREATE ON SCHEMA agent FROM agent_view_owner;
 
 COMMENT ON SCHEMA agent IS
     'W3 Tier B: the ONLY relations agent_ro may read. security_barrier views '

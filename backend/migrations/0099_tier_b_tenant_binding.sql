@@ -109,6 +109,12 @@ GRANT USAGE ON SCHEMA agent TO agent_binder;
 -- lets it resolve the name; it holds no privilege on any view or table here.
 GRANT USAGE ON SCHEMA agent TO tally_app;
 GRANT EXECUTE ON FUNCTION app_current_company_id() TO agent_binder;
+-- ⚠️ A NON-SUPERUSER MIGRATOR (managed Postgres, e.g. Neon's neondb_owner):
+-- ALTER ... OWNER TO requires the NEW owner to hold CREATE on the schema, a
+-- check superusers skip. Granted for the hand-overs below and revoked right
+-- after the last one, inside this migration's transaction, so the committed
+-- privileges equal a superuser migrator's. Same as 0097. (docs/DEPLOY_VERCEL.md)
+GRANT CREATE ON SCHEMA agent TO agent_binder, agent_ro;
 
 -- ---------------------------------------------------------------------------
 -- The binding. One row per Tier-B transaction; never committed in practice.
@@ -268,6 +274,7 @@ $$;
 
 ALTER FUNCTION agent.tier_b_run(TEXT, INT) OWNER TO agent_ro;
 ALTER FUNCTION agent.tier_b_plan(TEXT) OWNER TO agent_ro;
+REVOKE CREATE ON SCHEMA agent FROM agent_binder, agent_ro;
 REVOKE ALL ON FUNCTION agent.tier_b_run(TEXT, INT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION agent.tier_b_plan(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION agent.tier_b_run(TEXT, INT) TO agent_ro;
