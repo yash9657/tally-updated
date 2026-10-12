@@ -28,7 +28,7 @@ import { openApp, rec, summary } from "./audit-harness.mjs";
 
 const CO = process.env.CO;
 if (!CO) throw new Error('set CO="$(cat frontend/.demo-company-id)"');
-const BASE = process.env.UI_BASE_URL ?? "http://localhost:5173/";
+const BASE = process.env.UI_BASE_URL ?? "http://localhost:5173/signin";
 
 /** A uuid that is well formed and names no company anywhere. §7.3 D. */
 const DEAD_UUID = "deadbeef-0000-4000-8000-000000000000";

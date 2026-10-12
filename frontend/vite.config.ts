@@ -3,8 +3,8 @@ import react from "@vitejs/plugin-react";
 
 // Vite build configuration for the keystroke/navigation engine UI.
 //
-// DEV PROXY: when the UI runs in live mode (VITE_LIVE=1, see App.tsx) it talks to
-// cored SAME-ORIGIN so there is no CORS to configure —
+// DEV PROXY: BrowserApp always gates the workspace with same-origin auth and
+// talks to cored SAME-ORIGIN so there is no CORS to configure —
 //   /v1, /auth        -> cored     (:8087)
 // Override the target with CORED_PROXY_TARGET if needed.
 //

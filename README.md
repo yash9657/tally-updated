@@ -1,64 +1,127 @@
-# Tally-Compatible AI-Native ERP (working name: **Khata**)
+<p align="center">
+  <a href="https://tallyweb.world/">
+    <img src="frontend/public/brand/tallyweb-logo.svg" alt="Tallyweb" width="344" />
+  </a>
+</p>
 
-An AI-native, cloud-native accounting/ERP for Indian SMBs that **replicates TallyPrime's exact keystroke-driven UX** (zero learning curve for existing Tally users and their CAs) while adding a genuinely agentic AI insight layer Tally structurally lacks.
+<h1 align="center">Familiar keys. A new chapter.</h1>
 
-> Strategy, research, and architecture live in [`RESEARCH.md`](./RESEARCH.md) and [`PLAN.md`](./PLAN.md). **Read those first.** This README covers the repo and local dev only.
+<p align="center">Keyboard-first accounting, inventory, and AI-assisted workflows — in your browser.</p>
 
-## Monorepo layout
+<p align="center">
+  <a href="https://tallyweb.world/">Website</a> ·
+  <a href="https://tallyweb.world/signin">Sign in</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="DESIGN.md">Design system</a>
+</p>
 
-| Path | What | Stack |
-|---|---|---|
-| `backend/` | `cored` — modular monolith (system of record, ledger, atomic voucher post, compliance derive, reporting) | Go 1.26, PostgreSQL 16, pgx, chi |
-| `frontend/` | Keystroke-faithful UI engine (the XState navigation machine + Tally screens) | React 18, TypeScript, XState v5, Vite |
-| `insightd/` | The AI insight plane — document → purchase-voucher **DRAFT** (OCR → PII redaction → classify/infer → map). **NO ledger write path**, and reached **only** through cored's draft proxy | Python 3.11+, FastAPI, pydantic |
-| `backend/cmd/statutoryd/` | The IRN / e-invoice plane — a **separate deployable** in the same Go module, called by cored's proxy and calling back into it to freeze the voucher | Go |
-| `corpora/` | **Golden datasets that gate CI** — keystroke conformance, tax derivation, tenant isolation, migration reconciliation | JSON contracts (see `corpora/README.md`) |
-| `infra/` | IaC + CI: Terraform (AWS ap-south-1), k8s/Argo, GitHub Actions verification gates | Terraform, Kustomize |
-| `docs/` | Engineering notes, ADleavers, runbooks | Markdown |
+## What is Tallyweb?
 
-## The load-bearing invariants (Phase 0)
+Tallyweb is an accounting and ERP application for Indian businesses and their accountants. It combines familiar Tally-style keyboard navigation with a browser-based workspace and tools that help turn business documents into reviewable accounting work.
 
-These are built **before** feature velocity and enforced by CI so that later agent-driven work is safe:
+- **Accounting:** sales, purchases, receipts, payments, ledgers, and versioned vouchers.
+- **Reports:** Day Book, Balance Sheet, Profit & Loss, outstanding balances, and drill-down reports.
+- **Inventory:** stock summaries, stock movements, sales and purchase orders, and bills of materials.
+- **Banking and tax workflows:** bank statement imports, reconciliation, GST reports, and TDS workflows.
+- **AI assistance:** bill-to-draft processing, questions about your books, insights, and an Approval Inbox for agent proposals.
+- **Business controls:** company-scoped access, roles and permissions, voucher edit history, and an offline outbox for queued entries.
 
-1. **Tenant isolation is structural.** Default-deny Postgres Row-Level Security on every tenant table keyed by `company_id`; the app DB role has no `BYPASSRLS`; the connection wrapper *refuses any query* when the `app.current_company_id` GUC is unset. Verified by an adversarial fuzz suite.
-2. **The ledger is immutable & double-entry.** Every Create/Alter/Delete writes a **new** voucher version (never an in-place update), BLAKE3 hash-chained per node — this single construct is the MCA Rule 11(g) Edit Log, the event log, and the sync conflict unit. Money is `NUMERIC(19,4)` / integer paise, never float. `Σdebit = Σcredit` enforced by a deferred constraint trigger.
-3. **Keystroke fidelity is a contract.** The navigation grammar (Enter=drill/next, Esc=back, Ctrl+A=accept, F-keys=voucher type, Alt+G=Go To) is a deterministic XState machine driven by a data-driven keymap, regression-tested against captured TallyPrime behavior.
+Capabilities depend on service configuration. AI providers, OCR, and statutory integrations require their own setup; the repository does not imply live filing or production certification. See the [deployment guide](docs/DEPLOY_VERCEL.md) and [service documentation](insightd/README.md) for limitations.
 
-## Local development
+## Getting started
 
-Prereqs: Go 1.26+, Node 22+ / pnpm, Docker.
+### Frontend preview
+
+Use Node.js 22+ and pnpm:
 
 ```bash
-make dev-db        # start local Postgres 16 (docker, port 5433)
-make migrate       # apply backend/migrations to local db  (⛔ serving does NOT migrate)
-make backend-test  # go build + vet + RLS/isolation integration tests
-make frontend-test # pnpm install + vitest (keystroke machine)
-make verify        # run ALL Phase-0 CI gates locally
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-To run the stack: `make run-cored` (:8087) · `make run-insightd` (:8088) ·
-`make run-statutoryd` (:8091) · `cd frontend && pnpm dev` (:5173).
+Open [localhost:5173](http://localhost:5173) for the landing page. `/signin` contains the sign-in form; `/app` is the authenticated workspace. The public landing page needs no backend. Sign-in and workspace operations use the same-origin `/auth` and `/v1` APIs, proxied to `localhost:8087` by Vite. Override that target with `CORED_PROXY_TARGET` when needed.
 
-> ⛔ **Use the make targets rather than launching the services by hand.** Two
-> credentials are shared between processes and neither has a safe default in code:
-> `statutoryd` holds a cored-minted service token that **dies with every cored
-> restart**, and `insightd` shares `INSIGHTD_SERVICE_TOKEN` with cored's draft
-> proxy. The Makefile mints the first and exports the second; start either service
-> without them and you get an explicit refusal naming the missing variable, which is
-> the intended failure — never a quiet open door.
+The browser entry always requires authentication for the workspace. The standalone `App` component retains its in-memory composition for isolated tests and development harnesses.
 
-See the `Makefile` for the full target list.
+### Full development stack
 
-## How the three services relate
+Also install Go 1.26.4+, Python 3.11+, and Docker. From the repository root:
 
-```
-browser ──/v1, /auth──> cored ──proxy──> insightd    (document -> DRAFT; never writes the ledger)
-                          └────proxy──> statutoryd   (IRN / e-invoice; calls back in to freeze)
+```bash
+make dev-db
+make migrate
+python3 -m venv insightd/.venv
+insightd/.venv/bin/pip install -r insightd/requirements.txt -r insightd/requirements-db.txt
 ```
 
-**cored is the only door.** Nothing in the browser addresses insightd or
-statutoryd: every request is authenticated, membership-checked and policy-judged by
-cored first, and forwarded with the company its PDP authorized. The side planes
-refuse anything that did not arrive that way. See
-[`docs/TENANCY-AND-ACCESS.md`](./docs/TENANCY-AND-ACCESS.md) §1 for the three
-layers and §5b for why the AI plane sitting *outside* them was a real tenancy hole.
+Run each service in a separate terminal:
+
+```bash
+make run-cored       # API and accounting core on :8087
+make run-insightd    # Document-to-draft service on :8088
+make run-statutoryd  # Optional statutory service on :8091; start cored first
+```
+
+Then start the frontend with `cd frontend && pnpm dev`. Use `make seed-all` to prepare the local demo data and development identities; see `make help` for seeding and verification targets.
+
+Use the Makefile service targets: they supply the local database settings and shared service credentials. Restart `run-statutoryd` after restarting cored because its development service token is tied to cored’s signing key. These local development defaults are not production credentials.
+
+## Repository structure
+
+```text
+frontend/     React, TypeScript, XState, and Vite application
+backend/      Go accounting core, auth, APIs, migrations, and statutory service
+insightd/     Python/FastAPI document-to-draft service
+corpora/      Golden datasets and cross-service contracts
+infra/        Infrastructure configuration and operational guides
+docs/         Architecture, deployment, research, and archived reference material
+```
+
+The browser talks to **cored**. Cored authenticates requests, checks company membership and permissions, and proxies approved requests to the document and statutory services. The document service produces drafts; it does not write directly to the ledger.
+
+The ledger records voucher changes as new versions. Double-entry constraints, tenant isolation, and keyboard behavior are covered by the repository’s verification suites. Read [Tenancy and Access](docs/TENANCY-AND-ACCESS.md) for the security model.
+
+## Design and branding
+
+The [design system](DESIGN.md) documents reusable tokens, components, accessibility, and the relationship between the public pages and accounting workspace.
+
+- `frontend/src/design-system/tokens.css` — shared colors, typography, spacing, shapes, motion, and focus tokens.
+- `frontend/src/design-system/components.tsx` — `Brand`, `Button`, `ButtonLink`, `Keycap`, and `ArrowIcon`.
+- `frontend/tailwind.config.ts` — existing `tally-*` utilities mapped to the same CSS variables, including opacity modifiers.
+- `frontend/public/brand/` — SVG logo and mark; `frontend/public/favicon.svg` is the browser icon.
+
+IBM Plex Sans is self-hosted under the [SIL Open Font License](frontend/public/fonts/OFL.txt). Financial tables and keyboard controls retain the monospace typography of the workspace.
+
+## Verification
+
+```bash
+cd frontend
+pnpm build          # TypeScript check and production bundle
+pnpm test:run       # Frontend unit and integration suites
+```
+
+CI uses Node.js 22. On Node.js 26, run tests with
+`NODE_OPTIONS=--no-experimental-webstorage pnpm test:run` so Node's experimental
+Web Storage does not shadow jsdom's browser storage.
+
+From the repository root:
+
+```bash
+make backend-test   # Requires the local database and migrations
+make corpora-verify
+make insightd-test
+make verify         # Full configured verification gates
+```
+
+`pnpm e2e:ui` in `frontend/` runs the browser smoke suite against a seeded local stack. Its default entry is `/signin`.
+
+## Documentation
+
+- [Deployment](docs/DEPLOY_VERCEL.md)
+- [Tenancy and access](docs/TENANCY-AND-ACCESS.md)
+- [Architecture and feature design notes](docs/design/)
+- [Golden datasets](corpora/README.md)
+- [Historical runbook and defect register](docs/archive/)
+
+Tallyweb is an independent project. Tally and TallyPrime are trademarks of their respective owner. This project is not affiliated with or endorsed by Tally Solutions.

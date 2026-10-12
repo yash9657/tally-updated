@@ -1,0 +1,430 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-12T23:33:26.483184+00:00",
+  "title": "Design System: Tallyweb",
+  "extensions": {
+    "colorMeta": {
+      "canvas": {
+        "role": "primary",
+        "displayName": "Canvas",
+        "tonalRamp": [
+          "oklch(15.000% 0.11665 265.398)",
+          "oklch(26.429% 0.11665 265.398)",
+          "oklch(37.857% 0.11665 265.398)",
+          "oklch(49.286% 0.11665 265.398)",
+          "oklch(60.714% 0.11665 265.398)",
+          "oklch(72.143% 0.11665 265.398)",
+          "oklch(83.571% 0.11665 265.398)",
+          "oklch(95.000% 0.11665 265.398)"
+        ]
+      },
+      "panel": {
+        "role": "primary",
+        "displayName": "Panel",
+        "tonalRamp": [
+          "oklch(15.000% 0.14135 266.626)",
+          "oklch(26.429% 0.14135 266.626)",
+          "oklch(37.857% 0.14135 266.626)",
+          "oklch(49.286% 0.14135 266.626)",
+          "oklch(60.714% 0.14135 266.626)",
+          "oklch(72.143% 0.14135 266.626)",
+          "oklch(83.571% 0.14135 266.626)",
+          "oklch(95.000% 0.14135 266.626)"
+        ]
+      },
+      "panel-hover": {
+        "role": "primary",
+        "displayName": "Panel Hover",
+        "tonalRamp": [
+          "oklch(15.000% 0.15340 266.392)",
+          "oklch(26.429% 0.15340 266.392)",
+          "oklch(37.857% 0.15340 266.392)",
+          "oklch(49.286% 0.15340 266.392)",
+          "oklch(60.714% 0.15340 266.392)",
+          "oklch(72.143% 0.15340 266.392)",
+          "oklch(83.571% 0.15340 266.392)",
+          "oklch(95.000% 0.15340 266.392)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "oklch(15.000% 0.18789 264.052)",
+          "oklch(26.429% 0.18789 264.052)",
+          "oklch(37.857% 0.18789 264.052)",
+          "oklch(49.286% 0.18789 264.052)",
+          "oklch(60.714% 0.18789 264.052)",
+          "oklch(72.143% 0.18789 264.052)",
+          "oklch(83.571% 0.18789 264.052)",
+          "oklch(95.000% 0.18789 264.052)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Text",
+        "tonalRamp": [
+          "oklch(15.000% 0.00000 0.000)",
+          "oklch(26.429% 0.00000 0.000)",
+          "oklch(37.857% 0.00000 0.000)",
+          "oklch(49.286% 0.00000 0.000)",
+          "oklch(60.714% 0.00000 0.000)",
+          "oklch(72.143% 0.00000 0.000)",
+          "oklch(83.571% 0.00000 0.000)",
+          "oklch(95.000% 0.00000 0.000)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "tonalRamp": [
+          "oklch(15.000% 0.05485 266.766)",
+          "oklch(26.429% 0.05485 266.766)",
+          "oklch(37.857% 0.05485 266.766)",
+          "oklch(49.286% 0.05485 266.766)",
+          "oklch(60.714% 0.05485 266.766)",
+          "oklch(72.143% 0.05485 266.766)",
+          "oklch(83.571% 0.05485 266.766)",
+          "oklch(95.000% 0.05485 266.766)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Accent",
+        "tonalRamp": [
+          "oklch(15.000% 0.15352 89.781)",
+          "oklch(26.429% 0.15352 89.781)",
+          "oklch(37.857% 0.15352 89.781)",
+          "oklch(49.286% 0.15352 89.781)",
+          "oklch(60.714% 0.15352 89.781)",
+          "oklch(72.143% 0.15352 89.781)",
+          "oklch(83.571% 0.15352 89.781)",
+          "oklch(95.000% 0.15352 89.781)"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Accent Hover",
+        "tonalRamp": [
+          "oklch(15.000% 0.12127 90.916)",
+          "oklch(26.429% 0.12127 90.916)",
+          "oklch(37.857% 0.12127 90.916)",
+          "oklch(49.286% 0.12127 90.916)",
+          "oklch(60.714% 0.12127 90.916)",
+          "oklch(72.143% 0.12127 90.916)",
+          "oklch(83.571% 0.12127 90.916)",
+          "oklch(95.000% 0.12127 90.916)"
+        ]
+      },
+      "success": {
+        "role": "neutral",
+        "displayName": "Success",
+        "tonalRamp": [
+          "oklch(15.000% 0.15036 152.291)",
+          "oklch(26.429% 0.15036 152.291)",
+          "oklch(37.857% 0.15036 152.291)",
+          "oklch(49.286% 0.15036 152.291)",
+          "oklch(60.714% 0.15036 152.291)",
+          "oklch(72.143% 0.15036 152.291)",
+          "oklch(83.571% 0.15036 152.291)",
+          "oklch(95.000% 0.15036 152.291)"
+        ]
+      },
+      "success-text": {
+        "role": "neutral",
+        "displayName": "Success Text",
+        "tonalRamp": [
+          "oklch(15.000% 0.11438 156.108)",
+          "oklch(26.429% 0.11438 156.108)",
+          "oklch(37.857% 0.11438 156.108)",
+          "oklch(49.286% 0.11438 156.108)",
+          "oklch(60.714% 0.11438 156.108)",
+          "oklch(72.143% 0.11438 156.108)",
+          "oklch(83.571% 0.11438 156.108)",
+          "oklch(95.000% 0.11438 156.108)"
+        ]
+      },
+      "danger": {
+        "role": "neutral",
+        "displayName": "Danger",
+        "tonalRamp": [
+          "oklch(15.000% 0.19758 29.234)",
+          "oklch(26.429% 0.19758 29.234)",
+          "oklch(37.857% 0.19758 29.234)",
+          "oklch(49.286% 0.19758 29.234)",
+          "oklch(60.714% 0.19758 29.234)",
+          "oklch(72.143% 0.19758 29.234)",
+          "oklch(83.571% 0.19758 29.234)",
+          "oklch(95.000% 0.19758 29.234)"
+        ]
+      },
+      "danger-text": {
+        "role": "neutral",
+        "displayName": "Danger Text",
+        "tonalRamp": [
+          "oklch(15.000% 0.08867 25.080)",
+          "oklch(26.429% 0.08867 25.080)",
+          "oklch(37.857% 0.08867 25.080)",
+          "oklch(49.286% 0.08867 25.080)",
+          "oklch(60.714% 0.08867 25.080)",
+          "oklch(72.143% 0.08867 25.080)",
+          "oklch(83.571% 0.08867 25.080)",
+          "oklch(95.000% 0.08867 25.080)"
+        ]
+      },
+      "bar": {
+        "role": "neutral",
+        "displayName": "Bar",
+        "tonalRamp": [
+          "oklch(15.000% 0.06075 273.828)",
+          "oklch(26.429% 0.06075 273.828)",
+          "oklch(37.857% 0.06075 273.828)",
+          "oklch(49.286% 0.06075 273.828)",
+          "oklch(60.714% 0.06075 273.828)",
+          "oklch(72.143% 0.06075 273.828)",
+          "oklch(83.571% 0.06075 273.828)",
+          "oklch(95.000% 0.06075 273.828)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Border",
+        "tonalRamp": [
+          "oklch(15.000% 0.10487 267.444)",
+          "oklch(26.429% 0.10487 267.444)",
+          "oklch(37.857% 0.10487 267.444)",
+          "oklch(49.286% 0.10487 267.444)",
+          "oklch(60.714% 0.10487 267.444)",
+          "oklch(72.143% 0.10487 267.444)",
+          "oklch(83.571% 0.10487 267.444)",
+          "oklch(95.000% 0.10487 267.444)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "tonalRamp": [
+          "oklch(15.000% 0.00672 277.165)",
+          "oklch(26.429% 0.00672 277.165)",
+          "oklch(37.857% 0.00672 277.165)",
+          "oklch(49.286% 0.00672 277.165)",
+          "oklch(60.714% 0.00672 277.165)",
+          "oklch(72.143% 0.00672 277.165)",
+          "oklch(83.571% 0.00672 277.165)",
+          "oklch(95.000% 0.00672 277.165)"
+        ]
+      },
+      "paper-muted": {
+        "role": "neutral",
+        "displayName": "Paper Muted",
+        "tonalRamp": [
+          "oklch(15.000% 0.07350 267.572)",
+          "oklch(26.429% 0.07350 267.572)",
+          "oklch(37.857% 0.07350 267.572)",
+          "oklch(49.286% 0.07350 267.572)",
+          "oklch(60.714% 0.07350 267.572)",
+          "oklch(72.143% 0.07350 267.572)",
+          "oklch(83.571% 0.07350 267.572)",
+          "oklch(95.000% 0.07350 267.572)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Desktop public hero headline."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Public section headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Public explanatory copy."
+      },
+      "button": {
+        "displayName": "Button",
+        "purpose": "Shared button label."
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "Accounting data and codes; size follows screen density."
+      },
+      "keycap": {
+        "displayName": "Keycap",
+        "purpose": "Keyboard shortcut label."
+      }
+    },
+    "shadows": [
+      {
+        "name": "--tw-shadow-preview",
+        "value": "0 24px 64px rgb(2 12 45 / 0.3)",
+        "purpose": "Single lift for the public product preview."
+      }
+    ],
+    "motion": [
+      {
+        "name": "--tw-duration-fast",
+        "value": "160ms",
+        "purpose": "Background and border transitions; becomes 0ms under reduced motion."
+      },
+      {
+        "name": "--tw-duration-enter",
+        "value": "600ms",
+        "purpose": "Visible-by-default preview entrance from translateY(12px); becomes 0ms under reduced motion."
+      },
+      {
+        "name": "--tw-ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Easing for the preview entrance."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "public-gap-adjustment",
+        "value": "1050px"
+      },
+      {
+        "name": "public-stacked-layout",
+        "value": "760px"
+      },
+      {
+        "name": "signin-compact-padding",
+        "value": "480px"
+      },
+      {
+        "name": "public-preview-compact",
+        "value": "380px"
+      }
+    ],
+    "focus": {
+      "color": "var(--tw-color-accent)",
+      "lightSurfaceColor": "var(--tw-color-ink)",
+      "width": "2px",
+      "offset": "4px",
+      "previewOffset": "-4px"
+    },
+    "layout": {
+      "contentWidth": "76rem",
+      "pageGutter": "clamp(1.25rem, 4vw, 3rem)",
+      "controlMinHeight": "2.875rem",
+      "breakpointQuery": "max-width"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Existing primary button variant on a blue surface.",
+      "html": "<div class=\"ds-button-primary-stage\"><button type=\"button\" class=\"ds-button-primary\">Open your workspace</button></div>",
+      "css": ".ds-button-primary-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-button-primary {display: inline-flex;\n  justify-content: center;\n  align-items: center;\n  gap: var(--tw-space-3);\n  min-height: var(--tw-control-height);\n  padding: var(--tw-space-3) var(--tw-space-5);\n  border: var(--tw-border-width) solid transparent;\n  border-radius: var(--tw-radius-sm);\n  font: 600 var(--tw-text-sm)/1.4 var(--tw-font-sans);\n  text-decoration: none;\n  cursor: pointer;\n  transition: background-color var(--tw-duration-fast), border-color var(--tw-duration-fast); color: rgb(var(--tw-color-canvas)); background: rgb(var(--tw-color-accent));} .ds-button-primary:hover {background: rgb(var(--tw-color-accent-hover));} .ds-button-primary:focus-visible {outline: var(--tw-focus-width) solid rgb(var(--tw-focus-color)); outline-offset: var(--tw-focus-offset);} .ds-button-primary:disabled {opacity: 0.55; cursor: not-allowed;}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Existing secondary button variant on a blue surface.",
+      "html": "<div class=\"ds-button-secondary-stage\"><button type=\"button\" class=\"ds-button-secondary\">Sign in</button></div>",
+      "css": ".ds-button-secondary-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-button-secondary {display: inline-flex;\n  justify-content: center;\n  align-items: center;\n  gap: var(--tw-space-3);\n  min-height: var(--tw-control-height);\n  padding: var(--tw-space-3) var(--tw-space-5);\n  border: var(--tw-border-width) solid transparent;\n  border-radius: var(--tw-radius-sm);\n  font: 600 var(--tw-text-sm)/1.4 var(--tw-font-sans);\n  text-decoration: none;\n  cursor: pointer;\n  transition: background-color var(--tw-duration-fast), border-color var(--tw-duration-fast); color: rgb(var(--tw-color-text)); border-color: rgb(var(--tw-color-border)); background: transparent;} .ds-button-secondary:hover {background: rgb(var(--tw-color-panel)); border-color: rgb(var(--tw-color-muted));} .ds-button-secondary:focus-visible {outline: var(--tw-focus-width) solid rgb(var(--tw-focus-color)); outline-offset: var(--tw-focus-offset);} .ds-button-secondary:disabled {opacity: 0.55; cursor: not-allowed;}"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Existing quiet button variant on a blue surface.",
+      "html": "<div class=\"ds-button-quiet-stage\"><button type=\"button\" class=\"ds-button-quiet\">Cancel</button></div>",
+      "css": ".ds-button-quiet-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-button-quiet {display: inline-flex;\n  justify-content: center;\n  align-items: center;\n  gap: var(--tw-space-3);\n  min-height: var(--tw-control-height);\n  padding: var(--tw-space-3) var(--tw-space-5);\n  border: var(--tw-border-width) solid transparent;\n  border-radius: var(--tw-radius-sm);\n  font: 600 var(--tw-text-sm)/1.4 var(--tw-font-sans);\n  text-decoration: none;\n  cursor: pointer;\n  transition: background-color var(--tw-duration-fast), border-color var(--tw-duration-fast); color: inherit; background: transparent;} .ds-button-quiet:hover {background: rgb(var(--tw-color-bar) / 0.1);} .ds-button-quiet:focus-visible {outline: var(--tw-focus-width) solid rgb(var(--tw-focus-color)); outline-offset: var(--tw-focus-offset);} .ds-button-quiet:disabled {opacity: 0.55; cursor: not-allowed;}"
+    },
+    {
+      "name": "User Name Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Native labeled input with invalid, disabled, and keyboard-focus styles.",
+      "html": "<div class=\"ds-field-stage\"><label class=\"ds-field\"><span>User name</span><input class=\"ds-input\" name=\"subject\" autocomplete=\"username\" /></label></div>",
+      "css": ".ds-field-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-field {display: grid; gap: var(--tw-space-2); font-size: var(--tw-text-sm); font-weight: 500;} .ds-input {width: 100%;\n  min-height: var(--tw-control-height);\n  padding: var(--tw-space-3);\n  border: var(--tw-border-width) solid rgb(var(--tw-color-border));\n  border-radius: var(--tw-radius-sm);\n  background: rgb(var(--tw-color-text));\n  color: rgb(var(--tw-color-ink));\n  caret-color: rgb(var(--tw-color-ink));\n  font: 400 var(--tw-text-base)/1.4 var(--tw-font-sans);} .ds-input[aria-invalid=\"true\"] {border-color: rgb(var(--tw-color-danger-text));} .ds-input:disabled {opacity: 0.65; cursor: not-allowed;} .ds-input:focus-visible {outline: var(--tw-focus-width) solid rgb(var(--tw-focus-color)); outline-offset: var(--tw-focus-offset);}"
+    },
+    {
+      "name": "Public Navigation",
+      "kind": "nav",
+      "description": "The landing header’s in-page navigation links; hidden below the public mobile breakpoint in the page composition.",
+      "html": "<div class=\"ds-nav-stage\"><nav class=\"ds-nav\" aria-label=\"Main navigation\"><a href=\"#features\">Features</a><a href=\"#workflow\">How it works</a></nav></div>",
+      "css": ".ds-nav-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-nav {display:flex; gap:var(--tw-space-8); font-size:var(--tw-text-sm);} .ds-nav a {color:rgb(var(--tw-color-muted)); text-decoration:none; text-underline-offset:5px;} .ds-nav a:hover {color:rgb(var(--tw-color-accent));} .ds-nav a:focus-visible {outline: var(--tw-focus-width) solid rgb(var(--tw-focus-color)); outline-offset: var(--tw-focus-offset);}"
+    },
+    {
+      "name": "Keyboard Shortcut",
+      "kind": "custom",
+      "refersTo": "keycap",
+      "description": "The existing noninteractive keycap for shortcut labels.",
+      "html": "<div class=\"ds-keycap-stage\"><kbd class=\"ds-keycap\">F8</kbd></div>",
+      "css": ".ds-keycap-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-keycap {display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  min-width: 1.6rem;\n  padding: var(--tw-space-1) var(--tw-space-2);\n  border: var(--tw-border-width) solid currentColor;\n  border-radius: var(--tw-radius-sm);\n  font: 500 var(--tw-text-xs)/1.3 var(--tw-font-mono);}"
+    },
+    {
+      "name": "Authentication Alert",
+      "kind": "custom",
+      "refersTo": "alert",
+      "description": "Existing error treatment with the implemented invalid-credentials message.",
+      "html": "<div class=\"ds-alert-stage\"><p class=\"ds-alert\" role=\"alert\">Invalid credentials — check the user name and password.</p></div>",
+      "css": ".ds-alert-stage {background: rgb(var(--tw-color-canvas)); color: rgb(var(--tw-color-text)); padding: var(--tw-space-6); font-family: var(--tw-font-sans); line-height: var(--tw-leading-body);} .ds-alert {padding: var(--tw-space-3) var(--tw-space-4);\n  background: rgb(var(--tw-color-text));\n  border-radius: var(--tw-radius-sm);\n  color: rgb(var(--tw-color-danger));\n  font-size: var(--tw-text-sm);\n  line-height: var(--tw-leading-body);}"
+    },
+    {
+      "name": "Document Review Container",
+      "kind": "card",
+      "refersTo": "review-card",
+      "description": "The existing flat white review container, with its header and document row.",
+      "html": "<div class=\"ds-card-stage\"><div class=\"ds-review-example\" aria-label=\"Illustrative bill review workflow\"><div class=\"ds-review-example__header\"><span>Bill Inbox</span><span>Illustrative workflow</span></div><div class=\"ds-review-document\"><svg width=\"32\" height=\"40\" viewBox=\"0 0 32 40\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M5 2h14l8 8v28H5zM19 2v9h8M10 19h12M10 25h12M10 31h7\" /></svg><div><strong>supplier-invoice.pdf</strong><span>A bill becomes a draft voucher</span></div></div><p class=\"ds-review-caption\">From document to draft, with a review in between.</p></div></div>",
+      "css": ".ds-card-stage {background:rgb(var(--tw-color-paper)); color:rgb(var(--tw-color-canvas)); font-family:var(--tw-font-sans); line-height:var(--tw-leading-body); padding:var(--tw-space-6);} .ds-review-example__header {display:flex; align-items:center; justify-content:space-between; gap:var(--tw-space-3);}.ds-review-example {background: rgb(var(--tw-color-text)); border: 1px solid rgb(var(--tw-color-border) / 0.25); border-radius: var(--tw-radius-md);}.ds-review-example__header {border-bottom: 1px solid rgb(var(--tw-color-border) / 0.2); padding: var(--tw-space-4) var(--tw-space-6); font: 500 var(--tw-text-sm)/1.5 var(--tw-font-mono);}.ds-review-example__header > span:last-child {font-size: 0.625rem; color: rgb(var(--tw-color-paper-muted));}.ds-review-document {display: flex; align-items: center; gap: var(--tw-space-4); margin: var(--tw-space-6);}.ds-review-document strong {font-size: var(--tw-text-sm); font-weight: 500;}.ds-review-document span {display: block; font-size: var(--tw-text-xs); color: rgb(var(--tw-color-paper-muted));}.ds-review-caption {padding: var(--tw-space-4) var(--tw-space-6); background: rgb(var(--tw-color-bar) / 0.25); font-size: var(--tw-text-xs);}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Tally-style accounting",
+    "overview": "The existing accounting UI supplies the identity: deep blue, yellow selections, pale function-key bars, and precise monospace data. Public pages extend that identity with more generous spacing and IBM Plex Sans. The workspace keeps its compact keyboard-driven layout.\n\nThe runtime source of truth is `frontend/src/design-system/tokens.css`. Reusable primitives live in `frontend/src/design-system/components.tsx` and `components.css`. Update this reference and `.impeccable/design.json` when the implementation changes. Sidecar tonal ramps are generated swatch aids, not additional runtime colors.",
+    "keyCharacteristics": [
+      "Deep blue surfaces with yellow actions and selections.",
+      "Sans-serif public copy paired with precise monospace financial data.",
+      "Compact workspace density and generous public-page spacing.",
+      "Shared native controls with visible keyboard focus."
+    ],
+    "rules": [
+      {
+        "name": "The Semantic Color Rule",
+        "body": "Reuse the shared roles and preserve their surface context; pair status color with text or another non-color signal.",
+        "section": "colors"
+      },
+      {
+        "name": "The Financial Data Rule",
+        "body": "Keep financial values in the monospace data treatment, use tabular numerals, and right-align amount columns. Data sizes follow each screen’s density rather than a single global size.",
+        "section": "typography"
+      },
+      {
+        "name": "The Density Rule",
+        "body": "Preserve the accounting character grid when reusing public-page primitives; public spacing and heading sizes do not define workspace density.",
+        "section": "layout"
+      },
+      {
+        "name": "The Surface Layer Rule",
+        "body": "Use the existing surface and divider roles for ordinary grouping; reserve the preview shadow for the lifted product example.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Native Control Rule",
+        "body": "Preserve native links, buttons, labels, form submission, and disclosures; retain visible keyboard focus and expose loading, disabled, and error states through the existing semantics.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do reuse the shared CSS tokens and existing Tailwind compatibility aliases.",
+      "Do use yellow for primary actions and selected accounting rows.",
+      "Do pair public sans-serif copy with monospace financial data and shortcut labels.",
+      "Do preserve native control semantics, visible focus, and reduced-motion behavior.",
+      "Do preserve the compact accounting workspace when extending the public design system."
+    ],
+    "donts": [
+      "Don't introduce independent color literals in feature components when a shared role exists.",
+      "Don't communicate status through color alone.",
+      "Don't remove a keyboard focus indicator.",
+      "Don't add the preview shadow to every feature or nest bordered cards inside cards.",
+      "Don't replace specific authentication failures with a generic error message."
+    ]
+  }
+}

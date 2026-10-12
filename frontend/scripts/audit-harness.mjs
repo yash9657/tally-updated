@@ -34,7 +34,7 @@ import { createRequire } from "node:module";
 const require = createRequire(new URL("./", import.meta.url));
 const { chromium } = require("playwright");
 
-export const URL_BASE = process.env.UI_BASE_URL ?? "http://localhost:5173/";
+export const URL_BASE = process.env.UI_BASE_URL ?? "http://localhost:5173/signin";
 export const SUBJECT = process.env.E2E_SUBJECT ?? "browser-dev-owner";
 export const PASSWORD = process.env.DEMO_PASSWORD ?? "tally-demo-2026";
 

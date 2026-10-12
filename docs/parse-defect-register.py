@@ -4,7 +4,8 @@ Reads the STATUS COLUMN only (never the whole line): CLOSED rows say "OPEN" in
 their prose and a line-wide test has been wrong in both directions.
 """
 import re, sys
-src = open(sys.argv[1] if len(sys.argv) > 1 else 'HANDOFF-PARITY-AUDIT.md').read().split('\n')
+from pathlib import Path
+src = open(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).parent / 'archive' / 'HANDOFF-PARITY-AUDIT.md').read().split('\n')
 start = next(i for i, l in enumerate(src) if l.startswith('| # | Row | Sev | Defect | Where | Status |'))
 end = start + 1
 while end < len(src) and src[end].startswith('|'):

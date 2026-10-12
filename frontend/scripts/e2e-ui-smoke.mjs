@@ -62,7 +62,7 @@
  */
 import { chromium } from "playwright";
 
-const URL = process.env.UI_BASE_URL ?? "http://localhost:5173/";
+const URL = process.env.UI_BASE_URL ?? "http://localhost:5173/signin";
 /** The identity the browser signs in as. Its password comes from `seed:demo`. */
 const SUBJECT = process.env.E2E_SUBJECT ?? "browser-dev-owner";
 const PASSWORD = process.env.DEMO_PASSWORD ?? "tally-demo-2026";

@@ -8,6 +8,14 @@
     {
       "source": "/auth/:path*",
       "destination": "https://api.tallyweb.world/auth/:path*"
+    },
+    {
+      "source": "/signin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/app",
+      "destination": "/index.html"
     }
   ]
 }

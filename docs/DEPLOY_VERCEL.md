@@ -12,7 +12,7 @@ pgvector. Nothing else is paid for.
 
 | Service | Code | What it does | Needed? | Where it runs |
 |---|---|---|---|---|
-| **frontend** | `frontend/` (Vite + React) | The keystroke UI. In live mode (`VITE_LIVE=1`) it calls `/v1/*` and `/auth/*` same-origin. | **Yes** | Existing Vercel project `tally-updated` (static build) |
+| **frontend** | `frontend/` (Vite + React) | Public landing page, separate sign-in, and authenticated keystroke UI. Calls `/v1/*` and `/auth/*` same-origin. | **Yes** | Existing Vercel project `tally-updated` (static build) |
 | **cored** | `backend/cmd/cored` (Go) | The system of record: ledger, masters, reports, auth, PDP, agent and insight planes. The browser talks to cored and to nothing else. | **Yes** | New Vercel project `tally-cored`, Container Runtime (`backend/Dockerfile.vercel`) |
 | **insightd** | `insightd/` (Python, FastAPI) | Bill Inbox: document -> purchase-voucher **draft**. Reached only through cored's `/v1/companies/{id}/drafts*` proxy with a shared service token. | Optional (Bill Inbox only) | New Vercel project `tally-insightd`, Container Runtime (`insightd/Dockerfile.vercel`) |
 | **statutoryd** | `backend/cmd/statutoryd` (Go) | IRN / e-invoice. Runs a **fake** IRP provider only, calls back into cored with a `svc:statutoryd` token minted by cored's dev `/auth/token`. | No | **Not deployed** (see §8). E-invoice actions answer an error; everything else works. |
@@ -171,13 +171,14 @@ fake, which is what the demo shows.
 | Root Directory | `frontend` (unchanged) |
 | Framework Preset | Vite (unchanged) |
 | Install / Build | defaults (`pnpm install`, `pnpm build` = `tsc --noEmit && vite build`); output `dist` |
-| `frontend/vercel.json` | rewrites `/v1/:path*` and `/auth/:path*` to `https://CORED_HOST_PLACEHOLDER/...` |
+| `frontend/vercel.json` | proxies `/v1/:path*` and `/auth/:path*` to `https://api.tallyweb.world/...`; serves `/signin` and `/app` through `index.html` |
 
-**Before merging, replace both `CORED_HOST_PLACEHOLDER` in
-`frontend/vercel.json` with `<CORED_HOST>`** (e.g. `api.tallyweb.world`). The
-rewrites keep the browser same-origin (no CORS), and the `Authorization` header
-is forwarded. Until `VITE_LIVE=1` is set the app runs on its in-memory mock
-client and never calls the rewrites, so the placeholder is inert.
+The API rewrites keep the browser same-origin (no CORS), and the
+`Authorization` header is forwarded. Update both API destinations if cored's
+production hostname changes. `/` is the public landing page, `/signin` holds
+the login form, and `/app` requires an authenticated session. Direct loads and
+refreshes of both application routes resolve to the SPA. Historical
+`/?company=...` links are preserved through sign-in.
 
 ---
 
@@ -261,10 +262,11 @@ run from your machine).
 
 | Name | Secret | Value | Notes |
 |---|---|---|---|
-| `VITE_LIVE` | no | `1` | Switches the build from the in-memory mock to the real backend behind a login screen. **Changes what tallyweb.world shows** - set it only once cored is up. |
+| `VITE_LIVE` | no | optional | Legacy standalone `App` composition flag. The browser entry explicitly enables auth for `/signin` and `/app`, independent of this flag. |
 | `VITE_HOME_STATE_CODE` | no | e.g. `29` | optional default state for new companies |
 
-Do **not** set `VITE_CORED_BASE_URL` (that is the ungated, no-login client).
+The browser entry uses same-origin APIs; it does not need `VITE_CORED_BASE_URL`.
+That variable remains available only to standalone `App` development harnesses.
 
 ---
 
