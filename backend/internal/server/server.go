@@ -245,6 +245,17 @@ type Server struct {
 	// /security-levels. See handler_admin.go.
 	authAdmin adminStore
 
+	// devTokenRouteOff (AUTH_DEV_TOKEN_ROUTE_DISABLED=true) keeps the in-process
+	// signer — so POST /auth/login still issues tokens for users who HAVE a
+	// password — but does not mount POST /auth/token, the endpoint that mints a
+	// token for ANY subject (including "svc:*"). It exists for a hosted demo
+	// that has no external IdP: seed the accounts with the route on, then turn
+	// it off. It changes nothing when the signer is absent (JWKS mode).
+	devTokenRouteOff bool
+	// cronSecret (CRON_SECRET) gates the /internal/cron/* routes that drive the
+	// background pollers on a scale-to-zero host. Empty = routes not mounted.
+	cronSecret string
+
 	// WebAuthn step-up + account lockout (Task D, WS1 AUTH FOLLOW-UP). These are
 	// built UNCONDITIONALLY (they need only pool.Raw(), no signer). webauthn drives
 	// the register/assert ceremonies; webauthnStore is the credential store the
@@ -417,6 +428,10 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// Password login (WS-A1). Same concrete store; a distinct interface
 		// because it operates on the pre-auth side of the boundary.
 		credentials: authzStore,
+
+		// Hosted-deployment switches (docs/DEPLOY_VERCEL.md).
+		devTokenRouteOff: os.Getenv("AUTH_DEV_TOKEN_ROUTE_DISABLED") == "true",
+		cronSecret:       strings.TrimSpace(os.Getenv("CRON_SECRET")),
 
 		webauthn:      waService,
 		webauthnStore: waStore,
@@ -1201,8 +1216,10 @@ func (s *Server) routes() {
 	// not exist (404) and tokens come from the external IdP. This gating is the
 	// fix for the unauthenticated token-minting oracle: the endpoint mints a
 	// validly-signed token for any subject, so it must never serve in prod.
-	if s.signer != nil {
+	if s.signer != nil && !s.devTokenRouteOff {
 		r.Post("/auth/token", s.handleDevToken)
+	} else if s.signer != nil {
+		log.Printf("auth: AUTH_DEV_TOKEN_ROUTE_DISABLED=true — POST /auth/token is NOT mounted; only POST /auth/login (existing passwords) issues tokens")
 	}
 
 	// WebAuthn step-up ceremony (WS1 follow-up) + the first-party password login
@@ -1212,6 +1229,7 @@ func (s *Server) routes() {
 	s.router = r
 	s.authWebAuthnRoutes()
 	s.authLoginRoutes()
+	s.cronRoutes()
 
 	// Company lifecycle (identity). authn-ONLY: verify JWT + resolve user
 	// (create-on-first-login); skip membership/PDP (the company does not exist
@@ -2203,7 +2221,7 @@ type devTokenReq struct {
 func (s *Server) handleDevToken(w http.ResponseWriter, r *http.Request) {
 	// Defense in depth: this handler must never run without the dev signer.
 	// routes() only mounts it in dev mode, but guard here too.
-	if s.signer == nil {
+	if s.signer == nil || s.devTokenRouteOff {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
