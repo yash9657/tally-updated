@@ -38,13 +38,13 @@ Tally is a single-tenant-per-company, multi-company accounting system. The desig
 1. **The books are never wrong silently.** Double entry, versioned and hash-chained vouchers, and tenant isolation are enforced in Postgres (FORCE RLS), not just in handlers.
 2. **AI proposes, Go decides.** No model writes SQL against base tables, computes money, or commits a write without a gate. Every agent write goes through the same router and policy decision point (PDP) a human's keystroke does.
 3. **One deployable that runs anywhere.** `cored` is an ordinary `net/http` server, so the same binary runs locally, in a container, and on Lambda.
-4. **Near-zero idle cost.** Traffic is bursty and low, so idle time should cost almost nothing. The AWS target scales compute and database to zero.
+4. **Near-zero idle cost.** Traffic is bursty and low, so idle time should cost almost nothing. The AWS deployment scales compute and database to zero.
 
 ![System context](docs/architecture/system-context.svg)
 
 ### Components
 
-| Component | Code | Responsibility | Runs on (production target) |
+| Component | Code | Responsibility | Runs on (production) |
 |---|---|---|---|
 | Web app | `frontend/` (React, XState, Vite) | Keyboard-first workspace and public pages. Calls only same-origin `/v1` and `/auth`. | Vercel, `tallyweb.world`. `vercel.json` rewrites `/v1/*` and `/auth/*` to `api.tallyweb.world`. |
 | **cored** | `backend/cmd/cored`, `backend/internal/*` | System of record and the only door to it: auth, PDP, ledger, masters, inventory, reports, GST, TDS/TCS, payroll, NL query, agent plane, MCP server, insights, notification outbox, and embedded migrations. | AWS Lambda behind CloudFront |
@@ -137,12 +137,12 @@ The shared platform is about **$12–18 a month**, split with DentaBill:
 | Environment | How | Database | Status |
 |---|---|---|---|
 | Local | `make dev-db` (docker-compose `pgvector/pgvector:pg16`) + `make run-cored` / `run-insightd` / `run-statutoryd` | Postgres 16 on :5433 | Day-to-day development |
-| Vercel (legacy) | `tally-cored` Container Runtime project ([guide](docs/DEPLOY_VERCEL.md)), Vercel Cron for `/internal/cron/*` | Neon | Serves `api.tallyweb.world` until the DNS cutover |
-| **AWS (target)** | `infra/aws` + `aws-platform` ([runbook](infra/aws/README.md)) | Aurora `apps-pg` / `tally`, 86 migrations applied | Live on the CloudFront domain. `api.tallyweb.world` cutover is pending. |
+| Vercel (legacy) | `tally-cored` Container Runtime project ([guide](docs/DEPLOY_VERCEL.md)), Vercel Cron for `/internal/cron/*` | Neon | Standby fallback since the 2026-10-13 cutover (re-point the `api` CNAME to roll back) |
+| **AWS (production)** | `infra/aws` + `aws-platform` ([runbook](infra/aws/README.md)) | Aurora `apps-pg` / `tally`, 86 migrations applied | Serves `api.tallyweb.world` (CloudFront) since 2026-10-13 |
 
 ### Open risks
 
-- **Data residency:** `PLAN-AGENTIC.md` §2 (rule 7) keeps PII and inference in India by default, and the superseded EKS plan targeted ap-south-1. The AWS target is us-east-1, so this needs an explicit decision before onboarding real customers.
+- **Data residency:** `PLAN-AGENTIC.md` §2 (rule 7) keeps PII and inference in India by default, and the superseded EKS plan targeted ap-south-1. The AWS deployment is in us-east-1, so this needs an explicit decision before onboarding real customers.
 - **AI features are unconfigured on Lambda:** no `LLM_PROVIDER` or `ANTHROPIC_API_KEY` is set. NL queries use the deterministic `FakeTranslator`, and the digest uses its templates. The Bill Inbox needs insightd.
 
 ## Getting started
@@ -191,7 +191,7 @@ frontend/     React, TypeScript, XState, and Vite application
 backend/      Go accounting core, auth, APIs, migrations, and statutory service
 insightd/     Python/FastAPI document-to-draft service
 corpora/      Golden datasets and cross-service contracts
-infra/        aws/ (production target: Lambda + Aurora), terraform/ (superseded EKS baseline), k8s, observability
+infra/        aws/ (production: Lambda + Aurora), terraform/ (superseded EKS baseline), k8s, observability
 docs/         Architecture diagrams, deployment, research, and archived reference material
 ```
 
