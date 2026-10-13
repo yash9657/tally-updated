@@ -48,7 +48,7 @@ locals {
 variable "api_domain" {
   description = "Custom domain for CloudFront, e.g. api.tallyweb.world. Empty until the certificate is issued."
   type        = string
-  default     = ""
+  default     = "api.tallyweb.world"
 }
 
 variable "web_origin" {
