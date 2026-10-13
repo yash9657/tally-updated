@@ -12,6 +12,24 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// OnAccountRefName is the single bucket a party's UNREFERENCED balance is
+// reported under (D106), and it must be spelled exactly as `ledger` spells it
+// when it writes an explicit ON_ACCOUNT reference.
+//
+// ⛔ THE TWO CANNOT SHARE ONE CONSTANT, AND THAT IS AN ARCHITECTURE DECISION, NOT
+// AN OVERSIGHT. `internal/archtest` allows `reporting` to import `platform/db`,
+// `inventory` and `compliance/form140` and nothing else; importing `ledger` for
+// a string would add a forbidden edge, and `ledger`'s own tests already import
+// `reporting`, so the edge is a compile-time cycle as well as a policy breach.
+//
+// ⚠️ SO THE AGREEMENT IS ENFORCED WHERE BOTH ARE VISIBLE: `internal/server`
+// (the composition root, which may import either) carries a test asserting these
+// two constants are equal. If they ever drift, an explicit ON_ACCOUNT reference
+// and the derived residue land in DIFFERENT buckets and a party shows two "On
+// Account" rows that each look right — so the test is the thing that keeps this
+// honest, and it is named for that failure.
+const OnAccountRefName = "On Account"
+
 // OutstandingKind selects receivables (debtors) or payables (creditors).
 type OutstandingKind string
 
@@ -51,6 +69,63 @@ type Bill struct {
 	// yet due or no due date.
 	OverdueDays int
 	SlabLabel   string
+	// OnAccount marks the one row per party that is NOT a bill: the part of the
+	// party's balance that names no reference (D106).
+	//
+	// ⛔ IT IS DELIBERATELY UN-AGED AND OUTSIDE EVERY SLAB. An amount with no bill
+	// has no due date to be overdue against, so ageing it would be inventing the
+	// fact the row exists to report the absence of. Tally does the same — "On
+	// Account amounts are not reflected in Interest Statement, Outstanding (Open
+	// Bills) Statements or Age Analysis Statement".
+	//
+	// ⚠️ SO THE SLAB TOTALS DO NOT SUM TO `Total`, AND THAT IS WHY `OnAccountTotal`
+	// EXISTS ON THE REPORT. Tally leaves that gap silent; this report states it,
+	// because a column of buckets beside a larger total is exactly the shape a
+	// reader checks by adding up.
+	OnAccount bool
+
+	// =====================================================================
+	// ⭐⭐ T8 STEP 6 — THE FOREIGN HALF. Q5 OF docs/design/t8-multi-currency-model.md.
+	// =====================================================================
+	// CurrencyCode is the bill's currency ('USD'), or EMPTY for a bill carried in
+	// the books' own currency. ForeignPending is the unsettled amount in it,
+	// signed the same way Pending is.
+	//
+	// ⛔ TWO FIELDS, NEVER ONE COLUMN, AND THAT IS THE WHOLE OF Q5's FIRST HALF.
+	// The BASE figure stays in Pending because it is the figure that ties to
+	// Sundry Debtors/Creditors on the Balance Sheet — this report's own caption
+	// promises that agreement. The foreign figure is a different fact about the
+	// same bill, and a column that held whichever one applied would be a column
+	// whose currency changed from row to row, footing to a total in no currency
+	// at all.
+	//
+	// ⚠️ READ THE CODE, NEVER THE AMOUNT. A zero ForeignPending does not mean
+	// "base": a foreign bill whose foreign column has netted to zero while its
+	// base column has not is precisely the data error this report exists to
+	// disclose, and it comes back with a code and a zero. The code is the
+	// discriminator, and it is empty for exactly one reason — currency_id IS NULL,
+	// which is 0080's ONE encoding of "this is the base currency".
+	CurrencyCode   string
+	ForeignPending decimal.Decimal
+
+	// CurrencyConflict marks EVERY row of a reference that is open under more
+	// than one currency — including base-versus-foreign, because base IS a
+	// currency and 0080 encodes it as NULL rather than as an absence of one.
+	//
+	// ⛔⛔ IT EXISTS BECAUSE THE DISCLOSURE IS OTHERWISE INDISTINGUISHABLE FROM
+	// TWO ORDINARY BILLS. Q5 requires that a ref_name under two currencies be
+	// reported as a data error and not as a sum; the netting key does the "not a
+	// sum" half by construction (USD and INR cannot land in one group), and this
+	// flag does the "data error" half. Without it a party shows two rows both
+	// labelled "EXP-1", which reads as a customer who numbered two invoices
+	// alike — a benign fact — rather than as one invoice with an allocation
+	// against it in the wrong currency.
+	//
+	// ⭐ IT IS COMPUTED OVER THE ROWS THAT SURVIVE THE ZERO SKIP, deliberately: a
+	// foreign bill settled correctly and in full nets both columns to zero and
+	// disappears, and flagging its party for a conflict that no longer has any
+	// money behind it would be a permanent warning about a closed bill.
+	CurrencyConflict bool
 }
 
 // PartyOutstanding is one party's outstanding position: its net pending amount
@@ -84,6 +159,10 @@ type Outstanding struct {
 	Parties    []PartyOutstanding
 	SlabTotals []SlabTotal
 	Total      decimal.Decimal
+	// OnAccountTotal is the part of Total that names no bill and is therefore in
+	// NO slab. `sum(SlabTotals) + OnAccountTotal == Total`, always, and that
+	// identity is the report's own reconciliation — see Bill.OnAccount.
+	OnAccountTotal decimal.Decimal
 }
 
 // SlabTotal is the aggregate pending in one ageing slab.
@@ -176,10 +255,11 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 	}
 
 	out := Outstanding{
-		Kind:    kind,
-		AsOn:    asOnTime.Format("2006-01-02"),
-		Bounded: bounded,
-		Total:   decimal.Zero,
+		Kind:           kind,
+		AsOn:           asOnTime.Format("2006-01-02"),
+		Bounded:        bounded,
+		Total:          decimal.Zero,
+		OnAccountTotal: decimal.Zero,
 	}
 
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -190,6 +270,71 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 		if kind == Payables {
 			signExpr = "SUM(CASE WHEN ba.dr_cr='C' THEN ba.amount ELSE -ba.amount END)"
 		}
+		// ⭐⭐ T8 STEP 6 — THE FOREIGN COLUMN, SIGNED THE SAME WAY AND SPELLED THE
+		// SAME WAY. It is derived from `signExpr` rather than written out twice
+		// because the sign convention is the part that is easy to get right on the
+		// receivable branch and forget on the payable one, and a foreign column that
+		// was correct for exporters and blank for importers is a whole half of the
+		// product's users.
+		//
+		// ⛔ COALESCE, BECAUSE A BASE ROW'S foreign_amount IS NULL AND NOT ZERO.
+		// SUM() over a group that mixes a foreign NEW with a base AGAINST cannot
+		// happen once the currency is in the netting key — but the residue branches
+		// below deliberately contribute NULL to groups that DO carry a currency, and
+		// `NULL + 1000` is NULL, which would blank the whole column for that bill.
+		//
+		// ⛔⛔ AND THE ON-ACCOUNT BUCKET CONTRIBUTES ZERO, WHICH IS THE OTHER HALF OF
+		// THE DECISION RECORDED AT `onAccountCurrencyKey` BELOW. Summing the foreign
+		// amounts of the explicit ON_ACCOUNT allocations that happen to exist would
+		// produce a figure in whichever currencies they were keyed in, added
+		// together, and put it beside a residue derived from every rate on the books.
+		fgnSign := "D"
+		if kind == Payables {
+			fgnSign = "C"
+		}
+		fgnExpr := fmt.Sprintf(
+			`SUM(CASE WHEN ba.ref_name = '%[1]s' THEN 0
+			          WHEN ba.dr_cr='%[2]s' THEN COALESCE(ba.foreign_amount, 0)
+			          ELSE -COALESCE(ba.foreign_amount, 0) END)`,
+			OnAccountRefName, fgnSign)
+
+		// =====================================================================
+		// ⛔⛔ THE NETTING KEY GAINS THE CURRENCY — Q5 — EXCEPT FOR `On Account`.
+		// =====================================================================
+		// Q5: "Group by (ledger, ref_name, currency_code), not (ledger, ref_name). A
+		// ref_name that appears under two different currencies is a data error, not a
+		// sum." The key below is that, and it makes the rule structural: two
+		// currencies cannot be added together because they are never in one group.
+		//
+		// ⭐⭐ AND `On Account` IS DELIBERATELY COLLAPSED TO BASE. Three reasons, and
+		// the second is the one that decides it:
+		//
+		//  1. THE RESIDUE HAS NO SINGLE RATE. It is `the ledger's whole balance −
+		//     every named reference` (D106), a difference of sums over many vouchers
+		//     at many rates. Labelling it with a currency would invent the fact the
+		//     row exists to report the absence of. ⭐ The design memo says exactly
+		//     this of ADVANCE and ON_ACCOUNT — "they have no bill rate to difference
+		//     against … State this rather than computing zero."
+		//  2. ⛔ SPLITTING THE BUCKET GIVES A PARTY TWO "On Account" ROWS THAT EACH
+		//     LOOK RIGHT. An EXPLICIT ON_ACCOUNT allocation carrying a currency
+		//     arrives through source 1 under this very ref_name, while the derived
+		//     residue that cancels it arrives through source 3 with no currency at
+		//     all — so with the currency in the key they would land in DIFFERENT
+		//     groups and both survive. That is, word for word, the failure
+		//     `TestOnAccountRefNameAgreesAcrossTheWriteAndReadSides` exists to
+		//     prevent, reached from the other direction.
+		//  3. `sum(SlabTotals) + OnAccountTotal == Total` is a BASE identity, and
+		//     collapsing leaves the base arithmetic of this bucket bit-identical to
+		//     what it was before step 6 — so the report's own reconciliation holds by
+		//     construction rather than by care.
+		//
+		// ⚠️ ADVANCE IS **NOT** COLLAPSED, AND THE DISTINCTION IS THE POINT: an
+		// advance is a NAMED reference with one rate on one document, so it keeps its
+		// currency and its foreign figure. `On Account` is the absence of a
+		// reference. They are only adjacent in this file, not alike.
+		onAccountCurrencyKey := fmt.Sprintf(
+			"CASE WHEN ba.ref_name = '%s' THEN NULL ELSE ba.currency_id END",
+			OnAccountRefName)
 		// The reference universe is TWO sources UNIONed:
 		//
 		//   1. bill_allocation      — references made by vouchers (current
@@ -229,9 +374,18 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 		// opening ageing for a date BEFORE the books existed. Excluding it is
 		// ALL-OR-NOTHING for the same reason it is there: opening references
 		// balance among themselves.
+		//
+		// ⭐⭐ AND STEP 6's THREE CURRENCY COLUMNS ARE READ HERE, NOT ONLY ON
+		// `bill_allocation`. §0.2 of the design memo is a whole section about this
+		// one branch: handle only source 1 and a foreign party's OPENING bill — the
+		// balance brought in at migration time, which for a customer acquired before
+		// the switch IS their entire history — comes back as a base bill. Its rupee
+		// figure is real, its foreign column is blank, and nothing on the report
+		// disagrees with anything else on it.
 		openingBranch := `
 			          UNION ALL
-			          SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
+			          SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date,
+			                 ob.currency_id, ob.foreign_amount
 			            FROM ledger_opening_bill ob`
 		// ⛔ THE OPENING BREAKUP IS DECIDED EXPLICITLY FOR THE UNBOUNDED CASE RATHER
 		// THAN INHERITING TODAY'S ANSWER. Unbounded means "every bill these books
@@ -260,25 +414,182 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 			inclusionBound = "\n			             AND vv.voucher_date <= $2::date"
 			args = append(args, asOnTime.Format("2006-01-02"))
 		}
+
+		// =====================================================================
+		// ⛔⛔ SOURCE 3 — THE RESIDUE, AND IT IS WHAT MAKES THE CAPTION TRUE.
+		// =====================================================================
+		// D106. Sources 1 and 2 are REFERENCES, and a party's balance is not
+		// obliged to be fully referenced: a receipt entered without bill-wise
+		// detail moves the ledger and names no bill. Driven in a browser
+		// 2026-08-30 — Outstandings 318584.0000 against a Balance Sheet Sundry
+		// Debtors of 311584.0000, differing by a 7,000 receipt with zero
+		// allocations — while this report's own caption promised the two agree.
+		//
+		// ⭐ THE FIX IS NOT A SPECIAL CASE FOR RECEIPTS. It is an identity:
+		//
+		//     On Account  =  the ledger's whole balance  −  every named reference
+		//
+		// expressed as two more branches that file the WHOLE movement under
+		// `On Account` (+) and take every named reference back out again (−).
+		// A fully-referenced invoice contributes +X and −X and nets to zero, so
+		// it never appears; an unreferenced receipt keeps its −X and does. The
+		// report therefore reconciles to the ledger BY CONSTRUCTION rather than
+		// by having had this one case patched, which is the only form of the fix
+		// that can keep the caption honest for cases nobody has driven yet.
+		//
+		// ⛔ WHY THE RESIDUE IS COMPUTED AND NOT STORED. The obvious repair is to
+		// write the missing ON_ACCOUNT allocation into the existing voucher. It
+		// cannot be done: `bill_allocation` rows are inside the voucher's
+		// canonical JSON and therefore inside its HASH (`ledger/hash.go` —
+		// `BillAllocations` is `omitempty` precisely so that a voucher carrying
+		// none hashes without the key). Adding one to a version already written
+		// would change its bytes and break the chain, which is a one-way door.
+		// So existing books are reconciled by DERIVING the residue here, and new
+		// ones are kept clean at the point of entry instead — see
+		// `ledger.validateBillWiseCoverage`, which is the other half of D106.
+		//
+		// ⚠️ IT COVERS EVERY LEDGER OF THE MATCHING NATURE, NOT ONLY THE
+		// `maintain_bill_by_bill` ONES. The caption promises agreement with
+		// Sundry Debtors/Creditors, and that group contains both kinds; a party
+		// tracked without bill-wise detail has a balance and no bills at all, and
+		// Tally reports exactly that as On Account ("when the sales and receipt
+		// entries are not recorded bill-wise then such entries are tracked as On
+		// Account and are displayed in the Ledger Outstandings report").
+		// ⛔⛔ THE RESIDUE IS SCOPED TO PARTY GROUPS, AND GETTING THIS WRONG IS LOUD.
+		// The outer query filters on `g.nature`, which for receivables is ASSET —
+		// and ASSET is every bank, cash and stock group too. The first cut of this
+		// branch filed EVERY asset ledger's balance under On Account and reported
+		// 725784.0000 against a Sundry Debtors of 311584.0000: the excess was
+		// exactly HDFC Bank 379000 + Cash 35200. Nature alone does not mean "party".
+		//
+		// ⭐ THE MARKER IS TALLY'S OWN: `behaves_as_subledger` — "Group behaves like
+		// a sub-ledger" — which is set on Sundry Debtors and Sundry Creditors and
+		// nothing else. It is matched over the ltree SUBTREE rather than on the
+		// group itself, so a user-made sub-group under Sundry Debtors ("Debtors —
+		// North") is a party group too. Matching the flag on the row alone would
+		// have silently dropped every party in a sub-group, which is the same class
+		// of miss as the one this whole defect is about.
+		partyScope := `
+			             AND EXISTS (SELECT 1 FROM account_group anc
+			                          WHERE anc.company_id = %[1]s.company_id
+			                            AND anc.behaves_as_subledger
+			                            AND %[1]s.path <@ anc.path)`
+		// ⭐⭐ EVERY RESIDUE BRANCH CONTRIBUTES **NO** CURRENCY, AND THAT IS STEP 6's
+		// DECISION RATHER THAN AN OVERSIGHT — see `onAccountCurrencyKey` above for
+		// the three reasons. `posting` DOES carry a currency (0080 put the triple
+		// there first), and projecting it here would be the obvious thing to do; it
+		// is deliberately not projected, because these four branches together compute
+		// a DIFFERENCE OF SUMS and the two sides of that difference are keyed on
+		// different tables. The base arithmetic of this bucket is therefore
+		// bit-identical to what it was before step 6, which is what keeps D106's
+		// identity true.
+		residueBranch := fmt.Sprintf(`
+			          UNION ALL
+			          SELECT p.ledger_id, '%[1]s', p.dr_cr, p.amount, NULL::date,
+			                 NULL::uuid, NULL::numeric
+			            FROM posting p
+			            JOIN voucher_version vv2 ON vv2.id = p.voucher_version_id
+			            JOIN voucher_head    vh2
+			              ON vh2.company_id = vv2.company_id
+			             AND vh2.voucher_id = vv2.voucher_id
+			             AND vh2.current_version_id = vv2.id
+			            JOIN ledger        l2 ON l2.id = p.ledger_id
+			            JOIN account_group g2 ON g2.id = l2.group_id
+			           WHERE vh2.is_deleted = false%[2]s`+fmt.Sprintf(partyScope, "g2")+`
+			          UNION ALL
+			          SELECT b2.ledger_id, '%[1]s',
+			                 CASE b2.dr_cr WHEN 'D' THEN 'C'::dr_cr ELSE 'D'::dr_cr END,
+			                 b2.amount, NULL::date, NULL::uuid, NULL::numeric
+			            FROM bill_allocation b2
+			            JOIN voucher_version vv3 ON vv3.id = b2.voucher_version_id
+			            JOIN voucher_head    vh3
+			              ON vh3.company_id = vv3.company_id
+			             AND vh3.voucher_id = vv3.voucher_id
+			             AND vh3.current_version_id = vv3.id
+			            JOIN ledger        l3 ON l3.id = b2.ledger_id
+			            JOIN account_group g3 ON g3.id = l3.group_id
+			           WHERE vh3.is_deleted = false%[3]s`+fmt.Sprintf(partyScope, "g3")+``,
+			OnAccountRefName,
+			strings.ReplaceAll(inclusionBound, "vv.voucher_date", "vv2.voucher_date"),
+			strings.ReplaceAll(inclusionBound, "vv.voucher_date", "vv3.voucher_date"))
+		// ⛔ THE OPENING BALANCE JOINS THE RESIDUE ONLY WHEN ITS BREAKUP DOES.
+		// `ledger.opening_balance` and `ledger_opening_bill` are the two halves of
+		// one fact, and the guard above may drop the breakup as out of scope. If
+		// the balance were folded in while the breakup was not, every opening
+		// reference would reappear as On Account — the whole opening ageing
+		// restated as unallocated money. They move together or not at all.
+		if openingBranch != "" {
+			residueBranch += fmt.Sprintf(`
+			          UNION ALL
+			          SELECT lo.id, '%s',
+			                 CASE lo.opening_dc WHEN 'D' THEN 'D'::dr_cr ELSE 'C'::dr_cr END,
+			                 lo.opening_balance, NULL::date, NULL::uuid, NULL::numeric
+			            FROM ledger lo
+			            JOIN account_group go2 ON go2.id = lo.group_id
+			           WHERE lo.opening_balance <> 0
+			             AND EXISTS (SELECT 1 FROM account_group anc
+			                          WHERE anc.company_id = go2.company_id
+			                            AND anc.behaves_as_subledger
+			                            AND go2.path <@ anc.path)
+			          UNION ALL
+			          SELECT ob2.ledger_id, '%s',
+			                 CASE ob2.dr_cr WHEN 'D' THEN 'C'::dr_cr ELSE 'D'::dr_cr END,
+			                 ob2.amount, NULL::date, NULL::uuid, NULL::numeric
+			            FROM ledger_opening_bill ob2`, OnAccountRefName, OnAccountRefName)
+		}
+
+		// ⛔ THE CODE IS RESOLVED IN AN OUTER WRAPPER RATHER THAN JOINED INSIDE THE
+		// AGGREGATE, AND THE REASON IS THE `On Account` COLLAPSE. Joining `currency`
+		// before the GROUP BY would force `c.code` into the grouping key, and then a
+		// party's explicit ON_ACCOUNT allocation (code 'USD') and its derived residue
+		// (code NULL) would be two groups again — the collapse would be undone by the
+		// join that only exists to render it. Grouping on the collapsed id first and
+		// resolving the code afterwards keeps ONE place that decides what a group is.
+		//
+		// ⚠️ THE JOIN NAMES NO COMPANY, LIKE EVERY OTHER JOIN IN THIS QUERY. `currency`
+		// is ENABLE + FORCE ROW LEVEL SECURITY under `tenant_isolation` (0080), and
+		// `scope()` has already set the tenant GUC for this transaction — the same
+		// mechanism that scopes `bill_allocation`, `ledger` and `account_group` here.
+		// ⛔ It is NOT the `openingIsInScope` situation: that query names the company
+		// because it uses LIMIT-1-shaped semantics over `company`, where an unscoped
+		// session would silently read SOME tenant's row. A LEFT JOIN under FORCE RLS
+		// with no GUC matches nothing, so the failure direction is a blank code, not
+		// another tenant's currency.
 		rows, err := tx.Query(ctx, fmt.Sprintf(
-			`SELECT ba.ledger_id, l.name, g.name, ba.ref_name,
-			        %s AS pending,
-			        to_char(MIN(ba.due_date), 'YYYY-MM-DD') AS due_date
+			`SELECT x.ledger_id, x.ledger_name, x.group_name, x.ref_name,
+			        x.pending, x.due_date,
+			        COALESCE(c.code, '') AS currency_code, x.foreign_pending
 			   FROM (
-			          SELECT b.ledger_id, b.ref_name, b.dr_cr, b.amount, b.due_date
-			            FROM bill_allocation b
-			            JOIN voucher_version vv ON vv.id = b.voucher_version_id
-			            JOIN voucher_head    vh
-			              ON vh.company_id = vv.company_id
-			             AND vh.voucher_id = vv.voucher_id
-			             AND vh.current_version_id = vv.id
-			           WHERE vh.is_deleted = false%s%s
-			        ) ba
-			   JOIN ledger l        ON l.id = ba.ledger_id
-			   JOIN account_group g ON g.id = l.group_id
-			  WHERE g.nature = $1
-			  GROUP BY ba.ledger_id, l.name, g.name, ba.ref_name
-			  ORDER BY l.name, ba.ref_name`, signExpr, inclusionBound, openingBranch),
+			          SELECT ba.ledger_id, l.name AS ledger_name, g.name AS group_name,
+			                 ba.ref_name,
+			                 %[6]s AS currency_id,
+			                 %[1]s AS pending,
+			                 %[7]s AS foreign_pending,
+			                 to_char(MIN(ba.due_date), 'YYYY-MM-DD') AS due_date
+			            FROM (
+			                   SELECT b.ledger_id, b.ref_name, b.dr_cr, b.amount, b.due_date,
+			                          b.currency_id, b.foreign_amount
+			                     FROM bill_allocation b
+			                     JOIN voucher_version vv ON vv.id = b.voucher_version_id
+			                     JOIN voucher_head    vh
+			                       ON vh.company_id = vv.company_id
+			                      AND vh.voucher_id = vv.voucher_id
+			                      AND vh.current_version_id = vv.id
+			                    WHERE vh.is_deleted = false%[2]s%[3]s%[4]s
+			                 ) ba
+			            JOIN ledger l        ON l.id = ba.ledger_id
+			            JOIN account_group g ON g.id = l.group_id
+			           WHERE g.nature = $1
+			           GROUP BY ba.ledger_id, l.name, g.name, ba.ref_name, %[6]s
+			        ) x
+			   LEFT JOIN currency c ON c.id = x.currency_id
+			  ORDER BY x.ledger_name,
+			           (x.ref_name = '%[5]s') ASC,
+			           x.due_date ASC NULLS LAST,
+			           x.ref_name,
+			           currency_code`,
+			signExpr, inclusionBound, openingBranch, residueBranch, OnAccountRefName,
+			onAccountCurrencyKey, fgnExpr),
 			args...)
 		if err != nil {
 			return fmt.Errorf("reporting: query outstandings: %w", err)
@@ -287,6 +598,16 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 
 		partyIdx := make(map[uuid.UUID]int)
 		slabTotal := make(map[string]decimal.Decimal)
+		// currencyGroups counts the surviving netting groups per (ledger, ref_name),
+		// which is how the Q5 conflict is detected: more than one means the reference
+		// is open under more than one currency. ⛔ COUNTED OVER SURVIVORS, so a
+		// correctly settled foreign bill — which nets both columns to zero and is
+		// skipped — never raises the flag.
+		type refKey struct {
+			ledger uuid.UUID
+			ref    string
+		}
+		currencyGroups := make(map[refKey]int)
 		for rows.Next() {
 			var (
 				ledgerID uuid.UUID
@@ -295,20 +616,43 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 				refName  string
 				pending  decimal.Decimal
 				dueDate  *string
+				code     string
+				foreign  decimal.Decimal
 			)
-			if err := rows.Scan(&ledgerID, &ledgerNm, &groupNm, &refName, &pending, &dueDate); err != nil {
+			if err := rows.Scan(&ledgerID, &ledgerNm, &groupNm, &refName, &pending,
+				&dueDate, &code, &foreign); err != nil {
 				return fmt.Errorf("reporting: scan outstanding: %w", err)
 			}
 			// A fully-settled bill nets to zero; skip it.
-			if pending.IsZero() {
+			//
+			// ⛔⛔ AND SINCE STEP 6 THAT IS TWO QUESTIONS, NOT ONE. `Pending.IsZero()`
+			// alone was the whole test for "settled", and on a foreign bill it is not:
+			// a bill with nothing left in rupees and $400 left in dollars is exactly
+			// the row an exporter has to see, and the base-only skip drops it off the
+			// report entirely — a silent clean bill of health, which is worse than a
+			// wrong number. ⭐ The inverse matters as much and is controlled for: a bill
+			// whose BOTH columns are zero is closed and must still disappear, or every
+			// settled bill in the field stays open for ever.
+			if pending.IsZero() && foreign.IsZero() {
 				continue
 			}
 
-			bill := Bill{RefName: refName, Pending: pending}
+			bill := Bill{
+				RefName: refName, Pending: pending,
+				CurrencyCode: code, ForeignPending: foreign,
+			}
 			if dueDate != nil {
 				bill.DueDate = *dueDate
 			}
-			bill.OverdueDays, bill.SlabLabel = ageBill(bill.DueDate, asOnTime, slabs)
+			currencyGroups[refKey{ledgerID, refName}]++
+			// ⛔ THE ON-ACCOUNT ROW IS NOT AGED. ageBill would read its empty due
+			// date as "not overdue" and drop it into the FIRST slab, which is the
+			// worst of the three options: money that is not a bill at all would be
+			// reported as the freshest debt on the party.
+			bill.OnAccount = refName == OnAccountRefName
+			if !bill.OnAccount {
+				bill.OverdueDays, bill.SlabLabel = ageBill(bill.DueDate, asOnTime, slabs)
+			}
 
 			i, ok := partyIdx[ledgerID]
 			if !ok {
@@ -325,10 +669,30 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 			p.Bills = append(p.Bills, bill)
 			p.Pending = p.Pending.Add(pending)
 			out.Total = out.Total.Add(pending)
-			slabTotal[bill.SlabLabel] = slabTotal[bill.SlabLabel].Add(pending)
+			if bill.OnAccount {
+				out.OnAccountTotal = out.OnAccountTotal.Add(pending)
+			} else {
+				slabTotal[bill.SlabLabel] = slabTotal[bill.SlabLabel].Add(pending)
+			}
 		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("reporting: iterate outstandings: %w", err)
+		}
+
+		// ⛔⛔ Q5's SECOND HALF, AND IT NEEDS A SECOND PASS. A reference is in conflict
+		// only once every one of its groups has been seen, so the flag cannot be set
+		// while the rows are being read — the FIRST row of a conflicting pair is
+		// indistinguishable from an ordinary bill until the second arrives. Marking
+		// the rows afterwards is what lets BOTH of them carry the disclosure, which is
+		// the point: an operator who sees the warning on only one of two rows labelled
+		// "EXP-1" learns that one row is odd, not that the pair is one bill.
+		for pi := range out.Parties {
+			p := &out.Parties[pi]
+			for bi := range p.Bills {
+				if currencyGroups[refKey{p.LedgerID, p.Bills[bi].RefName}] > 1 {
+					p.Bills[bi].CurrencyConflict = true
+				}
+			}
 		}
 
 		// Emit slab totals in slab order.

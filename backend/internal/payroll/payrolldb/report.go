@@ -23,6 +23,7 @@ package payrolldb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -86,7 +87,7 @@ func (s *Service) PayrollRegister(ctx context.Context, m payroll.WageMonth) (Reg
 			m.First().Format("2006-01-02"), StatusReversed).
 			Scan(&reg.PayRunID, &reg.Status, &reg.SSRuleSetVersion, &reg.ITRuleSetVersion); {
 		case err == pgx.ErrNoRows:
-			return fmt.Errorf("%w: no live pay run for %s", ErrPayRunNotFound, m)
+			return fmt.Errorf("%w for wage month %s — no payroll has been run for it yet", ErrPayRunNotFound, m)
 		case err != nil:
 			return err
 		}
@@ -127,7 +128,16 @@ func (s *Service) PayrollRegister(ctx context.Context, m payroll.WageMonth) (Reg
 		return rows.Err()
 	})
 	if err != nil {
-		return Register{}, fmt.Errorf("payrolldb: payroll register for %s: %w", m, err)
+		// ⛔ THE SENTINEL IS RETURNED BARE, NOT WRAPPED. It already names the
+		// month and says what is missing; wrapping it produced
+		// "payrolldb: payroll register for 2026-09: payrolldb: pay run not
+		// found: no live pay run for 2026-09" — the package twice, the month
+		// twice, and the fact once. The wrap is for errors that do NOT already
+		// say where they came from.
+		if errors.Is(err, ErrPayRunNotFound) {
+			return Register{}, err
+		}
+		return Register{}, fmt.Errorf("payroll register for %s: %w", m, err)
 	}
 	return reg, nil
 }

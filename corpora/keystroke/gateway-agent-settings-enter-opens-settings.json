@@ -1,0 +1,15 @@
+{
+  "id": "gateway-agent-settings-enter-opens-settings",
+  "description": "W2 breadth: selecting 'Agent Settings' on the Gateway and pressing Enter opens the agent-settings ScreenKind (the autonomy table, the agent-created ledgers waiting to be unblocked, the intent log's verification) — not a report frame of that name — one level above the Gateway",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Agent Settings" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "agent-settings",
+    "parentScreen": "gateway",
+    "screenStackDepth": 2
+  }
+}

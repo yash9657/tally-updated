@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" width="1200" height="900" role="img" aria-labelledby="title desc">
+  <title id="title">Tally AWS deployment</title>
+  <desc id="desc">AWS topology in us-east-1: CloudFront in front of a Lambda Function URL for the tally-cored function, which runs in private subnets of a shared VPC, reaches Aurora Serverless v2 PostgreSQL directly and the internet through a fck-nat instance in the public subnet. EventBridge Scheduler invokes the function directly for cron passes; operators reach the database through an SSM port-forward via the NAT instance.</desc>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c2410c"/>
+    </marker>
+    <marker id="arrp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #475569; }
+      .h { font-size: 14px; font-weight: 700; }
+      .t { font-size: 13px; }
+      .s { font-size: 12px; fill: #475569; }
+      .aws { font-size: 13px; font-weight: 700; fill: #b45309; }
+      .zone { font-size: 12px; font-weight: 700; }
+      .num { font-size: 12px; font-weight: 700; fill: #ffffff; }
+      .edge { stroke: #334155; stroke-width: 1.8; fill: none; }
+      .cron { stroke: #c2410c; stroke-width: 1.8; fill: none; stroke-dasharray: 7 4; }
+      .ops { stroke: #64748b; stroke-width: 1.6; fill: none; stroke-dasharray: 3 4; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="900" rx="16" fill="#ffffff"/>
+
+  <text class="h1" x="28" y="40">Tally on AWS — deployment topology</text>
+  <text class="sub" x="28" y="62">Account 481912007673 · us-east-1 · Terraform: infra/aws (app) + aws-platform (shared VPC, NAT, Aurora, state)</text>
+
+  <!-- ===== Outside AWS ===== -->
+  <rect x="24" y="96" width="180" height="60" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="1.5"/>
+  <text class="h" x="40" y="121">Browser</text>
+  <text class="s" x="40" y="141">user on tallyweb.world</text>
+
+  <rect x="24" y="196" width="180" height="92" rx="10" fill="#ffffff" stroke="#000000" stroke-width="2"/>
+  <text class="h" x="40" y="220">Vercel</text>
+  <text class="t" x="40" y="240">SPA tallyweb.world</text>
+  <text class="s" x="40" y="258">rewrites /v1/*, /auth/*</text>
+  <text class="s" x="40" y="276">→ api.tallyweb.world</text>
+
+  <rect x="24" y="420" width="180" height="108" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text class="h" x="40" y="444">Internet</text>
+  <text class="t" x="40" y="464">LLM provider APIs</text>
+  <text class="s" x="40" y="482">Anthropic, Fireworks,</text>
+  <text class="s" x="40" y="498">DeepInfra, Sarvam</text>
+  <text class="s" x="40" y="514">(insightd, statutoryd later)</text>
+
+  <rect x="24" y="662" width="180" height="78" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="1.5"/>
+  <text class="h" x="40" y="686">Operator</text>
+  <text class="s" x="40" y="705">terraform · cored migrate</text>
+  <text class="s" x="40" y="722">AWS CLI + SSM plugin</text>
+
+  <!-- ===== AWS account ===== -->
+  <rect x="232" y="78" width="948" height="696" rx="14" fill="#fffdf8" stroke="#FF9900" stroke-width="1.8" stroke-dasharray="8 5"/>
+  <text class="aws" x="248" y="98">AWS · us-east-1 · regional + edge services</text>
+
+  <!-- Row A: regional services -->
+  <rect x="250" y="110" width="190" height="72" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="264" y="132">CloudFront</text>
+  <text class="s" x="264" y="151">PriceClass_100 · HTTP/3</text>
+  <text class="s" x="264" y="168">no cache · 60 s origin timeout</text>
+
+  <rect x="470" y="110" width="170" height="72" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="484" y="132">Function URL</text>
+  <text class="s" x="484" y="151">auth NONE · BUFFERED</text>
+  <text class="s" x="484" y="168">invoke mode</text>
+
+  <rect x="662" y="110" width="176" height="72" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="676" y="132">Secrets Manager</text>
+  <text class="s" x="676" y="151">tally/cored</text>
+  <text class="s" x="676" y="168">tally/auth-dev-signing-key</text>
+
+  <rect x="850" y="110" width="148" height="72" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="864" y="132">CloudWatch</text>
+  <text class="s" x="864" y="151">Lambda logs, 14 days</text>
+  <text class="s" x="864" y="168">Errors ≥ 5 / 5 min</text>
+
+  <rect x="1012" y="110" width="152" height="72" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="1026" y="132">EventBridge</text>
+  <text class="h" x="1026" y="150">Scheduler</text>
+  <text class="s" x="1026" y="169">tick hourly · anchor</text>
+
+  <!-- ===== VPC ===== -->
+  <rect x="246" y="206" width="920" height="554" rx="12" fill="#ffffff" stroke="#475569" stroke-width="1.6" stroke-dasharray="7 5"/>
+  <text class="zone" x="262" y="226">VPC 10.40.0.0/16 (aws-platform)</text>
+
+  <!-- Public subnet -->
+  <rect x="262" y="240" width="240" height="250" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <text class="zone" x="276" y="260" fill="#15803d">Public subnet · 1a</text>
+  <rect x="280" y="300" width="204" height="96" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="294" y="324">fck-nat instance</text>
+  <text class="s" x="294" y="343">EC2 t4g.nano · ASG of 1</text>
+  <text class="s" x="294" y="360">NAT for private subnets</text>
+  <text class="s" x="294" y="377">SSM port-forward target</text>
+  <text class="s" x="276" y="280">egress via Internet Gateway</text>
+
+  <!-- Private subnets -->
+  <rect x="520" y="240" width="630" height="504" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <text class="zone" x="1136" y="260" fill="#1d4ed8" text-anchor="end">Private subnets · 1a / 1b</text>
+
+  <!-- Lambda -->
+  <rect x="560" y="282" width="340" height="190" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="576" y="306">Lambda · tally-cored</text>
+  <text class="s" x="576" y="325">provided.al2023 · arm64 · 1024 MB · 900 s</text>
+  <rect x="576" y="338" width="308" height="50" rx="8" fill="#ffffff" stroke="#FF9900" stroke-width="1.2"/>
+  <text class="t" x="590" y="359">Lambda Web Adapter (extension layer)</text>
+  <text class="s" x="590" y="377">event → HTTP on :8080 · readiness /healthz</text>
+  <rect x="576" y="400" width="308" height="58" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+  <text class="t" x="590" y="421" font-weight="700">cored serve (static Go binary)</text>
+  <text class="s" x="590" y="440">net/http + chi listening on :8080</text>
+  <text class="s" x="590" y="455">APP_DSN role tally_app · pool_max_conns=4</text>
+
+  <!-- S3 endpoint -->
+  <rect x="926" y="382" width="212" height="56" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.5"/>
+  <text class="h" x="940" y="405">S3 gateway endpoint</text>
+  <text class="s" x="940" y="424">platform-wide; unused by cored</text>
+
+  <!-- Aurora -->
+  <rect x="560" y="546" width="570" height="180" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="576" y="570">Aurora Serverless v2 · cluster apps-pg</text>
+  <text class="s" x="576" y="590">PostgreSQL 17.11 · pgvector 0.8.2 · 0–4 ACU · auto-pause after 300 s idle</text>
+  <text class="s" x="576" y="607">force_ssl · 7-day backups · RDS-managed master secret · shared by two apps</text>
+  <rect x="576" y="622" width="300" height="88" rx="8" fill="#f1f5f9" stroke="#475569" stroke-width="1.5"/>
+  <text class="t" x="590" y="644" font-weight="700">database tally</text>
+  <text class="s" x="590" y="663">roles tally_app (cored), tally_statutory</text>
+  <text class="s" x="590" y="680">FORCE RLS · embedded migrations</text>
+  <text class="s" x="590" y="697">applied via SSM tunnel</text>
+  <rect x="896" y="622" width="218" height="88" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4"/>
+  <text class="t" x="910" y="644" font-weight="700">database dentabill</text>
+  <text class="s" x="910" y="663">another app · own role</text>
+  <text class="s" x="910" y="680">isolated by DB + role</text>
+
+  <!-- ===== Edges ===== -->
+  <!-- 1 browser -> vercel -->
+  <line class="edge" x1="114" y1="156" x2="114" y2="194" marker-end="url(#arr)"/>
+  <!-- 2 vercel -> cloudfront -->
+  <path class="edge" d="M204,236 H220 V146 H248" marker-end="url(#arr)"/>
+  <!-- 3 cloudfront -> function url -->
+  <line class="edge" x1="440" y1="146" x2="468" y2="146" marker-end="url(#arr)"/>
+  <!-- 4 function url -> lambda -->
+  <line class="edge" x1="600" y1="182" x2="600" y2="280" marker-end="url(#arr)"/>
+  <!-- 5 cored -> aurora -->
+  <line class="edge" x1="730" y1="472" x2="730" y2="544" marker-end="url(#arr)"/>
+  <!-- 6 cored -> nat -> internet -->
+  <path class="edge" d="M560,430 H530 V372 H486" marker-end="url(#arr)"/>
+  <path class="edge" d="M280,372 H218 V474 H206" marker-end="url(#arr)"/>
+  <!-- A scheduler -> lambda -->
+  <path class="cron" d="M1088,182 V316 H902" marker-end="url(#arro)"/>
+  <!-- B operator -> nat -> aurora -->
+  <path class="ops" d="M204,700 H340 V398" marker-end="url(#arrp)"/>
+  <path class="ops" d="M430,398 V660 H558" marker-end="url(#arrp)"/>
+
+  <!-- number badges -->
+  <g>
+    <circle cx="136" cy="175" r="10" fill="#0f172a"/><text class="num" x="136" y="179" text-anchor="middle">1</text>
+    <circle cx="232" cy="190" r="10" fill="#0f172a"/><text class="num" x="232" y="194" text-anchor="middle">2</text>
+    <circle cx="454" cy="128" r="10" fill="#0f172a"/><text class="num" x="454" y="132" text-anchor="middle">3</text>
+    <circle cx="616" cy="230" r="10" fill="#0f172a"/><text class="num" x="616" y="234" text-anchor="middle">4</text>
+    <circle cx="746" cy="508" r="10" fill="#0f172a"/><text class="num" x="746" y="512" text-anchor="middle">5</text>
+    <circle cx="530" cy="452" r="10" fill="#0f172a"/><text class="num" x="530" y="456" text-anchor="middle">6</text>
+    <circle cx="232" cy="420" r="10" fill="#0f172a"/><text class="num" x="232" y="424" text-anchor="middle">6</text>
+    <circle cx="1104" cy="288" r="10" fill="#c2410c"/><text class="num" x="1104" y="292" text-anchor="middle">A</text>
+    <circle cx="270" cy="700" r="10" fill="#64748b"/><text class="num" x="270" y="704" text-anchor="middle">B</text>
+    <circle cx="446" cy="560" r="10" fill="#64748b"/><text class="num" x="446" y="564" text-anchor="middle">B</text>
+  </g>
+  <text class="s" x="744" y="530">TCP 5432 · TLS</text>
+  <text class="s" x="914" y="308" fill="#c2410c">lambda:InvokeFunction</text>
+
+  <!-- ===== Legend: paths ===== -->
+  <rect x="24" y="790" width="1152" height="96" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
+  <text class="zone" x="40" y="812">Request path</text>
+  <text class="s" x="40" y="832"><tspan font-weight="700" fill="#0f172a">1</tspan> HTTPS to the static SPA on Vercel.</text>
+  <text class="s" x="40" y="850"><tspan font-weight="700" fill="#0f172a">2</tspan> Same-origin /v1, /auth rewritten to api.tallyweb.world.</text>
+  <text class="s" x="40" y="868"><tspan font-weight="700" fill="#0f172a">3</tspan> CloudFront → Function URL over HTTPS (all headers but Host).</text>
+  <text class="s" x="420" y="832"><tspan font-weight="700" fill="#0f172a">4</tspan> Lambda event → adapter → HTTP request to cored on :8080.</text>
+  <text class="s" x="420" y="850"><tspan font-weight="700" fill="#0f172a">5</tspan> cored → Aurora as tally_app; RLS scopes every transaction.</text>
+  <text class="s" x="420" y="868"><tspan font-weight="700" fill="#0f172a">6</tspan> Outbound HTTPS (LLM APIs) via fck-nat.</text>
+  <text class="zone" x="800" y="812">Out-of-band paths</text>
+  <text class="s" x="800" y="832"><tspan font-weight="700" fill="#c2410c">A</tspan> Scheduler invokes the function directly with a</text>
+  <text class="s" x="800" y="850">   Function-URL-shaped event + Bearer CRON_SECRET.</text>
+  <text class="s" x="800" y="868"><tspan font-weight="700" fill="#64748b">B</tspan> SSM port-forward via the NAT instance → Aurora.</text>
+</svg>

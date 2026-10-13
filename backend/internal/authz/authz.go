@@ -163,6 +163,22 @@ type Level struct {
 	DefaultAccess    string // "full" or "none"
 	RequiresWebAuthn bool
 	BackdatedCutoff  *time.Time // nil if no cutoff
+
+	// BooksClosedThrough is the COMPANY's year-end lock: the inclusive last
+	// date of a period that has been closed. nil means no year is closed.
+	//
+	// ⛔ IT IS A COMPANY FACT, NOT A LEVEL ONE, and it is carried on Level for
+	// one reason: a Level is already scoped to exactly one company and is loaded
+	// by one query, so Store.Level reads it in the same round trip. It must
+	// NEVER be exposed by the admin API as a level attribute — an administrator
+	// editing a role must not be able to re-open a filed year, which is half
+	// the reason it is not stored as N per-level cutoffs. See migration 0089.
+	//
+	// ⚠️ "THROUGH" IS INCLUSIVE AND A CUTOFF IS EXCLUSIVE. They are one day
+	// apart and that day is the whole meaning of a year-end, which is why they
+	// are different fields with different names rather than one reused. The
+	// conversion happens in exactly one place: effectiveCutoff.
+	BooksClosedThrough *time.Time
 }
 
 // Rule mirrors an acl_rule row.
@@ -350,14 +366,85 @@ func indexColon(s string) int {
 // date is judged FIRST, because when a voucher already sits inside the lock the
 // destination the operator typed is usually perfectly legal and a refusal that
 // talked about it would be describing the wrong end of the problem.
+// effectiveCutoff resolves the two independent controls into the ONE date a
+// request is judged against, and reports which of them set it.
+//
+// ⭐ THE LATER DATE ALWAYS WINS, AND THAT IS THE WHOLE COMPOSITION RULE.
+// Neither control may weaken the other: a permissive role cutoff must not open
+// a closed year, and a company that has closed nothing must not widen what a
+// restricted role may back-date. Taking the later of the two is exactly that
+// property, in one line.
+//
+// ⚠️ THE +1 DAY IS THE INCLUSIVE/EXCLUSIVE CONVERSION AND IT LIVES ONLY HERE.
+// books_closed_through is the last CLOSED day; a cutoff is the earliest
+// WRITEABLE day. Closing FY 2026-27 stores 2027-03-31 and must refuse writes ON
+// 2027-03-31 while permitting 2027-04-01.
+func effectiveCutoff(level Level) (cut *time.Time, viaYearEnd bool) {
+	cut = level.BackdatedCutoff
+	if level.BooksClosedThrough != nil {
+		day := level.BooksClosedThrough.AddDate(0, 0, 1)
+		if cut == nil || day.After(*cut) {
+			return &day, true
+		}
+	}
+	return cut, false
+}
+
+// lockPhrase names WHICH control is refusing.
+//
+// ⛔ IT IS NOT COSMETIC. The two refusals demand completely different actions
+// from the operator: a role limit is something an administrator can widen, and
+// a closed year is a statutory fact nobody should widen casually. A refusal
+// that blurs them sends people to ask for permissions they should not be given.
+// D93 and D112 are the same rule applied elsewhere.
+//
+// ⚠️ THE PER-LEVEL WORDING IS BYTE-FOR-BYTE UNCHANGED. Three existing suites
+// read those sentences (auth_backdated_spelling_test.go,
+// auth_payroll_cutoff_test.go, authz/cutoff_reason_test.go); only the year-end
+// arm is new, and its shape is chosen to read correctly in all three of the
+// sentence positions below.
+func lockPhrase(level Level, cut *time.Time, viaYearEnd bool) string {
+	if viaYearEnd {
+		return "the year-end lock (books closed through " +
+			level.BooksClosedThrough.UTC().Format("2006-01-02") + ")"
+	}
+	return "the back-dated cutoff of " + cut.UTC().Format("2006-01-02")
+}
+
+// HasCutoff reports whether ANY period lock is in force — the level's own
+// back-dated cutoff, or the company's year-end lock, or both.
+//
+// ⛔⛔ IT EXISTS FOR ONE CALLER AND THAT CALLER IS A SECURITY CONTROL. The
+// middleware reads the date a voucher ALREADY carries only when a lock could
+// act on it, because a store read the PDP does not need must not happen on the
+// hot path. That gate was written when `level.BackdatedCutoff != nil` was the
+// only way a period could be locked, and a company-wide year-end is the second
+// way — a company that HAS locked a period while every level's own cutoff is
+// still nil.
+//
+// Gating on the field instead of on this method skips the stored-date read at
+// exactly those companies, and a DELETE (which carries no body and therefore no
+// date at all) then walks straight out of a closed year with a 200. That was
+// measured on the wire, not imagined; see
+// TestYearEndLockRefusesADeleteOutOfAClosedYear.
+//
+// ⚠️ ANY FUTURE THIRD SOURCE OF A LOCK MUST BE ADDED HERE, not at the call
+// site. That is the whole reason this is a method and not an expression.
+func (l Level) HasCutoff() bool {
+	cut, _ := effectiveCutoff(l)
+	return cut != nil
+}
+
 func cutoffDeny(level Level, req Request) (Decision, bool) {
-	if level.BackdatedCutoff == nil || !req.Action.IsWrite() {
+	cut, viaYearEnd := effectiveCutoff(level)
+	if cut == nil || !req.Action.IsWrite() {
 		return Decision{}, false
 	}
-	if d, blocked := storedCutoffDeny(level, req); blocked {
+	phrase := lockPhrase(level, cut, viaYearEnd)
+	if d, blocked := storedCutoffDeny(req, cut, phrase); blocked {
 		return d, true
 	}
-	return requestedCutoffDeny(level, req)
+	return requestedCutoffDeny(req, cut, phrase)
 }
 
 // storedCutoffDeny judges the SOURCE end of the move: the date the named
@@ -375,34 +462,33 @@ func cutoffDeny(level Level, req Request) (Decision, bool) {
 // delete through. It costs a 403 (rather than the handler's 404) for an operator
 // who names a non-existent voucher at a company that HAS locked a period, which
 // is a small price and leaks nothing they could not already see.
-func storedCutoffDeny(level Level, req Request) (Decision, bool) {
+func storedCutoffDeny(req Request, cut *time.Time, phrase string) (Decision, bool) {
 	if req.StoredVoucherDate == nil {
 		return Decision{}, false
 	}
-	cutoff := level.BackdatedCutoff.UTC().Format("2006-01-02")
 	if req.StoredVoucherDate.IsZero() {
 		// Matched by IDENTITY, for the reason the destination branch below
 		// records: parseCutoff puts no lower bound on a cutoff, so a level whose
 		// cutoff IS 0001-01-01 would make `zero.Before(cutoff)` false and the
 		// fail-closed sentinel would fail OPEN at exactly that one setting.
 		if req.DateSubject != "" {
-			return deny("the stored " + req.DateSubject + " could not be read, so the " +
-				"back-dated cutoff of " + cutoff + " cannot be cleared"), true
+			return deny("the stored " + req.DateSubject + " could not be read, so " +
+				phrase + " cannot be cleared"), true
 		}
-		return deny("the stored date of the voucher being changed could not be read, so the " +
-			"back-dated cutoff of " + cutoff + " cannot be cleared"), true
+		return deny("the stored date of the voucher being changed could not be read, so " +
+			phrase + " cannot be cleared"), true
 	}
-	if req.StoredVoucherDate.Before(*level.BackdatedCutoff) {
+	if req.StoredVoucherDate.Before(*cut) {
 		// Name the date the voucher is ON. The operator's own field is fine; what
 		// they need to be told is that the voucher they picked lives inside a
 		// filed period, and where that period starts.
 		stored := req.StoredVoucherDate.UTC().Format("2006-01-02")
 		if req.DateSubject != "" {
 			return deny("this " + req.DateSubject + " of " + stored +
-				" is inside the period closed by the back-dated cutoff of " + cutoff), true
+				" is inside the period closed by " + phrase), true
 		}
 		return deny("this voucher is dated " + stored +
-			", inside the period closed by the back-dated cutoff of " + cutoff), true
+			", inside the period closed by " + phrase), true
 	}
 	return Decision{}, false
 }
@@ -411,11 +497,10 @@ func storedCutoffDeny(level Level, req Request) (Decision, bool) {
 // carries. This is rounds 1 and 2's control, and its two sentences are
 // UNCHANGED — auth_backdated_spelling_test.go, auth_payroll_cutoff_test.go and
 // authz/cutoff_reason_test.go all read them.
-func requestedCutoffDeny(level Level, req Request) (Decision, bool) {
+func requestedCutoffDeny(req Request, cut *time.Time, phrase string) (Decision, bool) {
 	if req.VoucherDate == nil {
 		return Decision{}, false
 	}
-	cutoff := level.BackdatedCutoff.UTC().Format("2006-01-02")
 	if req.VoucherDate.IsZero() {
 		// The zero-time sentinel: a date was required and could not be read (a
 		// loosely-spelled voucher_date, an unparseable wage month). Saying "your
@@ -429,17 +514,17 @@ func requestedCutoffDeny(level Level, req Request) (Decision, bool) {
 		// cutoff IS 0001-01-01 would make `zero.Before(cutoff)` false and the
 		// fail-closed sentinel would fail OPEN at exactly that one setting.
 		if req.DateSubject != "" {
-			return deny("the " + req.DateSubject + " could not be read, so the back-dated cutoff of " +
-				cutoff + " cannot be cleared"), true
+			return deny("the " + req.DateSubject + " could not be read, so " +
+				phrase + " cannot be cleared"), true
 		}
-		return deny("the voucher date could not be read, so the back-dated cutoff of " +
-			cutoff + " cannot be cleared"), true
+		return deny("the voucher date could not be read, so " +
+			phrase + " cannot be cleared"), true
 	}
-	if req.VoucherDate.Before(*level.BackdatedCutoff) {
+	if req.VoucherDate.Before(*cut) {
 		if req.DateSubject != "" {
-			return deny(req.DateSubject + " is before the back-dated cutoff of " + cutoff), true
+			return deny(req.DateSubject + " is before " + phrase), true
 		}
-		return deny("voucher date is before the back-dated cutoff of " + cutoff), true
+		return deny("voucher date is before " + phrase), true
 	}
 	return Decision{}, false
 }

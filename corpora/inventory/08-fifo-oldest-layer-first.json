@@ -1,0 +1,100 @@
+{
+  "id": "08-fifo-oldest-layer-first",
+  "description": "FIFO CONSUMES THE OLDEST COSTED LAYER, AND THE ANSWER IS NEITHER THE AVERAGE NOR LIFO'S. Three receipts build three layers: PUR-1 10.0000 @ 100.0000 = 1000.0000, PUR-2 10.0000 @ 120.0000 = 1200.0000, PUR-3 5.0000 @ 80.0000 = 400.0000. SAL-1 issues 15.0000 on 05-Apr, when only the first two layers exist: it takes ALL of PUR-1 (1000.0000) and 5.0000 of PUR-2 at 120.0000 (600.0000) -> consumed 1600.0000, leaving PUR-2 holding 5.0000 units at 600.0000. SAL-2 issues 8.0000 on 07-Apr: the rest of PUR-2 (600.0000) plus 3.0000 of PUR-3 at 80.0000 (240.0000) -> consumed 840.0000. Closing 2.0000 units, all of them PUR-3's, at 160.0000, rate 80.0000. Total consumed 2440.0000. Conservation: 0 + 2600.0000 - 2440.0000 = 160.0000. THE THREE METHODS DISAGREE ON THE SAME MOVEMENTS AND THAT IS THE POINT: this item closes at 160.0000 under FIFO, 200.0000 under LIFO (fixture 09) and 190.0000 under weighted average - which is why a report that prints a stock value has to print the basis beside it, and why switching an item's method MOVES THE BALANCE SHEET.",
+  "valuationMethod": "FIFO",
+  "movements": [
+    {
+      "voucherDate": "2026-04-01",
+      "voucherNo": "PUR-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000801",
+      "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-03",
+      "voucherNo": "PUR-2",
+      "voucherId": "0195c000-0000-7000-8000-000000000802",
+      "versionCreatedAt": "2026-04-03T10:00:00+05:30",
+      "versionId": "PUR-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "120.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-05",
+      "voucherNo": "SAL-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000803",
+      "versionCreatedAt": "2026-04-05T11:30:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "15.0000",
+      "rate": "200.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-06",
+      "voucherNo": "PUR-3",
+      "voucherId": "0195c000-0000-7000-8000-000000000804",
+      "versionCreatedAt": "2026-04-06T09:15:00+05:30",
+      "versionId": "PUR-3/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "5.0000",
+      "rate": "80.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-07",
+      "voucherNo": "SAL-2",
+      "voucherId": "0195c000-0000-7000-8000-000000000805",
+      "versionCreatedAt": "2026-04-07T15:45:00+05:30",
+      "versionId": "SAL-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "8.0000",
+      "rate": "210.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "25.0000",
+        "inwardValue": "2600.0000",
+        "outwardQty": "23.0000",
+        "outwardValue": "2440.0000",
+        "closingQty": "2.0000",
+        "closingValue": "160.0000",
+        "closingRate": "80.0000"
+      }
+    ]
+  }
+}

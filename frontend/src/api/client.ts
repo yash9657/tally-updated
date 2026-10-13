@@ -12,6 +12,7 @@
 
 import type {
   BalanceSheetResponse,
+  BooksClosure,
   CompanyFeaturesRequest,
   CompanyFeaturesResponse,
   CompanyView,
@@ -32,25 +33,43 @@ import type {
   DayBookResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  CreateStockGroupRequest,
+  CreateCurrencyRequest,
+  CreateCurrencyResponse,
+  ListCurrenciesResponse,
+  SetCurrencyRateRequest,
+  ForexSettingsResponse,
+  SetForexSettingsRequest,
+  CreateStockGroupResponse,
+  InventoryVocabularyResponse,
+  ListStockGroupsResponse,
   ListStockItemsResponse,
+  ListUnitsResponse,
+  SetValuationMethodRequest,
+  SetValuationMethodResponse,
   StockSummaryResponse,
   GSTR1Query,
   GSTR1Response,
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
+  PrintTemplateRequest,
+  PrintTemplateResponse,
   OutstandingKind,
   OutstandingsQuery,
   OutstandingsResponse,
+  UnadjustedForexResponse,
   PartyOpenBillsResponse,
   ProfitLossResponse,
   TrialBalanceResponse,
   VoucherRequest,
   VoucherResponse,
   VoucherView,
+  ListGroupsResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankMatchesResponse,
   BankReconciliationResponse,
   ImportedStatementResponse,
   ImportStatementRequest,
@@ -97,9 +116,39 @@ import type {
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
+  SetAsideRequest,
+  SetAsideResponse,
   SetBankDateRequest,
   SetBankDateResponse,
   VoucherClass,
+  ListEmployeesResponse,
+  CreateEmployeeRequest,
+  CreateEmployeeResponse,
+  PayRunRequest,
+  PayRunResponse,
+  PayrollRegisterResponse,
+  PayslipResponse,
+  Form138Request,
+  StatutoryFileDownload,
+  ListSalaryComponentsResponse,
+  SetSalaryComponentRequest,
+  SetSalaryComponentResponse,
+  ListStatutoryElectionsResponse,
+  SetStatutoryElectionRequest,
+  SetStatutoryElectionResponse,
+  PayrollVocabularyResponse,
+  AlterBudgetResponse,
+  BudgetDimension,
+  BudgetLineListResponse,
+  BudgetListResponse,
+  BudgetVarianceResponse,
+  GSTR9Envelope,
+  GSTR9TaxLedgers,
+  CreateBudgetLineRequest,
+  CreateBudgetLineResponse,
+  CreateBudgetRequest,
+  CreateBudgetResponse,
+  DeleteBudgetResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -118,6 +167,64 @@ import type {
   UpdateMemberResponse,
   UpdateSecurityLevelResponse,
 } from "./admin";
+
+import type {
+  AgentApprovalResponse,
+  AgentApprovalsResponse,
+  AgentDecisionRequest,
+  AgentAutonomyResponse,
+  AgentEditPreviewResponse,
+  AgentVerifyAnchorsResponse,
+  AgentVerifyRunResponse,
+  SetAgentAutonomyRequest,
+  UnblockLedgerResponse,
+  AgentEventsResponse,
+  AgentRunResponse,
+  AgentRunsResponse,
+  StartAgentRunRequest,
+} from "./agent";
+
+import type {
+  Insight,
+  InsightDigest,
+  InsightEvidenceResponse,
+  InsightRunResponse,
+  InsightSuppression,
+  InsightsListResponse,
+  InsightState,
+  InsightVerdict,
+  SuppressInsightRequest,
+} from "./insights";
+
+import type {
+  ReconciliationPayloadResponse,
+  ReconciliationQueueResponse,
+  ResolveReconciliationResponse,
+  SyncCommitResponse,
+  SyncIntent,
+} from "./types";
+
+/**
+ * What a restore did — and, as importantly, what it did NOT do.
+ *
+ * `membershipsNotRestored` is the field this shape exists for. company_membership
+ * is the only foreign key from tenant data to app_user, so an archive names
+ * people who need not exist in this database, and silently recreating access
+ * rights from a file somebody handed you is a privilege-escalation vector. The
+ * restore seeds the RESTORING user as Owner and reports the rest by name, so
+ * somebody has to re-grant them deliberately.
+ */
+export interface RestoreResult {
+  companyID: string;
+  companyName: string;
+  rowCount: number;
+  rows: Record<string, number>;
+  skippedTables: string[];
+  skippedRows: number;
+  membershipsNotRestored: string[];
+  sourceSchemaVersion: string;
+  schemaVersion: string;
+}
 
 export interface CoredClient {
   // Company
@@ -160,6 +267,15 @@ export interface CoredClient {
    * end up minting duplicates of the predefined ledgers.
    */
   listLedgers(companyID: string): Promise<ListLedgersResponse>;
+  /**
+   * The account groups — a flat list with each row's parent NAMED.
+   *
+   * ⚠️ ADDED FOR T11, and it reads under the SAME `master` token as
+   * {@link listLedgers}: a budget line on a GROUP stores an account_group_id, and
+   * no master form in this product may ask a human for a uuid. It grants nothing
+   * new — a group name is already on every ledger row.
+   */
+  listGroups(companyID: string): Promise<ListGroupsResponse>;
   /**
    * Set a ledger's OPENING BALANCE + bill-wise opening breakup. Needed for the
    * ledgers seeded with the company, which cannot carry one at creation.
@@ -210,6 +326,68 @@ export interface CoredClient {
     slug: string,
     query?: Record<string, string>,
   ): Promise<{ blob: Blob; filename: string | null }>;
+
+  // ---- T14: DATA (Alt+Y) — backup and restore.
+
+  /**
+   * Download the WHOLE COMPANY as one gzipped JSON Lines archive
+   * (GET .../backup).
+   *
+   * ⛔ IT IS NOT AN EXPORT AND MUST NOT BE REACHED THROUGH THE EXPORT (Alt+E)
+   * MACHINERY. The server models an archive as its own `backup` resource
+   * precisely because migration 0011 seeds every Data Entry level a coarse
+   * `allow display report`, so anything shaped like a report is granted to every
+   * operator in every tenant — and this answers with every ledger balance, every
+   * party's PAN and address and every payslip in one file. A level without the
+   * token gets a 403, which arrives here as an ApiError and is shown verbatim.
+   */
+  backupCompany(
+    companyID: string,
+  ): Promise<{ blob: Blob; filename: string | null }>;
+
+  /**
+   * Upload an archive and CREATE the company it describes
+   * (POST /v1/companies/restore).
+   *
+   * ⛔ IT CREATES A NEW COMPANY AND NEVER REPLACES ONE. The archive preserves
+   * every primary key — which is what keeps the audit hash chain verifiable —
+   * so restoring beside the original is refused with a 409, and there is
+   * deliberately no way to overwrite a company at all: every immutability
+   * trigger refuses DELETE for every role. The screen has to SAY this before the
+   * operator picks a file, not after the server answers.
+   *
+   * It takes no companyID because the route is outside the {companyID} subtree:
+   * the company does not exist yet.
+   */
+  restoreCompany(archive: Blob): Promise<RestoreResult>;
+
+  /**
+   * Read the company's year-end lock (GET /books-closure).
+   */
+  booksClosure(companyID: string): Promise<BooksClosure>;
+
+  /**
+   * Close the books through `closedThrough` (POST /books-closure).
+   *
+   * ⛔ IT ONLY EVER MOVES THE LOCK FORWARD. Closing over an already-later
+   * closure is a 409 carrying the code `BOOKS_ALREADY_CLOSED_LATER`, not a
+   * silent re-open — because a typo (2026-03-31 for 2027-03-31) would otherwise
+   * unlock twelve months of filed books and answer 200.
+   *
+   * @param closedThrough the LAST day of the period being closed, YYYY-MM-DD.
+   */
+  closeBooks(companyID: string, closedThrough: string): Promise<BooksClosure>;
+
+  /**
+   * Lift the year-end lock entirely (DELETE /books-closure).
+   *
+   * ⚠️ A SEPARATE, DELIBERATE ACT, and that is the whole reason it is its own
+   * method rather than `closeBooks(null)`. Re-opening a filed year is the
+   * dangerous direction; it should not be one mistyped character away from the
+   * routine one. A re-open when nothing is closed is a 409 `NOTHING_CLOSED`
+   * rather than a reassuring 200.
+   */
+  reopenBooks(companyID: string): Promise<BooksClosure>;
 
   /**
    * The Bank Reconciliation Statement for one bank ledger, as at an optional
@@ -274,6 +452,46 @@ export interface CoredClient {
     from?: string,
     to?: string,
   ): Promise<ImportedStatementResponse>;
+  /**
+   * T4 slice 2b — what the matcher PROPOSES for one bank account.
+   *
+   * ⛔ IT WRITES NOTHING, and there is no argument that would make it write.
+   * Proposals are DERIVED on every read rather than stored, because a stored
+   * candidate goes stale silently: a voucher altered, deleted or cleared between
+   * the proposal and the acceptance leaves the operator choosing from a list
+   * that no longer describes the books while still looking authoritative.
+   *
+   * `windowDays` is a SEARCH WIDTH, not a rule from anywhere — widening it only
+   * shows more proposals, because none of them clears itself.
+   */
+  bankStatementMatches(
+    companyID: string,
+    ledgerID: string,
+    opts?: { from?: string; to?: string; windowDays?: number },
+  ): Promise<BankMatchesResponse>;
+  /**
+   * Record that a bank row corresponds to NOTHING in the books — the bank
+   * charge, the standing order, the drawings.
+   *
+   * ⛔ IT WRITES NO CLEARANCE AND MOVES NO BALANCE. A set-aside is a real
+   * category, not a weaker match, and must never render as reconciled.
+   */
+  setAsideStatementLine(
+    companyID: string,
+    ledgerID: string,
+    lineID: string,
+    req: SetAsideRequest,
+  ): Promise<SetAsideResponse>;
+  /**
+   * Undo a set-aside, returning the row to the unmatched list. REFUSES a row
+   * that is MATCHED: withdrawing a match means withdrawing its clearance, which
+   * is `clearBankDate`'s job and cascades the link away with it.
+   */
+  restoreStatementLine(
+    companyID: string,
+    ledgerID: string,
+    lineID: string,
+  ): Promise<SetAsideResponse>;
 
   /**
    * Every recorded deductor-status year, plus the category vocabulary to render
@@ -527,6 +745,158 @@ export interface CoredClient {
     to: string,
   ): Promise<CostCategorySummaryResponse>;
 
+  // ---- T11: budgets and budget vs actual (migrations 0085/0086).
+  //
+  // ⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE SEVEN: A BUDGET FIGURE IS
+  // MEANINGLESS WITHOUT ITS BASIS, AND TWO BASES MAY NEVER BE ADDED. A
+  // CLOSING_BALANCE budget is a POSITION as at the period end; a NETT_TRANSACTIONS
+  // one is MOVEMENT within it. See {@link BudgetBasis} and, for the consequence,
+  // {@link BudgetVarianceResponse.totals_are_addable}.
+  //
+  // ⛔ AND THE MASTER AND THE REPORT ARE TWO DIFFERENT AUTHORITIES. The master
+  // routes are governed by the BARE `budget` token, which the seeded Data Entry
+  // level is refused with no ACL rule at all; the report is
+  // `report:budget-variance`, which migration 0086 refuses explicitly because
+  // 0011's coarse `allow display report` would otherwise GRANT it. A level may
+  // legitimately hold one and not the other, so a caller must handle a 403 on
+  // either independently.
+
+  /** The plans. `line_count` is served so a screen can show an EMPTY plan as empty. */
+  listBudgets(companyID: string): Promise<BudgetListResponse>;
+  /**
+   * Create a plan. Both period bounds are REQUIRED — a plan for no stated period
+   * cannot be compared against anything. A 409 means the name is taken (compared
+   * ignoring case and surrounding spaces).
+   */
+  createBudget(
+    companyID: string,
+    req: CreateBudgetRequest,
+  ): Promise<CreateBudgetResponse>;
+  /**
+   * Restate a plan's name AND period together.
+   *
+   * ⚠️ A PERIOD CHANGE IS NOT COSMETIC: it changes which movement every
+   * NETT_TRANSACTIONS line is measured over and which date every CLOSING_BALANCE
+   * line is measured as at — i.e. every actual on the report moves without one
+   * budgeted figure changing.
+   */
+  alterBudget(
+    companyID: string,
+    budgetID: string,
+    req: CreateBudgetRequest,
+  ): Promise<AlterBudgetResponse>;
+  /**
+   * Delete a plan AND its lines (the server cascades).
+   *
+   * ⚠️ `lines_deleted_by_cascade` is served so a caller can say what actually went.
+   */
+  deleteBudget(
+    companyID: string,
+    budgetID: string,
+    deletedBy: string,
+  ): Promise<DeleteBudgetResponse>;
+
+  /** One plan's lines, with every target's name, nature and basis-in-words resolved. */
+  listBudgetLines(
+    companyID: string,
+    budgetID: string,
+  ): Promise<BudgetLineListResponse>;
+  /**
+   * Add one budgeted figure.
+   *
+   * A 409 means this plan ALREADY has a line for that target: one target gets one
+   * figure per plan, because two would make the report show it twice with the
+   * actual counted in full against each.
+   *
+   * ⛔ A COST CENTRE MAY ONLY BE BUDGETED ON `NETT_TRANSACTIONS` (400 otherwise): a
+   * centre holds no position, only allocations against dated postings.
+   */
+  addBudgetLine(
+    companyID: string,
+    budgetID: string,
+    req: CreateBudgetLineRequest,
+  ): Promise<CreateBudgetLineResponse>;
+  /**
+   * Restate one figure in place.
+   *
+   * ⛔ THE DIMENSION AND TARGET ARE IMMUTABLE (400 on a change). Re-filing a figure
+   * would leave the original target reading as unbudgeted and the new one as having
+   * been planned all along — a change of meaning dressed as a correction. Delete
+   * and re-add instead: two audited acts, which is what happened.
+   */
+  alterBudgetLine(
+    companyID: string,
+    budgetID: string,
+    lineID: string,
+    req: CreateBudgetLineRequest,
+  ): Promise<{ id: string; altered: boolean }>;
+  /** Remove one figure. */
+  deleteBudgetLine(
+    companyID: string,
+    budgetID: string,
+    lineID: string,
+    deletedBy: string,
+  ): Promise<{ id: string; deleted: boolean }>;
+
+  /**
+   * BUDGET VS ACTUAL, for ONE plan at ONE grain.
+   *
+   * Both `budgetID` and `dimension` are REQUIRED and neither has a default: a
+   * missing plan is a 400 whose message NAMES the plans this company has, and a
+   * missing grain is a 400 naming the three. An empty report for a plan that does
+   * not exist would read as "nothing was planned and nothing was spent", which is a
+   * real and reassuring claim about a company and would be a lie.
+   *
+   * ⛔ `costCategoryID` IS REQUIRED WHEN `dimension` IS "COST_CENTRE" and ignored
+   * otherwise. The same money is allocated in full on every axis, so a report
+   * spanning two would total a multiple of the cost borne — the identical rule
+   * {@link costCentreSummary} enforces, with the identical refusal.
+   *
+   * ⚠️ THE PERIOD IS THE PLAN'S OWN AND CANNOT BE NARROWED. See
+   * {@link BudgetVarianceResponse.from_date}.
+   */
+  budgetVariance(
+    companyID: string,
+    budgetID: string,
+    dimension: BudgetDimension,
+    costCategoryID?: string,
+  ): Promise<BudgetVarianceResponse>;
+
+  // ---- T12: the GSTR-9 annual reconciliation.
+
+  /**
+   * The annual reconciliation for one financial year.
+   *
+   * ⛔ IT REFUSES TWO REQUESTS ITS MONTHLY NEIGHBOURS ACCEPT, and both refusals
+   * are 400s that name the thing to change:
+   *
+   *  1. `from`/`to` MUST BE A FINANCIAL YEAR — 1 April to 31 March. There is no
+   *     such document as "the GSTR-9 for June to August"; one that existed would
+   *     be a statutory-looking artifact for a period the law does not recognise.
+   *     For a shorter window the message says to read the monthly GSTR-3B.
+   *  2. ALL SIX TAX LEDGER IDS ARE REQUIRED, where {@link gstr1} makes them
+   *     optional. A GSTR-1 without them is still a return; a GSTR-9 without them
+   *     is a reconciliation with nothing to reconcile against — the books column
+   *     would read zero for all twelve months and every period would appear to
+   *     disagree with the returns by exactly the tax charged. Twelve findings,
+   *     all artefacts of a missing parameter.
+   *
+   * ⚠️ THERE IS NO `statement_id`, unlike {@link gstr3b}. A 2A/2B statement
+   * belongs to ONE period and this covers twelve, so applying one would reconcile
+   * eleven months against a statement that has nothing to do with them. The
+   * consequence is DISCLOSED rather than hidden: table 7 comes back NOT_DERIVED
+   * and `itc-reversals-not-computed` is unconditional.
+   *
+   * ⛔ IT IS NEVER FILING-READY. See {@link GSTR9Response.disclosures}.
+   */
+  gstr9(
+    companyID: string,
+    from: string,
+    to: string,
+    ledgers: GSTR9TaxLedgers,
+    gstin?: string,
+  ): Promise<GSTR9Envelope>;
+
   // ---- T3: sales/purchase orders, the bill of materials, and the order books.
   //
   // ⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE: AN ORDER IS A COMMITTED
@@ -618,7 +988,10 @@ export interface CoredClient {
    * another name", the second is "clear the other default or add this as an
    * alternative".
    */
-  createBom(companyID: string, req: CreateBomRequest): Promise<{ bom_id: string }>;
+  createBom(
+    companyID: string,
+    req: CreateBomRequest,
+  ): Promise<{ bom_id: string }>;
   /**
    * List recipes, optionally for one item.
    *
@@ -673,10 +1046,7 @@ export interface CoredClient {
    * the bill was raised, so the payload describes goods the voucher no longer
    * states. Nothing else in the system will ever say so.
    */
-  getEWayBill(
-    companyID: string,
-    voucherID: string,
-  ): Promise<EWayBillResponse>;
+  getEWayBill(companyID: string, voucherID: string): Promise<EWayBillResponse>;
 
   /**
    * RAISE THE e-INVOICE for one voucher, through cored's proxy into statutoryd.
@@ -734,10 +1104,7 @@ export interface CoredClient {
    * `asOn` may be omitted, and then the position is from every order ever placed.
    * The response SAYS SO in `notes` rather than leaving a reader to assume a default.
    */
-  salesOrderBook(
-    companyID: string,
-    asOn?: string,
-  ): Promise<OrderBookResponse>;
+  salesOrderBook(companyID: string, asOn?: string): Promise<OrderBookResponse>;
   purchaseOrderBook(
     companyID: string,
     asOn?: string,
@@ -810,6 +1177,72 @@ export interface CoredClient {
   // name. The item grid cannot offer a location picker against a collection it
   // cannot list.
   listStockItems(companyID: string): Promise<ListStockItemsResponse>;
+  /**
+   * The company's own units of measure.
+   *
+   * ⛔ IT EXISTS BECAUSE THE ITEM FORM'S UNIT PICKER WAS A HARDCODED LIST. GET
+   * /units has been served since the inventory masters shipped and nothing in
+   * this client read it, so a unit the operator created — including any COMPOUND
+   * unit (T10) — could not be chosen for an item, and the picker offered twelve
+   * symbols that may not exist in this company at all.
+   */
+  listUnits(companyID: string): Promise<ListUnitsResponse>;
+
+  // ---- The ITEM HIERARCHY (T10) -------------------------------------------
+  listStockGroups(companyID: string): Promise<ListStockGroupsResponse>;
+  createStockGroup(
+    companyID: string,
+    req: CreateStockGroupRequest,
+  ): Promise<CreateStockGroupResponse>;
+
+  // ---- FOREIGN CURRENCIES AND THEIR RATES (T8) ----------------------------
+  //
+  // ⛔ THE COMPANY'S OWN BASE CURRENCY IS NOT IN THIS LIST and creating it is
+  // refused: a base-currency amount is recorded with no currency at all, so a
+  // master for it would be a second encoding of the same fact.
+  //
+  // ⚠️ `setCurrencyRate` REPLACES the rate already on file for that date, and
+  // that is safe ONLY because a voucher stores its own rate — this table
+  // supplies defaults and the revaluation report and is never joined by the
+  // ledger, so correcting a rate cannot restate a posted voucher.
+  listCurrencies(companyID: string): Promise<ListCurrenciesResponse>;
+  createCurrency(
+    companyID: string,
+    req: CreateCurrencyRequest,
+  ): Promise<CreateCurrencyResponse>;
+  setCurrencyRate(companyID: string, req: SetCurrencyRateRequest): Promise<void>;
+
+  // ---- WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5) -----------------
+  //
+  // ⛔ THE OTHER HALF OF A REFUSAL. The server refuses any settlement that would
+  // realise an exchange difference at a company with no gain/loss ledger chosen,
+  // naming this setting — so a client that cannot set it turns a prompt into a
+  // wall. Nothing is auto-created: the operator names an EXISTING revenue or
+  // expense ledger, and a party, bank or cash ledger is refused with 422 because
+  // crediting a realised gain to a customer's own balance makes a fully settled
+  // bill show a permanent residue.
+  //
+  // ⚠️ `setForexSettings` WITH "" CLEARS THE CHOICE, and that is not a delete: the
+  // row survives, and every difference-realising settlement starts refusing again.
+  forexSettings(companyID: string): Promise<ForexSettingsResponse>;
+  setForexSettings(
+    companyID: string,
+    req: SetForexSettingsRequest,
+  ): Promise<void>;
+
+  // ---- The COSTING METHOD (T9) -------------------------------------------
+  //
+  // `inventoryVocabulary` is the closed set of methods THIS SERVER can value
+  // stock with, and `setStockItemValuationMethod` switches one item onto one of
+  // them. The switch is a RESTATEMENT, not an edit: no figure is stored, so the
+  // item's whole history — every period already reported — comes back on the new
+  // basis. Show the `restates` sentence the answer carries.
+  inventoryVocabulary(companyID: string): Promise<InventoryVocabularyResponse>;
+  setStockItemValuationMethod(
+    companyID: string,
+    stockItemID: string,
+    req: SetValuationMethodRequest,
+  ): Promise<SetValuationMethodResponse>;
   listGodowns(companyID: string): Promise<ListGodownsResponse>;
   listStockBatches(companyID: string): Promise<ListStockBatchesResponse>;
 
@@ -1030,6 +1463,23 @@ export interface CoredClient {
     query?: OutstandingsQuery,
   ): Promise<OutstandingsResponse>;
   /**
+   * ⭐⭐ THE UNADJUSTED-FOREX REPORT (T8 step 7): what every open FOREIGN bill is
+   * worth at the rate as on a date, against the figure the books carry it at.
+   *
+   * ⛔ IT POSTS NOTHING, and the response says so in `posts_nothing` so no client
+   * has to hard-code Q4's sentence.
+   *
+   * ⚠️ ONE METHOD FOR BOTH SIDES, and — unlike `getBillsPayable` above — that is
+   * NOT a lapse into the `?kind=` shape D94 exists to prevent. There is no kind
+   * parameter at all: the route serves receivables AND payables together because
+   * the subject is the NET exposure to a currency, which is not separable by side.
+   * cored governs it as `report:unadjusted-forex`, one flat literal, one rule.
+   */
+  getUnadjustedForex(
+    companyID: string,
+    query?: { as_on?: string },
+  ): Promise<UnadjustedForexResponse>;
+  /**
    * THE PAYABLES AGEING, under its OWN report name (D94).
    *
    * ⛔⛔ IT IS A SEPARATE METHOD AND NOT `getOutstandings(co, {kind: "PAYABLE"})`,
@@ -1176,9 +1626,428 @@ export interface CoredClient {
   ): Promise<DeleteSecurityLevelResponse>;
 
   // Migration import (Tally-XML ingress)
+  /**
+   * Import a TallyPrime XML export into this company.
+   *
+   * ⛔⛔ `Blob` IS NOT A CONVENIENCE OVERLOAD — IT IS THE ONLY CORRECT WAY TO
+   * SEND A REAL EXPORT, AND `string` IS THE TRAP.
+   *
+   * EVERY genuine TallyPrime export is UTF-16LE with a BOM (`file -b
+   * corpora/migration/06-tallyprime-real-shapes.xml` — "Unicode text, UTF-16,
+   * little-endian, with CRLF"). Nothing hand-authored is, which is why this
+   * parameter was a `string` for as long as the only fixtures were ASCII.
+   *
+   * The obvious screen code is the destructive one:
+   *
+   *     const xml = await file.text();            // ⛔ DECODES UTF-16 AS UTF-8
+   *     await client.importTallyXML(id, xml);
+   *
+   * `File.text()` always decodes as UTF-8. Handed UTF-16LE bytes it yields a
+   * string of replacement characters interleaved with NULs, and `fetch` then
+   * re-encodes THAT as UTF-8. What reaches the server has no recognisable BOM,
+   * so `decodeTallyBytes` (internal/integration/tallyxml.go) passes it through
+   * untouched and the parse fails — on the only file shape a real customer will
+   * ever send, while every ASCII fixture keeps passing.
+   *
+   * ⚠️ AND `FileReader.readAsText` IS NOT THE SAME FUNCTION, WHICH IS WHAT
+   * MAKES THIS TRAP WORSE THAN IT LOOKS. `readAsText` runs the "decode"
+   * algorithm and DOES sniff a UTF-16 BOM, so it recovers the text correctly;
+   * `Blob.text()` is specified as a plain UTF-8 decode and strips only a UTF-8
+   * BOM. Both were measured here: `readAsText` yields "<ENVELOPE>...",
+   * `TextDecoder("utf-8")` over the same bytes yields
+   * "\uFFFD\uFFFD<\u0000E\u0000N\u0000V...". So a developer who reached for a
+   * FileReader while checking this would have concluded that sending a string is
+   * fine, and shipped the version that is not.
+   *
+   * So a caller holding a `File` MUST pass the `File` and never its `.text()`.
+   * `http.postRaw` takes `BodyInit`, so the bytes travel verbatim and the
+   * server's own sniffer does the decoding, which is the side that has been
+   * tested against real exports.
+   *
+   * `string` remains accepted because the corpus drivers legitimately hold XML
+   * they built in memory; it is not the browser path.
+   */
   importTallyXML(
     companyID: string,
-    xml: string,
+    xml: string | Blob,
     query?: ImportTallyXMLQuery,
   ): Promise<ImportTallyXMLResponse>;
+
+  // -------------------------------------------------------------------------
+  // PER-COMPANY PRINT TEMPLATES (track C).
+  //
+  // ⛔ THE ENGINE WAS COMPLETE AND HAD NO FRONT DOOR, WHICH IS THE SIXTH TIME.
+  // `printingdb.SaveOverrides` — a real upsert with `updated_at` on both paths —
+  // has been implemented AND TESTED since migration 0037, and the READ side was
+  // wired the whole time: both document paths and the report letterhead honour
+  // overrides on every print. No route reached the write, and `print_template`
+  // held ZERO ROWS in the entire database. Changing what a company's own invoice
+  // says was not possible from anywhere.
+  // -------------------------------------------------------------------------
+  /**
+   * Read the company's template for one document kind (GET
+   * .../print-templates/{docKind}).
+   *
+   * ⚠️ AN ABSENT ROW IS NOT AN ERROR AND IS THE ORDINARY CASE. Most companies
+   * will never customise anything, and they print correct documents from the
+   * built-in layout. The response says `customised: false` and still carries the
+   * `defaults` and `honours` a form needs — so this never rejects, and a caller
+   * must not treat blank overrides as a failure to load.
+   */
+  getPrintTemplate(
+    companyID: string,
+    docKind: string,
+  ): Promise<PrintTemplateResponse>;
+  /**
+   * Replace the company's template for one document kind (PUT
+   * .../print-templates/{docKind}).
+   *
+   * ⛔ A FULL RESTATEMENT, NOT A PATCH. An omitted field is stored as EMPTY,
+   * which means "fall back to the built-in default". That is the opposite of
+   * {@link setCompanyFeatures}, whose absent fields are left alone, and the
+   * difference is deliberate: this backs a form that submits every box, so an
+   * emptied declaration has to stay empty. Merge semantics would make a cleared
+   * box un-clearable — the operator deletes the text, saves, and it comes back.
+   *
+   * ⛔ THE SERVER REFUSES A FIELD THIS KIND CANNOT PRINT, with a 400 naming it.
+   * `RenderReport` reads three of the seven fields, so a declaration sent for
+   * `report` is rejected rather than stored — storing it would mean the operator
+   * typed a certification, was told it saved, and no statement ever carries it.
+   * Consult `printTemplateHonours` before rendering a control.
+   *
+   * ⛔ AND THE RESPONSE IS THE STORED ROW, NOT AN ECHO. Assert against the
+   * returned `overrides`, never against the fact that the call resolved — the
+   * exact trap register row D43 set for every caller of POST /v1/companies.
+   */
+  savePrintTemplate(
+    companyID: string,
+    docKind: string,
+    req: PrintTemplateRequest,
+  ): Promise<PrintTemplateResponse>;
+  /**
+   * Remove the company's template for one document kind, returning it to the
+   * built-in layout (DELETE .../print-templates/{docKind}).
+   *
+   * ⛔ THIS IS WHAT MAKES THE FEATURE TWO-WAY, and a PUT of blanks is NOT a
+   * substitute. Both print the same document, but a blank row still reports
+   * `customised: true`, so the screen could never again tell an operator they are
+   * on the built-in layout — and `print_template.updated_at`, which answers "when
+   * did our invoice layout last change?", would answer with the date somebody
+   * reverted. A one-way door is not a setting.
+   *
+   * IDEMPOTENT: clearing an override that is not there succeeds and reports
+   * `cleared: false`. A colleague having already cleared it is not a failure.
+   */
+  clearPrintTemplate(
+    companyID: string,
+    docKind: string,
+  ): Promise<PrintTemplateResponse>;
+
+  // -------------------------------------------------------------------------
+  // PAYROLL (Track 3). Eight routes, mounted and PDP-mapped since Track 3 and
+  // never once called from this app until the payroll screens landed.
+  //
+  // ⛔ EIGHT METHODS AND NOT ONE `payroll(op, …)` FACADE. Each route is its own
+  // AUTHORITY on the server — `employee` is a bare resource token of its own
+  // (deliberately NOT folded into `master`, which every seeded Data Entry level
+  // is granted), the pay run is the voucher class `payroll`, and the five reads
+  // are five separate report names so that "may produce the monthly ECR but may
+  // not read the register" is a rule an administrator can actually write. A
+  // facade that took the operation as an argument would make the PDP's decision
+  // invisible at the call site, which is the mistake the two order registers and
+  // the two order books each have a paragraph about.
+  // -------------------------------------------------------------------------
+
+  /** The employee master. `includeInactive` adds leavers, who are excluded by default. */
+  listEmployees(
+    companyID: string,
+    includeInactive?: boolean,
+  ): Promise<ListEmployeesResponse>;
+  createEmployee(
+    companyID: string,
+    req: CreateEmployeeRequest,
+  ): Promise<CreateEmployeeResponse>;
+
+  /**
+   * Compute and post a whole wage month.
+   *
+   * ⚠️ A 403 HERE IS AMBIGUOUS ON THE WIRE AND THE SCREEN MUST DISAMBIGUATE IT:
+   * the route is under the back-dated cutoff via `wage_month` (the server derives
+   * the voucher date with `payrolldb.LastDayOf`), so a refusal may mean "that
+   * month is closed" rather than "you may not run payroll".
+   */
+  runPayroll(companyID: string, req: PayRunRequest): Promise<PayRunResponse>;
+
+  /** The wage month's register: a row per employee plus the totals. */
+  payrollRegister(
+    companyID: string,
+    month: string,
+  ): Promise<PayrollRegisterResponse>;
+  /** ONE employee's payslip for a wage month. Another tenant's id is a 404, via RLS. */
+  payslip(
+    companyID: string,
+    month: string,
+    employeeID: string,
+  ): Promise<PayslipResponse>;
+
+  // ---- The three statutory FILES. All three answer application/zip (the file
+  // plus its disclosure sidecar), so all three go through the BLOB path — the
+  // JSON path would corrupt the archive into a lossy string, exactly as it would
+  // a PDF. See {@link StatutoryFileDownload}.
+  payrollPFECR(
+    companyID: string,
+    month: string,
+  ): Promise<StatutoryFileDownload>;
+  /**
+   * The ESIC monthly contribution return.
+   *
+   * `leavingReasons` maps an employee CODE to the reason they left. It is NOT
+   * derivable — the master records a date of leaving and not why, and "Retired",
+   * "Expired" and "Employee has left service" are three different filings — so a
+   * leaver with no supplied reason is refused with a 422 NAMING the employee
+   * code, never filed with a blank reason the portal reads as accepted-but-empty.
+   */
+  payrollESIReturn(
+    companyID: string,
+    month: string,
+    leavingReasons?: Readonly<Record<string, string>>,
+  ): Promise<StatutoryFileDownload>;
+  /** The quarterly salary-TDS statement (ex-24Q Annexure I). Q4 is refused server-side. */
+  payrollForm138(
+    companyID: string,
+    req: Form138Request,
+  ): Promise<StatutoryFileDownload>;
+
+  // ---- THE EMPLOYEE MASTER'S TWO EFFECTIVE-DATED CHILDREN.
+  //
+  // ⛔ WITHOUT THESE THE SEVEN METHODS ABOVE CANNOT PAY ANYBODY. A pay run
+  // refuses an employee with no salary structure in force ("there is nothing to
+  // pay and nothing to contribute on") and one with no statutory election ("the
+  // PF contribution base and the tax regime are elections and there is no safe
+  // default"). Both writers shipped with Track 3 with NO ROUTE, so the whole
+  // module answered 422 to every caller that had not reached into the Go service
+  // directly — which every payroll test in the server package does, which is why
+  // a green suite never noticed.
+  //
+  // Both READS exist so a screen can tell a complete master from an incomplete
+  // one BEFORE a pay run. Without them the only way to discover the gap is to
+  // attempt the run, which is the one operation an operator most wants to be
+  // sure about beforehand.
+  listSalaryComponents(
+    companyID: string,
+    employeeID: string,
+  ): Promise<ListSalaryComponentsResponse>;
+  setSalaryComponent(
+    companyID: string,
+    employeeID: string,
+    req: SetSalaryComponentRequest,
+  ): Promise<SetSalaryComponentResponse>;
+  listStatutoryElections(
+    companyID: string,
+    employeeID: string,
+  ): Promise<ListStatutoryElectionsResponse>;
+  setStatutoryElection(
+    companyID: string,
+    employeeID: string,
+    req: SetStatutoryElectionRequest,
+  ): Promise<SetStatutoryElectionResponse>;
+
+  /**
+   * The closed sets a payroll form chooses from. No parameters: the vocabulary
+   * is the statute's, not the tenant's, and two companies on one deployment get
+   * the same answer.
+   */
+  payrollVocabulary(companyID: string): Promise<PayrollVocabularyResponse>;
+
+  // -------------------------------------------------------------------------
+  // OFFLINE SYNC + THE RECONCILIATION QUEUE (track D).
+  //
+  // ⛔ THE FIRST TWO ROUTES HAVE BEEN MOUNTED SINCE TASK C AND WERE NEVER CALLED
+  // BY THIS APP. `/usr/bin/grep -rln "sync/commit" frontend/src/` was EMPTY, and
+  // so the queue that records every refused alter/delete has never been shown to
+  // an operator — including the FROZEN rows the shipped IRN freeze rule already
+  // raises today. That is a present-tense defect, not only an offline one.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Commit an offline node's outbox through the cloud sequencer, returning ONE
+   * outcome per intent in submission order.
+   *
+   * ⛔⛔ SEND THE WHOLE OUTBOX IN ONE CALL, AND DO NOT DRAIN IT ROW BY ROW. Two
+   * reasons, and the second is not an optimisation:
+   *
+   *   1. the commit is one WRITE, so a level requiring WebAuthn costs exactly one
+   *      step-up for the whole batch rather than one per voucher;
+   *   2. the back-dated cutoff judges the batch as a UNIT — "a batch is only as
+   *      permitted as its most-refused member" (cutoff round 2). One pre-cutoff
+   *      intent refuses ALL of them with a 403 and NO outcomes at all. Draining
+   *      row by row would turn one honest refusal into a partial commit whose
+   *      shape depends on the order the rows happened to be in.
+   *
+   * ⛔ A 403 IS NOT A PER-INTENT FAILURE. It returns no outcomes, nothing was
+   * applied, and THE OUTBOX MUST BE LEFT INTACT — see {@link SyncBatchRefusal}.
+   * Calling `OfflineNode.settle` on a refusal destroys work the server never
+   * judged.
+   *
+   * ⚠️ AND `provisional_no` IS NEVER THE VOUCHER NUMBER. The server allocates the
+   * final number; the provisional is carried only so a conflict loser can be
+   * surfaced with the label the operator saw offline.
+   */
+  syncCommit(companyID: string, intents: SyncIntent[]): Promise<SyncCommitResponse>;
+
+  /**
+   * The OPEN reconciliation entries, newest first — every refused alter/delete
+   * this company has accumulated.
+   *
+   * Two kinds arrive on one list and they are NOT interchangeable: `kind ===
+   * "CONFLICT"` is a parked offline loser whose payload was preserved, while
+   * `"IRN"` / `"FILED_GSTR1"` is a freeze row raised by the ledger, which carries
+   * no payload at all. {@link reconciliationPayload} is where that difference
+   * becomes visible.
+   */
+  reconciliationQueue(companyID: string): Promise<ReconciliationQueueResponse>;
+
+  /**
+   * The intent PARKED on one open entry — the voucher body the operator keyed,
+   * for the right-hand pane of the conflict compare screen. The left-hand pane is
+   * {@link getVoucher}, which returns the live head.
+   *
+   * ⚠️ `has_payload: false` IS A REAL ANSWER, NOT AN ERROR. A freeze row never
+   * held a payload, so the operator's own version exists only in the local outbox
+   * on the machine that keyed it. Read it from there — and say so plainly when
+   * this is not that machine, rather than rendering an empty pane.
+   *
+   * ⛔ THE MONEY IN `intent.payload` IS ALREADY FORMATTED TO MATCH `getVoucher`'s
+   * (fixed-4 strings). Do not re-format it, and do not compare it against
+   * anything you have re-formatted yourself: the whole reason the server does not
+   * echo its stored bytes is that "1180" beside "1180.0000" reads as a difference
+   * that does not exist.
+   */
+  reconciliationPayload(
+    companyID: string,
+    reconID: string,
+  ): Promise<ReconciliationPayloadResponse>;
+
+  /**
+   * Mark one open entry handled.
+   *
+   * ⛔ THIS IS THE ONLY WRITER OF `resolved_at` THAT EXISTS. Before it, the
+   * column had none anywhere in the codebase, so a row was immortal and the queue
+   * could only grow.
+   *
+   * ⚠️ IT DOES NOT REPLAY THE PARKED INTENT AND NOTHING DOES. Resolving records
+   * that a human dealt with the item; the refused alter/delete stays refused. The
+   * operator's ways back into the books are a fresh voucher or a credit note, and
+   * a screen that implies "resolve" retries the edit is promising something no
+   * route performs.
+   *
+   * A second resolve of the same id answers 404 — the row is no longer open —
+   * which is a stale view rather than a failure.
+   */
+  resolveReconciliation(
+    companyID: string,
+    reconID: string,
+  ): Promise<ResolveReconciliationResponse>;
+
+  // ---- THE AGENT PLANE (W2, D121 §8) ------------------------------------
+  //
+  // ⛔ NONE OF THESE WRITES TO THE BOOKS. The run routes read or start the
+  // agent's own workflow; the decision route records a HUMAN's verdict on a
+  // proposal. The voucher an approval leads to is committed by the agent's
+  // poller afterwards, replaying the recorded preview (or the approver's edit),
+  // under an idempotency key — so a screen that has just approved must never
+  // report a voucher number it does not have.
+
+  /** Start a run (`create agent-run`). 503 AGENT_UNCONFIGURED when no model is set. */
+  startAgentRun(companyID: string, req: StartAgentRunRequest): Promise<AgentRunResponse>;
+  /** Runs for this company, newest first. */
+  listAgentRuns(companyID: string, limit?: number): Promise<AgentRunsResponse>;
+  /** One run, with every approval it raised. */
+  getAgentRun(companyID: string, runID: string): Promise<AgentRunResponse>;
+  /** The run's intent log as AG-UI events, after `after` (pass back next_after). */
+  agentRunEvents(companyID: string, runID: string, after?: number): Promise<AgentEventsResponse>;
+  /** Cancel a run (`alter agent-run`); nothing it parked will ever commit. */
+  cancelAgentRun(companyID: string, runID: string): Promise<AgentRunResponse>;
+  /** The approval inbox (`display agent-approval`). */
+  listAgentApprovals(
+    companyID: string,
+    query?: { state?: "pending" | "all"; run_id?: string },
+  ): Promise<AgentApprovalsResponse>;
+  /** One approval, with its preview (the ledger-effect diff). */
+  getAgentApproval(companyID: string, approvalID: string): Promise<AgentApprovalResponse>;
+  /**
+   * Approve / edit-then-approve / reject / ask-back (`alter agent-approval`).
+   * 409 ALREADY_DECIDED | APPROVAL_EXPIRED carries the approval as it now is;
+   * 403 when the caller may not take the underlying action themselves.
+   */
+  decideAgentApproval(
+    companyID: string,
+    approvalID: string,
+    req: AgentDecisionRequest,
+  ): Promise<AgentApprovalResponse>;
+
+  // ---- W2 BREADTH (D121 "Wave 2 breadth") -------------------------------
+
+  /**
+   * Dry-run an approver's edited body against the approval's action (`alter
+   * agent-approval`): the effect the approver will be approving, drawn by the
+   * server's real handler. 422 EDIT_REFUSED carries the validators' sentence.
+   */
+  previewAgentEdit(
+    companyID: string,
+    approvalID: string,
+    editedBody: Record<string, unknown>,
+  ): Promise<AgentEditPreviewResponse>;
+  /** The autonomy table (`display agent-autonomy`, Owners only). */
+  listAgentAutonomy(companyID: string): Promise<AgentAutonomyResponse>;
+  /**
+   * Set one autonomy row (`alter agent-autonomy`). Owners only, ALWAYS with a
+   * WebAuthn step-up (403 STEPUP_REQUIRED otherwise, which the transport's
+   * step-up retry answers).
+   */
+  setAgentAutonomy(companyID: string, req: SetAgentAutonomyRequest): Promise<AgentAutonomyResponse>;
+  /** Recompute one run's intent chain. */
+  verifyAgentRun(companyID: string, runID: string): Promise<AgentVerifyRunResponse>;
+  /** Recompute every intent-log anchor of the company. */
+  verifyAgentAnchors(companyID: string): Promise<AgentVerifyAnchorsResponse>;
+  /**
+   * Release an agent-created ledger for posting (`alter master-unblock`, a
+   * person's act only). 409 NOT_BLOCKED when it is not blocked.
+   */
+  unblockLedger(companyID: string, ledgerID: string): Promise<UnblockLedgerResponse>;
+
+  // ---- THE INSIGHT ENGINE (W4, d125) -------------------------------------
+  //
+  // ⛔ NONE OF THESE WRITES TO THE BOOKS. A verdict, a suppression, a digest
+  // or a run is a row in the insight tables; acting on an insight happens in
+  // the screen it names. Every route is the bare `insights` token.
+
+  /** Open (or `state`) insights, highest impact first, plus the type registry and what is owed. */
+  listInsights(
+    companyID: string,
+    query?: { state?: InsightState; type?: string },
+  ): Promise<InsightsListResponse>;
+  /** One insight, with its evidence SQL, args and voucher ids. */
+  getInsight(companyID: string, insightID: string): Promise<Insight>;
+  /** Re-run the stored evidence NOW, read-only: do the books still reproduce it? */
+  verifyInsight(companyID: string, insightID: string): Promise<InsightEvidenceResponse>;
+  /** Record a verdict (`create insights`); not_useful / wrong also dismiss it. */
+  insightFeedback(
+    companyID: string,
+    insightID: string,
+    verdict: InsightVerdict,
+    note?: string,
+  ): Promise<Insight>;
+  /** The stored morning digest for a date (404 when none was composed). */
+  getInsightDigest(companyID: string, date?: string): Promise<InsightDigest>;
+  /** Compose (or return the already-stored) digest for a date. */
+  composeInsightDigest(companyID: string, date?: string): Promise<InsightDigest>;
+  /** Active suppressions. */
+  listInsightSuppressions(companyID: string): Promise<{ suppressions: InsightSuppression[] }>;
+  /** Stop a type (or a type for one entity) reaching the digest (`alter insights`). */
+  suppressInsight(companyID: string, req: SuppressInsightRequest): Promise<{ suppression_id: string }>;
+  /** Lift a suppression. */
+  unsuppressInsight(companyID: string, suppressionID: string): Promise<void>;
+  /** Drain the real-time queue and run today's detectors now (once per day). */
+  runInsightsNow(companyID: string): Promise<InsightRunResponse>;
 }

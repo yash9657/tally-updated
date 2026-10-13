@@ -3,7 +3,6 @@ package inventory
 import (
 	"errors"
 	"fmt"
-	"sort"
 
 	"github.com/shopspring/decimal"
 )
@@ -31,8 +30,10 @@ const rateScale int32 = 16
 
 var hundred = decimal.NewFromInt(100)
 
-// MethodWeightedAverage is the only valuation method v1 supports. It is the
-// exact string stock_item.valuation_method's CHECK constraint allows.
+// MethodWeightedAverage is Tally's default costing method and this build's
+// default for a new stock item. It is the exact string
+// stock_item.valuation_method's CHECK constraint allows; the other two it
+// allows are MethodFIFO and MethodLIFO, in lots.go.
 const MethodWeightedAverage = "WEIGHTED_AVG"
 
 // ErrUnknownValuation is returned by ValuerFor for a method it does not
@@ -50,16 +51,33 @@ func round(d decimal.Decimal) decimal.Decimal {
 
 // ValuationState is a position's running cost state during a replay: how much
 // stock is on hand and what it is carried at. Weighted average needs exactly
-// this pair and nothing more.
+// the first two fields and nothing more.
 //
-// This is also why FIFO is a later, additive change and not a schema change:
-// weighted average's state is a strict SUBSET of what FIFO needs (a queue of
-// lots). A FIFO valuer carries its own lot queue in its own implementation of
-// Valuer, projects it into this Qty/Value pair for reporting, and no caller,
-// column or corpus shape moves.
+// That is why FIFO WAS an additive change and not a schema change, and it is
+// worth recording how it actually landed, because the prediction here was only
+// half right. The predicted shape — "a FIFO valuer carries its own lot queue in
+// its own implementation of Valuer" — is WRONG, and would have been a defect:
+// ReplayAll passes ONE valuer to EVERY position, so a queue held in the valuer
+// would have blended the lots of an item in two godowns into one, silently, and
+// a valuer that mutated itself would no longer be pure. The queue belongs to the
+// POSITION, so it lives here in the position's state (Lots below), where the
+// Valuer contract stays "fold one movement" and stays pure. No caller, no
+// column and no corpus shape moved, which was the part that was right.
 type ValuationState struct {
 	Qty   decimal.Decimal
 	Value decimal.Decimal
+	// Lots is the position's COSTED LAYERS, oldest first, and it is what FIFO
+	// and LIFO carry that weighted average does not need. It is nil for a
+	// weighted-average replay and that is not an omission: an average has one
+	// rate for the whole position, so a layer list would be a second, redundant
+	// statement of the same fact and the two could disagree.
+	//
+	// The invariant, when the queue is non-empty: the lots' quantities sum to
+	// Qty and their values sum to Value. A position with stock but no layers is
+	// legal and means "one layer, blended" — see the lots method for the two
+	// places that happens (an opening, and an item switched onto FIFO after
+	// trading at average).
+	Lots []Lot
 }
 
 // Rate is the current weighted-average cost per unit at rateScale precision, or
@@ -139,14 +157,20 @@ func (WeightedAverage) Apply(state ValuationState, m Movement) (ValuationState, 
 // ValuerFor selects the valuer for a stock_item.valuation_method string.
 //
 // The default arm returns ErrUnknownValuation rather than a working valuer.
-// That is deliberate and load-bearing: when FIFO is added, the CHECK constraint
-// widens, rows appear with method 'FIFO', and every deployment that has not
-// shipped the FIFO arm must FAIL LOUDLY instead of quietly reporting weighted
-// average numbers under a FIFO heading.
+// That is deliberate and load-bearing, and it has now been paid for twice over:
+// migration 0078 widened the CHECK to admit 'FIFO' and 'LIFO', so rows with
+// those methods exist, and any deployment running a binary that predates them
+// FAILS LOUDLY on the Stock Summary and the Balance Sheet instead of quietly
+// reporting weighted-average numbers under a FIFO heading. The next method
+// (Tally ships eight) inherits the same protection for free.
 func ValuerFor(method string) (Valuer, error) {
 	switch method {
 	case MethodWeightedAverage:
 		return WeightedAverage{}, nil
+	case MethodFIFO:
+		return FIFO{}, nil
+	case MethodLIFO:
+		return LIFO{}, nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownValuation, method)
 	}
@@ -186,99 +210,69 @@ func less(a, b Movement) bool {
 	return a.VoucherVersionID < b.VoucherVersionID
 }
 
-// Replay folds one position's opening and movements into a Position.
+// Replay folds ONE position's opening and movements into a Position. It is the
+// single-position entry point — ReplayCompany is the one every report uses.
 //
-// It SORTS ITS OWN INPUT into replay order before folding. That is not a
-// convenience: weighted average is order-dependent, so a caller who passed rows
-// back in a different order — a different ORDER BY, a map iteration, a parallel
-// fetch — would get a different, equally confident closing value. Sorting here
-// means the ordering rule is stated once, in one place, and cannot be forgotten
-// at a call site. TestReplayIsOrderDeterministic shuffles every corpus fixture
-// twenty ways and demands one answer.
+// THE INPUT IS SORTED INTO REPLAY ORDER BEFORE ANYTHING IS FOLDED — down in
+// ReplayCompany, which this delegates to, so there is exactly one sort in the
+// package. That is not a convenience: valuation is order-dependent, so a caller who
+// passed rows back in a different order — a different ORDER BY, a map
+// iteration, a parallel fetch — would get a different, equally confident
+// closing value. Sorting inside means the ordering rule is stated once, in one
+// place, and cannot be forgotten at a call site. TestReplayIsOrderDeterministic
+// shuffles every corpus fixture twenty ways and demands one answer.
 //
 // The opening is folded in as the FIRST inward, before every movement,
 // regardless of dates. It is by definition the state the books opened with; a
 // movement dated before the opening date is a data error for the migration
 // importer to reject, not something valuation should try to interpret.
 //
-// The caller's slice is never reordered — Replay sorts a copy, because callers
-// legitimately hold one slice covering many positions (see ReplayAll) and a
-// method that shuffled its argument would make the caller's next call depend on
-// its previous one.
+// The caller's slice is never reordered — Replay replays a copy, because
+// callers legitimately hold one slice covering many positions (see ReplayAll)
+// and a method that shuffled its argument would make the caller's next call
+// depend on its previous one.
 func Replay(opening Opening, movements []Movement, valuer Valuer) Position {
-	ordered := make([]Movement, len(movements))
-	copy(ordered, movements)
-	sort.SliceStable(ordered, func(i, j int) bool { return less(ordered[i], ordered[j]) })
-
 	key := opening.Position
-	if key == (PositionKey{}) && len(ordered) > 0 {
-		key = ordered[0].Position
-	}
-
-	pos := Position{
-		Key:          key,
-		OpeningQty:   opening.Qty,
-		OpeningValue: opening.Value(),
-		InwardQty:    decimal.Zero,
-		InwardValue:  decimal.Zero,
-		OutwardQty:   decimal.Zero,
-		OutwardValue: decimal.Zero,
-	}
-
-	state := ValuationState{Qty: opening.Qty, Value: opening.Value()}
-
-	for _, m := range ordered {
-		next, consumed := valuer.Apply(state, m)
-		if m.Direction == DirectionIn {
-			pos.InwardQty = pos.InwardQty.Add(m.Qty)
-			pos.InwardValue = pos.InwardValue.Add(m.Value())
-		} else {
-			pos.OutwardQty = pos.OutwardQty.Add(m.Qty)
-			pos.OutwardValue = pos.OutwardValue.Add(consumed)
+	if key == (PositionKey{}) && len(movements) > 0 {
+		// The position of the EARLIEST movement in replay order, which is what
+		// the sorted-then-take-the-first spelling this replaced meant. Computed
+		// with the same `less` so the two can never disagree.
+		first := movements[0]
+		for _, m := range movements[1:] {
+			if less(m, first) {
+				first = m
+			}
 		}
-		state = next
+		key = first.Position
 	}
-
-	pos.ClosingQty = state.Qty
-	pos.ClosingValue = round(state.Value)
-	pos.ClosingRate = round(state.Rate())
-	return pos
+	opening.Position = key
+	return ReplayAll([]Opening{opening}, movements, valuer)[key]
 }
 
-// ReplayAll groups openings and movements by PositionKey and replays each
-// position independently, returning one Position per key that appears in
-// either input (a position with an opening and no movements still reports).
+// ReplayAll replays every position in the inputs through ONE valuer, returning
+// one Position per key that appears in either input (a position with an opening
+// and no movements still reports).
 //
-// Positions are replayed SEPARATELY and never blended: the same item in two
-// godowns, or in two batches, carries two different average costs, and the
-// average of the averages is not the average. This is why the position key —
-// not the item id — is what the closing-balance query groups by.
+// Positions are never BLENDED: the same item in two godowns, or in two batches,
+// carries two different costs, and the average of the averages is not the
+// average. This is why the position key — not the item id — is what the closing
+// balance query groups by.
+//
+// ⚠️ THEY ARE NOT REPLAYED IN ISOLATION EITHER, AND THAT IS D103. A Stock
+// Journal's outward and inward legs land in DIFFERENT positions, and the inward
+// must be carried at exactly what the outward consumed or a transfer between
+// the company's own godowns creates value out of nothing. ReplayCompany does
+// the coupling; see conserving.go.
+//
+// It is the SINGLE-VALUER form, kept for callers (and every corpus fixture)
+// that value one item, or a set of items that all share a method.
 func ReplayAll(openings []Opening, movements []Movement, valuer Valuer) map[PositionKey]Position {
-	byKey := make(map[PositionKey][]Movement)
-	for _, m := range movements {
-		byKey[m.Position] = append(byKey[m.Position], m)
-	}
-	openingByKey := make(map[PositionKey]Opening, len(openings))
-	for _, o := range openings {
-		if _, dup := openingByKey[o.Position]; dup {
-			// stock_opening's UNIQUE NULLS NOT DISTINCT position key makes this
-			// impossible in the database; a caller that built the slice by hand
-			// would otherwise lose one of the two silently.
-			panic("inventory: duplicate opening for the same position key")
-		}
-		openingByKey[o.Position] = o
-		if _, ok := byKey[o.Position]; !ok {
-			byKey[o.Position] = nil
-		}
-	}
-
-	out := make(map[PositionKey]Position, len(byKey))
-	for key, ms := range byKey {
-		// A key with no stock_opening row replays from a zero state — the zero
-		// value of Opening is exactly that, so no special case is needed.
-		opening := openingByKey[key]
-		opening.Position = key
-		out[key] = Replay(opening, ms, valuer)
+	out, err := ReplayCompany(openings, movements, func(string) (Valuer, error) { return valuer, nil })
+	if err != nil {
+		// The selector above is a constant and cannot fail. Panicking rather
+		// than returning a nil map keeps the signature honest for the many
+		// callers that have no error to return.
+		panic(errUnreachableValuer(err))
 	}
 	return out
 }

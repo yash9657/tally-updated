@@ -312,6 +312,67 @@ func TestStockJournalMovesBetweenGodownsWithoutChangingTheTotal(t *testing.T) {
 	}
 }
 
+// TestAManufactureIsStillPostable is the CONTROL that keeps D103's fix from
+// being a one-liner.
+//
+// ⛔ StockJournal is ONE class serving TWO shapes (see the constant's doc): a
+// TRANSFER of the same item between godowns, and a MANUFACTURE that consumes
+// several components and produces a DIFFERENT finished good in a DIFFERENT
+// quantity. The obvious spelling of "a transfer must conserve value" — refuse a
+// voucher whose inward rate does not match its outward rate, or whose legs do
+// not net to zero — would refuse every legitimate manufacture, and a manufacture
+// MUST be able to change per-item value, because that is what manufacturing IS.
+//
+// ⭐ SO THE RULE REFUSES NOTHING. Conservation is achieved by DERIVING what the
+// inward legs are carried at, in the replay, from what the outward legs actually
+// consumed (inventory/conserving.go). Nothing about it can reject a document,
+// which is exactly what this arm pins: three components out, one finished good
+// in, unequal quantities, unrelated rates, and it commits.
+func TestAManufactureIsStillPostable(t *testing.T) {
+	e := setupStock(t)
+	timber := e.newItem(t, "Timber")
+	glue := e.newItem(t, "Glue")
+	chair := e.newItem(t, "Chair")
+
+	line := func(item uuid.UUID, d Direction, qty, rate string) InventoryLine {
+		q := decimal.RequireFromString(qty)
+		r := decimal.RequireFromString(rate)
+		return InventoryLine{
+			StockItemID: item, GodownID: e.godown, Direction: d,
+			Qty: q, Rate: r, Amount: q.Mul(r),
+		}
+	}
+
+	// The components have to be on the shelf first, or the refusal would be
+	// negative stock and this test would be pinning the wrong thing.
+	if _, err := e.led.PostVoucher(e.ctx, e.stockVoucher(ReceiptNote,
+		line(timber, Inward, "50.0000", "40.0000"),
+		line(glue, Inward, "10.0000", "15.0000"),
+	)); err != nil {
+		t.Fatalf("stock the components: %v", err)
+	}
+
+	res, err := e.led.PostVoucher(e.ctx, e.stockVoucher(StockJournal,
+		line(timber, Outward, "20.0000", "40.0000"),
+		line(glue, Outward, "3.0000", "15.0000"),
+		// A DIFFERENT item, a DIFFERENT quantity, and a rate the operator guessed.
+		line(chair, Inward, "4.0000", "250.0000"),
+	))
+	if err != nil {
+		t.Fatalf("a MANUFACTURE was refused: %v — a Stock Journal serves two shapes and this is the "+
+			"second one; a conservation rule that refuses it makes manufacturing unrecordable in this "+
+			"product, which is a far larger hole than the one it closes", err)
+	}
+	if n := e.postingCount(t, res.VoucherVersionID); n != 0 {
+		t.Fatalf("the manufacture wrote %d posting(s): turning our own goods into other goods is not a "+
+			"transaction with anybody", n)
+	}
+	// ⭐ THE VALUE HALF OF THIS CLAIM IS PINNED IN internal/reporting, NOT HERE.
+	// Value is never stored — there is no column to read — so what the finished
+	// good is carried at can only be asserted through a report that replays the
+	// ledger: see TestAManufacturePostedAsAStockJournalIsNotRefusedAndStillConserves.
+}
+
 // TestStockJournalRefusesAZeroRateInward covers what the test ABOVE cannot see.
 //
 // ⛔ THE TEST ABOVE SUMS QUANTITY, AND QUANTITY IS EXACTLY WHAT THIS DEFECT
@@ -632,9 +693,16 @@ func TestPhysicalStockShortageIsNotNegativeStock(t *testing.T) {
 
 // TestPhysicalStockSurplusNeedsARate. The surplus inward is INVENTED by the
 // server — no supplier priced it — so letting the rate default to zero would
-// bring units in at no cost and quietly write the item's weighted-average value
-// DOWN. A stock-take that misstates the balance sheet is the opposite of what a
+// bring units in at no cost and quietly write the item's STOCK VALUE down. A
+// stock-take that misstates the balance sheet is the opposite of what a
 // stock-take is for, so it is refused with a message that says what to supply.
+//
+// ⚠️ THE REFUSAL MUST NOT NAME A COSTING METHOD (D104). It used to say
+// "weighted-average value" on every item, including the FIFO and LIFO ones
+// migration 0078 made possible, where there is no weighted average to write
+// down — the rule was right on all three, only its reason named one. The arm
+// below pins the absence, so a future edit cannot put a single method's
+// vocabulary back into a message every method sees.
 func TestPhysicalStockSurplusNeedsARate(t *testing.T) {
 	e := setupStock(t)
 	e.receive(t, e.godown, "10.0000", "100.0000")
@@ -647,17 +715,21 @@ func TestPhysicalStockSurplusNeedsARate(t *testing.T) {
 		}},
 	})
 	if err == nil {
-		t.Fatal("a surplus of 4 units was brought in at zero cost: the item's weighted-average value is now understated and every later issue overstates cost of goods sold")
+		t.Fatal("a surplus of 4 units was brought in at zero cost: the item's stock value is now understated and every later issue overstates cost of goods sold")
 	}
 	if !strings.Contains(err.Error(), "zero cost") {
 		t.Fatalf("the refusal must explain that a zero-cost surplus writes the valuation down, got %v", err)
+	}
+	if strings.Contains(err.Error(), "weighted-average") {
+		t.Fatalf("the surplus refusal names ONE costing method to an operator whose item may be on any of three, "+
+			"so on a FIFO or LIFO item it explains the refusal with a number that does not exist: %v", err)
 	}
 	if after := e.voucherCount(t); after != before {
 		t.Fatalf("the refused count committed anyway: %d -> %d heads", before, after)
 	}
 
-	// A shortage on the same shelf needs NO rate: an outward is consumed at the
-	// position's running weighted average and its own rate is ignored.
+	// A shortage on the same shelf needs NO rate: an outward is consumed at
+	// whatever the item's own valuer says it cost, and its own rate is ignored.
 	if _, err := e.led.PostVoucher(e.ctx, VoucherInput{
 		Class: PhysicalStock, VoucherDate: "2025-05-12", CreatedBy: "counter",
 		PhysicalCount: []PhysicalCountLine{{

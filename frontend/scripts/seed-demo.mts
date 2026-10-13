@@ -62,6 +62,35 @@ const baseUrl =
 const uiUrl = process.env.UI_BASE_URL ?? "http://localhost:5173";
 const withInsightd = process.argv.includes("--insightd");
 
+// ⛔⛔ A SCRATCH COMPANY IS A NAMED ONE, AND THAT IS THE WHOLE POINT.
+//
+// This seeder hard-coded "Demo Traders" and wrote its id to `.demo-company-id`,
+// so the only way to get a second populated book was to run it again — producing
+// another company with the SAME NAME and silently replacing the id every gate
+// reads. Nine "Demo Traders" had accumulated by 2026-08-30, and the header bar
+// shows only the name: a browser drive on one of them was diagnosed against the
+// database rows of another, and the numbers disagreeing looked like a far larger
+// bug than the one actually present (usability day §2.8).
+//
+// ⭐ SO THE NAME AND THE ID FILE MOVE TOGETHER. `--name` renames the company AND
+// makes it write a different id file, because a second book that overwrote the
+// first book's id would be the same trap wearing a new label. With no `--name`
+// the behaviour is byte-for-byte what it was, which is what every existing gate
+// depends on.
+//
+//   pnpm seed:demo -- --name "Scratch Traders"   -> .scratch-company-id
+//
+// ⚠️ IT IS FOR DRIVING THE APP BY HAND. `pnpm verify:demo` and the drive scripts
+// assert against figures in the DEFAULT book; enter a day's vouchers there and
+// they break. That is why the usability day's write half had nowhere to run.
+const nameFlag = process.argv.indexOf("--name");
+const COMPANY_NAME: string =
+  (nameFlag >= 0 ? process.argv[nameFlag + 1] : undefined) ?? "Demo Traders";
+const IS_SCRATCH = COMPANY_NAME !== "Demo Traders";
+const ID_FILE = IS_SCRATCH
+  ? `../.${COMPANY_NAME.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-company-id`
+  : "../.demo-company-id";
+
 /** Karnataka = the company's own state; Maharashtra = the inter-state case. */
 const HOME_STATE = "29";
 const OTHER_STATE = "27";
@@ -152,7 +181,7 @@ async function main(): Promise<void> {
 
   const stamp = new Date().toISOString().slice(0, 10);
   const company = await client.createCompany({
-    name: "Demo Traders",
+    name: COMPANY_NAME,
     fy_start_date: "2026-04-01",
     // BOOKS BEGINNING FROM is a SEPARATE date from the financial-year start.
     // They are equal here because Demo Traders starts fresh at the top of its
@@ -171,20 +200,26 @@ async function main(): Promise<void> {
     // correctly structured: 29 (Karnataka) + PAN-shaped AACCD1234K + entity "1"
     // + "Z" + check char.
     gstin: COMPANY_GSTIN,
-    mailing_name: "Demo Traders",
+    mailing_name: COMPANY_NAME,
     address: "14, 3rd Cross, Industrial Layout\nKoramangala",
     city: "Bengaluru",
     pincode: "560095",
     country: "India",
   });
   const co = company.company_id;
-  console.log(`\nDemo Traders  (created ${stamp})\n  company id: ${co}`);
+  console.log(`\n${COMPANY_NAME}  (created ${stamp})\n  company id: ${co}`);
   // The id in MACHINE-READABLE form as well as in the log line. `pnpm verify:demo`
   // takes the company as argv[2] and `pnpm seed:tenancy` takes it as argv[2] too,
   // so until this file existed the only way to chain the steps was to eyeball the
   // line above and paste it — which is why `make reset-dev-db` could not have a
   // `make seed-all` sibling. Written next to the script, gitignored.
-  writeFileSync(new URL("../.demo-company-id", import.meta.url), co);
+  writeFileSync(new URL(ID_FILE, import.meta.url), co);
+  if (IS_SCRATCH) {
+    console.log(
+      `  ⚠️ SCRATCH BOOK — id written to ${ID_FILE.replace("../", "")}, NOT ` +
+        `.demo-company-id. Drive it, dirty it, throw it away; the gates do not read it.`,
+    );
+  }
 
   // ---- Masters -------------------------------------------------------------
   const ledger = async (name: string, group: string, stateCode?: string) => {

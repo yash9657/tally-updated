@@ -77,11 +77,22 @@ type ImportRequest struct {
 	// nothing and corrupts two accounts at once, silently: every line is real
 	// and both accounts still balance.
 	StatementAccountNumber string
+	// Declared is the opening and closing balance the OPERATOR read off the
+	// printed statement (W5). Optional when the file carries a running balance
+	// or its own summary; REQUIRED in effect when it carries neither, because
+	// ParseStatement refuses a statement it cannot prove. When the file states
+	// the same figure the two must agree — see proof.go.
+	Declared Declared
 }
 
 // ImportResult is what happened, in the terms an operator needs.
 type ImportResult struct {
 	ImportID uuid.UUID
+	// FileName is the name the import was STORED under — the operator's own, or
+	// the one derived from the statement when they pasted rather than chose a
+	// file (D111). It is returned rather than assumed, so a client can show the
+	// operator the string the disclosures will quote back at them.
+	FileName string
 	// AlreadyImported is true when this exact file has been imported into this
 	// account before. It is a NO-OP AND A SUCCESS, not an error: the operator's
 	// intent ("this file should be in the system") is satisfied, and making a
@@ -100,8 +111,17 @@ type ImportResult struct {
 	// caller MUST surface it: a check that did not run must never be presented
 	// the same way as a check that passed.
 	BalanceWalked bool
-	PeriodFrom    string
-	PeriodTo      string
+	// BalanceProof is WHICH proof held (proof.go). Never empty on a successful
+	// import since W5: a statement with no proof is refused, not imported.
+	BalanceProof ProofMethod
+	// BalanceDeclaredBy is "file", "operator", "file+operator" or "".
+	BalanceDeclaredBy string
+	// RowOrder is what the running balances revealed, or "" without them.
+	RowOrder Order
+	// ProofChecks lists each comparison that ran and held, in words.
+	ProofChecks []string
+	PeriodFrom  string
+	PeriodTo    string
 	// Disclosures are the things this import could NOT verify, in the
 	// operator's words. An empty list means everything checkable was checked.
 	Disclosures []string
@@ -118,7 +138,12 @@ func (s *Service) Import(ctx context.Context, companyID uuid.UUID, req ImportReq
 	// PARSE BEFORE OPENING THE TRANSACTION. Every refusal in parse.go is about
 	// the FILE and needs no database at all, so a bad file never holds a
 	// connection or leaves a rolled-back batch id behind.
-	st, err := Parse(req.Content, req.Mapping)
+	//
+	// ⛔ ParseStatement, NOT Parse (W5). The balance proof is mandatory: a file
+	// with neither a running balance nor a declared opening and closing is
+	// REFUSED here. Slice 2a imported it with a disclosure; the disclosure was
+	// read once and the unverifiable rows were matched against for a year.
+	st, err := ParseStatement(req.Content, req.Mapping, req.Declared)
 	if err != nil {
 		return ImportResult{}, err
 	}
@@ -131,17 +156,36 @@ func (s *Service) Import(ctx context.Context, companyID uuid.UUID, req ImportReq
 	}
 
 	out := ImportResult{
-		LinesInFile:    len(st.Lines),
-		BalanceWalked:  st.BalanceWalked,
-		PeriodFrom:     st.PeriodFrom.Format("2006-01-02"),
-		PeriodTo:       st.PeriodTo.Format("2006-01-02"),
-		OpeningBalance: st.OpeningBalance.StringFixed(4),
-		ClosingBalance: st.ClosingBalance.StringFixed(4),
+		LinesInFile:   len(st.Lines),
+		BalanceWalked: st.BalanceWalked,
+		PeriodFrom:    st.PeriodFrom.Format("2006-01-02"),
+		PeriodTo:      st.PeriodTo.Format("2006-01-02"),
+		// The PROOF's figures: the walk's when it ran, else the declared ones.
+		OpeningBalance:    st.Proof.Opening.StringFixed(4),
+		ClosingBalance:    st.Proof.Closing.StringFixed(4),
+		BalanceProof:      st.Proof.Method,
+		BalanceDeclaredBy: st.Proof.DeclaredBy,
+		RowOrder:          st.Order,
+		ProofChecks:       st.Proof.Checks,
 	}
+	// D111 — A STATEMENT WITH NO NAME IS STILL NAMED, from its own contents.
+	// The disclosure on the combined import report quotes this string to say
+	// WHICH file could not be balance-walked; stored empty (which is what every
+	// PASTED statement was) it renders as `""` and names nothing. See name.go
+	// for why the fallback is derived rather than constant, and note it is
+	// computed AFTER the parse because the period and the row count come from
+	// the file itself.
+	out.FileName = resolveFileName(req.FileName, out.PeriodFrom, out.PeriodTo,
+		len(st.Lines), fileHash)
 	if !st.BalanceWalked {
+		// PROVED, BUT BY THE WEAKER OF THE TWO CHECKS, and the difference is
+		// stated rather than implied. A declared-totals proof catches any single
+		// dropped or duplicated row; it cannot catch two errors that cancel.
 		out.Disclosures = append(out.Disclosures,
-			"This file carries no running balance, so the balance walk could not run: "+
-				"a row dropped or duplicated by the export would not have been detected.")
+			"This file carries no running balance, so it was proved by its opening and closing balance "+
+				"(opening + deposits − withdrawals = closing) rather than row by row. A single missing or "+
+				"duplicated row would have been refused; two errors of exactly equal and opposite amount "+
+				"would not have been detected.")
 	}
 
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -181,12 +225,14 @@ func (s *Service) Import(ctx context.Context, companyID uuid.UUID, req ImportReq
 			INSERT INTO bank_statement_import
 			    (id, company_id, ledger_id, file_name, file_sha256, format,
 			     column_mapping, opening_balance, closing_balance,
-			     period_from, period_to, line_count, imported_by)
+			     period_from, period_to, line_count, imported_by,
+			     balance_proof, balance_declared_by, row_order)
 			VALUES ($1, $2, $3, $4, $5, 'csv', $6,
-			        $7, $8, $9::date, $10::date, $11, $12)`,
-			importID, companyID, req.LedgerID, req.FileName, fileHash,
-			mappingJSON, nullDecimal(st, true), nullDecimal(st, false),
-			out.PeriodFrom, out.PeriodTo, len(st.Lines), req.By)
+			        $7, $8, $9::date, $10::date, $11, $12, $13, $14, $15)`,
+			importID, companyID, req.LedgerID, out.FileName, fileHash,
+			mappingJSON, st.Proof.Opening, st.Proof.Closing,
+			out.PeriodFrom, out.PeriodTo, len(st.Lines), req.By,
+			string(st.Proof.Method), nullText(st.Proof.DeclaredBy), nullText(string(st.Order)))
 		if err != nil {
 			if strings.Contains(err.Error(), "not under a bank group") {
 				return fmt.Errorf("%w: %s", ErrNotABankLedger, err.Error())
@@ -211,15 +257,18 @@ func (s *Service) Import(ctx context.Context, companyID uuid.UUID, req ImportReq
 				    (id, company_id, import_id, ledger_id, line_no,
 				     value_date, txn_date, description, amount, dr_cr,
 				     running_balance, bank_reference, cheque_number, raw,
-				     line_hash, occurrence)
+				     line_hash, occurrence,
+				     txn_rail, counterparty, counterparty_vpa, rail_reference)
 				VALUES ($1, $2, $3, $4, $5, $6::date, $7::date, $8, $9, $10::dr_cr,
-				        $11, $12, $13, $14, $15, $16)
+				        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 				ON CONFLICT (company_id, ledger_id, line_hash, occurrence) DO NOTHING`,
 				lineID, companyID, importID, req.LedgerID, ln.LineNo,
 				ln.ValueDate.Format("2006-01-02"), nullDate(ln.TxnDate),
 				ln.Description, ln.Amount, ln.DrCr,
 				nullBalance(ln), nullText(ln.BankReference), nullText(ln.ChequeNumber),
-				raw, ln.Hash, ln.Occurrence)
+				raw, ln.Hash, ln.Occurrence,
+				nullText(string(ln.Narration.Rail)), nullText(ln.Narration.Counterparty),
+				nullText(ln.Narration.VPA), nullText(ln.Narration.Reference))
 			if err != nil {
 				return fmt.Errorf("bankstatement: insert line %d: %w", ln.LineNo, err)
 			}
@@ -326,19 +375,6 @@ func nullBalance(l Line) any {
 		return nil
 	}
 	return l.RunningBalance
-}
-
-// nullDecimal returns the file's opening or closing balance, or NULL when the
-// walk never ran. Storing a zero would be an ASSERTION that the account was
-// empty, which is a different and false statement.
-func nullDecimal(st Statement, opening bool) any {
-	if !st.BalanceWalked {
-		return nil
-	}
-	if opening {
-		return st.OpeningBalance
-	}
-	return st.ClosingBalance
 }
 
 // scope mirrors banking.scope and reporting.scope: a fast, friendly check that

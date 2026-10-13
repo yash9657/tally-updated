@@ -370,3 +370,63 @@ describe("Purchase voucher DRAFT mode (OCR prefill + HITL accept)", () => {
     expect(screen.getByTestId("conf-invoice_date").textContent).toContain("edited");
   });
 });
+
+describe("⛔ D108: one accepted draft is one voucher", () => {
+  it("a second accept posts NOTHING — and it is the ORDINARY path it must not fall into", async () => {
+    // ⛔⛔ THE DRAFT PATH'S FOUR ACCEPT-ONCE LAYERS DO NOT COVER THIS PRESS, and
+    // that is the whole point of pinning it separately. The success handler sets
+    // `setLoadedDraft(null)`, so the screen LEAVES draft mode — while the form
+    // still holds every value the OCR prefilled. A second Ctrl+A therefore does
+    // not go through `acceptPurchaseDraft` at all: it goes down the ordinary
+    // voucher path, with no draft id, past the durable memo, past
+    // `assertNotAlreadyOnTheBooks`, past the posting claim, and posts the
+    // supplier's bill a second time.
+    //
+    // ⚠️ The 2026-08-07 audit already recorded "a 2nd Ctrl+A posts a DUPLICATE
+    // voucher" on this path (HANDOFF-PARITY-AUDIT.md, the row-30 drive log) and
+    // it was never separately registered. It is D108 reached by a third door.
+    const base = createMockClient({ seed: false });
+    const draft = await buildReadyDraft(base);
+    const { client, spies } = spyClient(base);
+
+    let dispatch:
+      | ((kind: "accept" | "delete", snap: NavSnapshot) => { ran: boolean; message?: string })
+      | null = null;
+    renderDraftScreen(client, draft, (d) => {
+      dispatch = d;
+    });
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("gst-taxable") as HTMLInputElement).value,
+      ).toBe("1000.0000"),
+    );
+
+    await act(async () => {
+      dispatch!("accept", PURCHASE_CREATE_SNAPSHOT);
+    });
+    await waitFor(() =>
+      expect(spies.postPurchaseVoucher).toHaveBeenCalledTimes(1),
+    );
+
+    // ⛔⛔ THE SECOND PRESS.
+    await act(async () => {
+      dispatch!("accept", PURCHASE_CREATE_SNAPSHOT);
+    });
+    for (let i = 0; i < 3; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    }
+    expect(spies.postPurchaseVoucher).toHaveBeenCalledTimes(1);
+
+    // ---- AND HERE IS WHY: the prefilled bill is off the form.
+    expect(
+      (screen.getByTestId("gst-taxable") as HTMLInputElement).value,
+    ).toBe("0.0000");
+    // The server's number is still on screen — the receipt survives the clear.
+    expect(screen.getByTestId("voucher-no").textContent).toContain(
+      "STL/2026/044",
+    );
+  });
+});

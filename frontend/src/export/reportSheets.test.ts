@@ -51,6 +51,7 @@ function expectRectangular(sheet: ExportSheet) {
 describe("stockSummarySheet", () => {
   const data: StockSummaryResponse = {
     as_on: "2026-06-30",
+    groups: [],
     total_value: "9999.1234",
     rows: [],
     items: [
@@ -58,6 +59,8 @@ describe("stockSummarySheet", () => {
         stock_item_id: "i1",
         item: "Widget",
         unit: "Nos",
+        valuation_method: "AVERAGE",
+        stock_group: "",
         opening_qty: "0.0000",
         opening_value: "0.0000",
         inward_qty: "100.0000",
@@ -66,6 +69,8 @@ describe("stockSummarySheet", () => {
         outward_value: "2000.5678",
         closing_qty: "60.0000",
         closing_value: "2999.4322",
+        base_unit: "",
+        base_qty: "",
         positions: [
           {
             stock_item_id: "i1",
@@ -76,6 +81,7 @@ describe("stockSummarySheet", () => {
             batch_id: "",
             batch: "",
             valuation_method: "AVERAGE",
+            stock_group: "",
             opening_qty: "0.0000",
             opening_value: "0.0000",
             inward_qty: "100.0000",
@@ -126,8 +132,15 @@ describe("stockSummarySheet", () => {
     // Every other cell of the footer is blank: the response carries no
     // opening/inward/outward totals, and a client-side fold would be this sheet
     // asserting a figure the server never derived.
+    //
+    // ⚠️ THE FOOTER'S `Level` IS NOT BLANK, AND MUST NOT BE (D109). A total row
+    // with no level is a row a spreadsheet cannot exclude from a sum of item
+    // rows — the same doubling this column exists to end, one row smaller. See
+    // export/twoLevelExport.test.tsx for the sums themselves.
+    expect(at(footer, "Level")).toBe("Total");
     expect(footer.filter((c) => c !== "")).toEqual([
       "Stock-in-Hand",
+      "Total",
       "9999.1234",
     ]);
   });
@@ -138,6 +151,8 @@ describe("stockSummarySheet", () => {
       items: [
         {
           ...data.items[0]!,
+          base_unit: "",
+          base_qty: "",
           positions: [
             { ...data.items[0]!.positions[0]!, godown_id: "", godown: "" },
           ],

@@ -27,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,8 +36,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/jackc/pgx/v5"
+	// actions (W0/D3) is the GENERATED ActionSpec registry. server both produces
+	// it (action_registry_golden_test.go walks this package's router) and, here,
+	// consumes exactly one thing from it: RuleResource, the single renderer that
+	// spells a resource the way an ACL RULE spells it. The scope middleware needs
+	// that spelling so a trace row says `report:day-book` rather than a bare
+	// `report`, and calling the renderer is what stops this file from becoming a
+	// second place that knows a colon goes between them.
+	"github.com/khata/cored/internal/actions"
+	"github.com/khata/cored/internal/agent"
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
+	"github.com/khata/cored/internal/mcp"
+
+	"github.com/khata/cored/internal/backup"
 	"github.com/khata/cored/internal/banking"
 	"github.com/khata/cored/internal/bankstatement"
 	"github.com/khata/cored/internal/compliance"
@@ -51,6 +65,9 @@ import (
 	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
+	"github.com/khata/cored/internal/insights"
+	"github.com/khata/cored/internal/insights/narrate"
+	"github.com/khata/cored/internal/llm"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/nlq"
@@ -62,6 +79,7 @@ import (
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/internal/sync"
+	"github.com/khata/cored/internal/trajectory"
 	"github.com/khata/cored/internal/webauthn"
 )
 
@@ -78,8 +96,44 @@ import (
 // r.Body with what it read, so the truncation would be silent — insightd would
 // answer 422 on a body the operator's own file produced. See bodyCapFor.
 const (
-	maxJSONBody = 1 << 20  // 1 MiB
-	maxXMLBody  = 32 << 20 // 32 MiB
+	maxJSONBody = 1 << 20 // 1 MiB
+	// ⛔ 32 MiB WAS NOT ENOUGH FOR ONE REAL COMPANY. A TallyPrime "All Masters"
+	// export of a mid-sized trader — 3,706 ledgers, nine years of counter-parties
+	// — is 84 MB, because Tally writes UTF-16 (two bytes per ASCII character) and
+	// stamps ~200 mostly-empty elements on every master. The old cap refused it at
+	// the door with a 413, so the commercial migration path could not be walked at
+	// all with the very first genuine file it met.
+	//
+	// ⚠️ THE COST OF THIS NUMBER IS MEMORY — BUT NOT THE MEMORY AN EARLIER VERSION
+	// OF THIS COMMENT NAMED, AND THE DIFFERENCE CHANGES WHAT THE FIX IS.
+	//
+	// It said "the importer builds a parse tree several times the size of the text"
+	// and "a body at this cap can cost well over a gigabyte of heap", and concluded
+	// the answer was a streaming decode. MEASURED 2026-08-25, on a document shaped
+	// like a real export (~200 mostly-empty unmapped elements per master, which is
+	// what TallyPrime writes):
+	//
+	//	document                       202.5 MiB (UTF-16LE)
+	//	live parse tree                 25.5 MiB   <- 0.1x the document, not 3x
+	//	total allocated, full parse   1352   MiB   <- the "gigabyte", and it is CHURN
+	//	total allocated, streaming    1346   MiB   <- streaming does not avoid it
+	//
+	// encoding/xml discards every element the structs do not model, so the tree is a
+	// FRACTION of the text; the gigabyte is tokenising churn, which a streaming walk
+	// incurs identically. So the three real costs, largest first, are: tokenising
+	// this body THREE TIMES per request (drainBody buffers it, then each of the two
+	// XML peeks parses it, then the handler parses it again); the body buffer itself;
+	// and only then the tree. Streaming removes the smallest one and would make us
+	// tokenise MORE often, because the importer needs three passes over the messages.
+	//
+	// ⛔ THE CHANGE THAT PAYS IS PARSE ONCE — parse from r.Body in the middleware
+	// after the membership check, memoise the envelope on the request context, and
+	// have both peeks and the handler read that one envelope. It cuts the churn ~3x,
+	// removes the body buffer (NewTallyDecodeReader already streams), and makes it
+	// structurally impossible for the peeks and the handler to disagree about the
+	// file — which is what every one of §7.2's seven doors has been. See HANDOFF.md
+	// §1.11 item B. This cap stays at what a real export needs.
+	maxXMLBody = 128 << 20 // 128 MiB
 	// Sized for a phone photo of a bill (the OCR spike's ~12 MP case) once
 	// base64 has grown it by a third, with headroom — and deliberately well
 	// under the XML import's allowance, because this body is buffered in memory
@@ -141,6 +195,16 @@ type Server struct {
 	// itc is input-tax-credit reconciliation: the GSTR-2B/2A inward statements
 	// ingested into gst_inward_statement + gst_inward_document (migration 0032),
 	// matched against purchase vouchers to decide what credit is claimable.
+	// backup is T14: whole-company archive out, whole-company restore in.
+	//
+	// ⛔ IT IS NOT A REPORT AND MUST NEVER BE MODELLED AS ONE. Migration 0011
+	// grants the seeded Data Entry level a coarse `allow display report`, so a
+	// `report:NAME` token is GRANTED to every operator in every tenant the moment
+	// it exists. A backup is the most sensitive read in the product — every
+	// ledger, every party, every salary, in one file — so it carries its own
+	// `backup` resource token, which a level that never mentions it is DENIED.
+	backup *backup.Service
+
 	itc *itc.Service
 	// payroll is the employee master, the pay run and the register/payslip read
 	// models over the tables migration 0034 created. It posts salary vouchers
@@ -181,6 +245,17 @@ type Server struct {
 	// /security-levels. See handler_admin.go.
 	authAdmin adminStore
 
+	// devTokenRouteOff (AUTH_DEV_TOKEN_ROUTE_DISABLED=true) keeps the in-process
+	// signer — so POST /auth/login still issues tokens for users who HAVE a
+	// password — but does not mount POST /auth/token, the endpoint that mints a
+	// token for ANY subject (including "svc:*"). It exists for a hosted demo
+	// that has no external IdP: seed the accounts with the route on, then turn
+	// it off. It changes nothing when the signer is absent (JWKS mode).
+	devTokenRouteOff bool
+	// cronSecret (CRON_SECRET) gates the /internal/cron/* routes that drive the
+	// background pollers on a scale-to-zero host. Empty = routes not mounted.
+	cronSecret string
+
 	// WebAuthn step-up + account lockout (Task D, WS1 AUTH FOLLOW-UP). These are
 	// built UNCONDITIONALLY (they need only pool.Raw(), no signer). webauthn drives
 	// the register/assert ceremonies; webauthnStore is the credential store the
@@ -208,12 +283,36 @@ type Server struct {
 	// queue afterwards. Exposed so tests and an operator can drain on demand
 	// rather than waiting on a ticker.
 	notifier *notify.Dispatcher
+
+	// The agent plane (W2, D121). agent is always constructed — its reads
+	// (runs, events, the inbox) work with no model — and refuses to START a
+	// run when it has no model (503 AGENT_UNCONFIGURED), which is the shipped
+	// hermetic default. Its only write path is agentDispatcher, over this
+	// server's own router.
+	agent       *agent.Engine
+	agentPoller *agent.Poller
+	agentKick   chan struct{}
+
+	// insightNarrator narrates the morning digest (W4, d125): the agent's
+	// model client under the insight.narrate feature, or the templates alone
+	// when no model is configured (the hermetic default).
+	insightNarrator insights.Narrator
+
+	// mcp is the MCP server (W6, D126): the same engine, driven by an outside
+	// client's tools/call instead of the model. It holds no dispatcher.
+	mcp *mcp.Server
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
 // company. Backed by the 0011 seed_company_auth_defaults() SQL helper.
 type authSeeder interface {
 	SeedCompanyAuthDefaults(ctx context.Context, companyID, userID uuid.UUID) error
+	// SeedCompanyAuthDefaultsInTx is the same seeding inside a transaction the
+	// CALLER owns, which is what RESTORE (T14) needs: the membership that makes a
+	// restored company reachable has to commit with the rows, or a failure here
+	// would leave a fully restored company nobody is a member of — and there is
+	// no delete path with which to clean that up.
+	SeedCompanyAuthDefaultsInTx(ctx context.Context, tx pgx.Tx, companyID, userID uuid.UUID) error
 }
 
 // credentialStore is the subset of authz.Store the password routes need.
@@ -259,6 +358,17 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 	waService := webauthn.NewService(webauthn.Config{RPID: rpID, Origin: origin}, waStore)
 	locker := authn.NewLocker(authn.DefaultLockoutPolicy(), authn.NewPGLockoutStore(pool.Raw()), time.Now)
 
+	// The NL->DSL translator (W0). ⛔ ITS ERROR IS A BOOT FAILURE, in the shape
+	// buildAuth already established two calls above: a deployment that named a
+	// provider it cannot speak to, or named one and gave it no credential, must
+	// find out now rather than at the first question a person asks. The pool is
+	// closed on the way out because we own it and nothing else has it yet.
+	translator, err := buildTranslator(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+
 	s := &Server{
 		pool:     pool,
 		identity: identity.NewService(pool),
@@ -286,14 +396,15 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// value for a credential. See insightd_proxy.go.
 		drafts:   newDraftProxy(),
 		gstr:     gstr.NewService(pool),
-		importer: migration.NewImporter(m, l),
+		importer: migration.NewImporter(m, l, pool),
 		sync:     sync.NewService(l, pool),
-		// Conversational query (Phase 3 + wave-2 WS1). buildTranslator selects the
-		// real-Claude adapter when ANTHROPIC_API_KEY is present, else the
-		// deterministic, shipped-by-default FakeTranslator. Either way the LLM emits
-		// ONLY the typed DSL; execution runs through the same read-only,
+		// Conversational query (Phase 3 + wave-2 WS1, re-pointed at internal/llm by
+		// W0). buildTranslator selects a provider from LLM_PROVIDER, else the
+		// pre-W0 ANTHROPIC_API_KEY path, else the deterministic,
+		// shipped-by-default FakeTranslator. Either way the model emits ONLY the
+		// typed DSL; execution runs through the same read-only,
 		// company-GUC-scoped pool as every report, so the safety model is identical.
-		query: query.NewService(pool, buildTranslator()),
+		query: query.NewService(pool, translator),
 		// ITC reconciliation (0032) and payroll (0034). Both take the same
 		// tenant-scoped pool as gstr/query, so their transactions and RLS
 		// semantics are identical; payroll additionally takes the ONE ledger
@@ -304,14 +415,23 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// the print path is under the same NOBYPASSRLS role and the same
 		// tenant-scoped transactions as every report.
 		printStore: printingdb.NewStore(pool.Raw()),
-		verifier:   verifier,
-		signer:     signer,
-		authStore:  authzStore,
-		authzSeed:  authzStore,
-		authAdmin:  authzStore,
+		// backup (T14) serialises one company to a portable archive and restores
+		// one into a company that does not yet exist. It reaches ONLY platform/db
+		// and platform/tenant: an archive is rows in and rows out, and a package
+		// that could call ledger.Post would be a second, unaudited voucher path.
+		backup:    backup.New(pool),
+		verifier:  verifier,
+		signer:    signer,
+		authStore: authzStore,
+		authzSeed: authzStore,
+		authAdmin: authzStore,
 		// Password login (WS-A1). Same concrete store; a distinct interface
 		// because it operates on the pre-auth side of the boundary.
 		credentials: authzStore,
+
+		// Hosted-deployment switches (docs/DEPLOY_VERCEL.md).
+		devTokenRouteOff: os.Getenv("AUTH_DEV_TOKEN_ROUTE_DISABLED") == "true",
+		cronSecret:       strings.TrimSpace(os.Getenv("CRON_SECRET")),
 
 		webauthn:      waService,
 		webauthnStore: waStore,
@@ -324,8 +444,56 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// deployment does not send mail. Nothing here claims a message arrived.
 		notifier: notify.NewDispatcher(pool, notify.LogSender{}),
 	}
+	agentLLM, err := buildAgentLLM(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	s.initAgent(agentLLM)
+	s.insightNarrator = narrate.Model{Client: agentLLM}
 	s.routes()
 	return s, nil
+}
+
+// initAgent builds the engine and its poller over this server's pool and
+// router. Split out so the no-database registry generator (&Server{}) is not
+// asked to build one.
+func (s *Server) initAgent(model *llm.Client) {
+	s.agent = &agent.Engine{Pool: s.pool, LLM: model}
+	s.agent.Dispatch = agentDispatcher{s: s, now: s.agent.Clock}
+	s.agent.Profiles = agentProfiles{s: s}
+	s.agentPoller = &agent.Poller{Engine: s.agent}
+	s.agentKick = make(chan struct{}, 1)
+	s.mcp = &mcp.Server{Pool: s.pool, Engine: s.agent, AllowedOrigins: mcpAllowedOrigins()}
+}
+
+// buildAgentLLM builds the agent's model client from the SAME LLM_PROVIDER
+// configuration nlq uses (buildLLM), with the agent's own timeout default.
+// Unset means nil: the agent plane is present and inert, which is the hermetic
+// default HANDOFF-AGENTIC-AFTER-W0 §1.6 requires ("with no keys and no network
+// every gate runs and passes").
+func buildAgentLLM(pool *db.Pool) (*llm.Client, error) {
+	set, configured, err := buildLLM()
+	if err != nil || !configured {
+		return nil, err
+	}
+	budget, err := buildBudget(pool)
+	if err != nil {
+		return nil, err
+	}
+	timeout := set.Timeout
+	if timeout <= 0 {
+		// A background agent step, not an interactive query box: nlq's 15s
+		// would cut a planning call off mid-thought.
+		timeout = 60 * time.Second
+	}
+	c, err := llm.New(llm.Config{Provider: set.Provider, Model: set.Model, APIKey: set.APIKey, BaseURL: set.BaseURL,
+		HTTP: &http.Client{Timeout: timeout}, Budget: budget, Recorder: trajectoryRecorder{}, Now: time.Now})
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("cored: agent model = %s/%s", set.Provider, set.Model)
+	return c, nil
 }
 
 // DispatchNotifications drains the notification outbox once and reports how many
@@ -385,33 +553,504 @@ func envOr(name, def string) string {
 	return def
 }
 
-// buildTranslator selects the NL->DSL translator (wave-2 WS1). With
-// ANTHROPIC_API_KEY set it returns the real-Claude adapter (nlq.ClaudeTranslator);
-// otherwise the deterministic FakeTranslator that ships by default. This mirrors
-// the insightd adapter pattern: the network translator is built ONLY when a key
-// is present, and it is the sole query-path code that touches the network.
+// ---------------------------------------------------------------------------
+// THE AGENT PLANE'S COMPOSITION ROOT (PLAN-AGENTIC W0).
+// ---------------------------------------------------------------------------
 //
-//   - QUERY_TRANSLATOR_MODEL    overrides the model (default claude-haiku-4-5)
-//   - QUERY_TRANSLATOR_BASE_URL overrides the API host (proxy/gateway, and the
-//     test-injection seam — server_test.go points it at a dead loopback port to
-//     prove the 503 path without a network)
+// internal/llm owns the wire, internal/trajectory owns the span, and NEITHER
+// IMPORTS THE OTHER — llm declares the one-method Recorder interface it consumes
+// (llm/trace.go) and trajectory satisfies it structurally. This file is the only
+// place in the product that may know both types, so this file is where the
+// six-line adapter lives, where the environment is read, and where a
+// half-configured deployment is refused out loud. Decision D-B in the W0 brief;
+// archtest holds the shape (internal/llm's allowed set does not contain
+// internal/trajectory, and never may).
+
+// llmSettings is one deployment's provider selection, resolved from the
+// environment exactly once at boot.
+//
+// ⛔ THE ZERO VALUE IS NOT A PROVIDER. buildLLM returns (zero, false) when
+// LLM_PROVIDER is unset, and every caller must branch on that bool rather than
+// on a field being empty — an empty Provider that reached llm.New would be
+// refused there anyway, but two frames later and with a message about an unknown
+// provider rather than about an unconfigured deployment.
+type llmSettings struct {
+	Provider llm.Provider
+	APIKey   string
+	Model    string
+	BaseURL  string
+	// Timeout is zero when LLM_TIMEOUT was unset or unusable, which means "let
+	// the feature package choose". nlq's 15s is right for an interactive query
+	// box and wrong for a background agent step, so there is deliberately no
+	// single number here.
+	Timeout time.Duration
+}
+
+// buildLLM resolves the provider selection from the environment.
+//
+//   - LLM_PROVIDER  fireworks | deepinfra | sarvam | vllm | anthropic.
+//     UNSET is the shipped default and means "no provider": the caller keeps
+//     whatever behaviour it had before W0. SET-BUT-UNKNOWN is a REFUSAL, never a
+//     fallback — see below.
+//   - LLM_API_KEY   the credential. ⛔ THERE IS NO COMPILED-IN DEFAULT AND THERE
+//     NEVER MAY BE, the same rule insightd_proxy.go applies to
+//     its service credential: a default credential is a credential
+//     in the binary.
+//   - LLM_MODEL     the model id. Required for every provider except Anthropic,
+//     which keeps the model this deployment has been answering
+//     questions with since wave 2 (nlq.DefaultModel) so that
+//     "we refactored the LLM layer" cannot present in the field as
+//     "NL query got worse".
+//   - LLM_BASE_URL  a proxy/gateway host, and the httptest seam. "" lets the
+//     chosen adapter supply its own default host — which is why
+//     this must NOT be defaulted to any one provider's host.
+//   - LLM_TIMEOUT   a Go duration. Unparseable is LOGGED and then ignored,
+//     never silently honoured as zero.
+//
+// ⛔ WHY AN UNKNOWN PROVIDER REFUSES TO BOOT RATHER THAN FALLING BACK. The
+// fallback that suggests itself is "unknown provider, use the deterministic
+// FakeTranslator" — and it is the worst available option, because a keyword
+// matcher answering accounting questions is indistinguishable at the API from a
+// model doing it (nlq/translate.go says so at llmClient). An operator who typed
+// LLM_PROVIDER=fireworks.ai would get plausible answers to some questions and
+// silence about the rest, forever. Refusing to start is loud, immediate, and
+// costs one restart.
+func buildLLM() (llmSettings, bool, error) {
+	name := os.Getenv("LLM_PROVIDER")
+	if name == "" {
+		return llmSettings{}, false, nil
+	}
+	provider := llm.Provider(name)
+	if _, ok := llm.AdapterFor(provider); !ok {
+		return llmSettings{}, false, fmt.Errorf(
+			"server: LLM_PROVIDER=%q is not a provider this binary can speak to (known: %v). Refusing to start rather than falling back to the deterministic FakeTranslator, which would answer accounting questions by keyword match while the operator believed a model was running",
+			name, llm.KnownProviders)
+	}
+
+	model := os.Getenv("LLM_MODEL")
+	if model == "" {
+		if provider != llm.ProviderAnthropic {
+			return llmSettings{}, false, fmt.Errorf(
+				"server: LLM_PROVIDER=%s is set but LLM_MODEL is empty. A model id is meaningless without the provider that serves it and this repo has a default for exactly one of them (%s). Set LLM_MODEL. Refusing to start",
+				provider, llm.ProviderAnthropic)
+		}
+		model = nlq.DefaultModel
+	}
+
+	set := llmSettings{
+		Provider: provider,
+		APIKey:   os.Getenv("LLM_API_KEY"),
+		Model:    model,
+		BaseURL:  os.Getenv("LLM_BASE_URL"),
+		Timeout:  llmTimeout(),
+	}
+
+	// ⚠️ THE CREDENTIAL CHECK IS A DRY RUN OF llm.New RATHER THAN A RESTATEMENT
+	// OF ITS RULE. llm.New exempts exactly one provider from needing a key (a
+	// self-hosted vLLM started without --api-key genuinely has none), and a
+	// second copy of that exemption here is a second thing to update the day it
+	// moves. So this asks the real constructor, with the real configuration, and
+	// throws the client away: the object is cheap, opens no socket, and the
+	// answer is the one the feature package will get at its first question —
+	// except that here it arrives at boot, where somebody is watching.
+	if _, err := llm.New(llm.Config{
+		Provider: set.Provider,
+		Model:    set.Model,
+		APIKey:   set.APIKey,
+		BaseURL:  set.BaseURL,
+	}); err != nil {
+		return llmSettings{}, false, fmt.Errorf(
+			"server: LLM_PROVIDER=%s is set but the configuration is incomplete: %w. Refusing to start rather than serving 503s that look like an outage",
+			provider, err)
+	}
+	return set, true, nil
+}
+
+// llmTimeout parses LLM_TIMEOUT, or returns 0 meaning "the feature package
+// chooses".
+//
+// ⛔ AN UNPARSEABLE VALUE IS LOGGED AND THEN IGNORED, exactly the shape
+// statutorydTimeout uses and for the same reason: refusing to start over one
+// optional knob takes the whole server down, and honouring it silently would let
+// a deployment that meant 5m sit at 15s forever with nothing anywhere saying why.
+func llmTimeout() time.Duration {
+	raw := os.Getenv("LLM_TIMEOUT")
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Printf("cored: LLM_TIMEOUT=%q is not a positive Go duration (e.g. \"20s\"); the calling feature's own default stands", raw)
+		return 0
+	}
+	return d
+}
+
+// buildBudget selects the per-tenant token budget.
+//
+// ⚠️ WHAT THIS BUDGET WRITES, AND WHY IT IS NOT A CONTRADICTION OF
+// actions.ActionSpec.IsWrite. llm.PGBudget's Reserve/Settle/Release each run
+// db.Pool.RunInTx — an ordinary READ-WRITE transaction — issuing an
+// INSERT ... ON CONFLICT DO NOTHING and an UPDATE against llm_token_budget. So
+// POST /v1/companies/{companyID}/query, which the generated action registry
+// correctly records as `display query` with is_write=false, causes rows to be
+// created and updated on behalf of a principal holding only display rights.
+//
+// That is METERING, not books: one row per (company, calendar month, feature),
+// tenant-scoped by RLS (ENABLE + FORCE, USING and WITH CHECK), carrying counters
+// and no ledger data. IsWrite is authz.Action.IsWrite — the same predicate the
+// back-dated cutoff and the WebAuthn step-up hang off — and it describes what
+// happens to THE BOOKS. A policy layer that read it as "this action touches no
+// table" would be wrong here, and it is worth knowing before W2 decides which
+// steps need a HumanInterrupt: the metering plane writes on every action,
+// including every read.
+//
+// ⚠️ THE DEFAULT IS NoBudget AND IT SAYS SO OUT LOUD. internal/llm's own doc on
+// llm.NoBudget/llm.DiscardRecorder makes this the composition root's job in
+// terms: "this deployment has no token cap" must be a sentence somebody wrote,
+// not a field nobody filled in. So the uncapped case prints one line at boot
+// rather than being an absence in a struct literal.
+//
+// LLM_BUDGET_TOKENS_PER_MONTH is the cap, per (company, calendar month,
+// feature), enforced against llm_token_budget (migration 0091) inside the
+// caller's own RLS-scoped transaction. It has NO default: llm.PGBudget refuses a
+// zero limit rather than reading it as either "unlimited" (a cap that is not one)
+// or "nothing" (every call refused on a deployment that merely forgot).
+//
+// ⛔ SET-BUT-UNPARSEABLE IS A REFUSAL TO BOOT, NOT A DEGRADATION, AND THAT IS THE
+// SAME CALL buildLLM MAKES ABOUT LLM_PROVIDER=fireworks.ai. It shipped as a
+// logged fallback to NoBudget, which means `LLM_BUDGET_TOKENS_PER_MONTH="100_000"`
+// or a trailing space produced an UNCAPPED deployment whose operator believed a
+// cap was in force — a spend control that is not where the person who set it
+// thinks it is. A cost/abuse cap belongs in the class of the provider name, not
+// in the class of INSIGHTD_TIMEOUT and STATUTORYD_TIMEOUT: those degrade to a
+// stated default of the same KIND, whereas this one degrades to the ABSENCE of
+// the control. UNSET stays the logged NoBudget default — a deployment that never
+// asked for a cap is not surprised by not having one.
+func buildBudget(pool *db.Pool) (llm.Budget, error) {
+	raw := os.Getenv("LLM_BUDGET_TOKENS_PER_MONTH")
+	if raw == "" {
+		log.Printf("cored: LLM_BUDGET_TOKENS_PER_MONTH is unset — any model call this deployment makes is NOT capped per tenant (llm.NoBudget). Set it to a positive integer to enforce migration 0091's budget")
+		return llm.NoBudget{}, nil
+	}
+	limit, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || limit <= 0 {
+		return nil, fmt.Errorf(
+			"server: LLM_BUDGET_TOKENS_PER_MONTH=%q is not a positive integer (plain digits, e.g. \"2000000\" — no separators, no suffix). Refusing to start rather than serving uncapped model calls to a deployment that asked for a cap",
+			raw)
+	}
+	log.Printf("cored: per-tenant model budget enforced at %d tokens per calendar month per feature", limit)
+	return &llm.PGBudget{Pool: pool, DefaultLimitTokens: limit, Now: time.Now}, nil
+}
+
+// trajectoryRecorder adapts internal/trajectory to internal/llm's Recorder seam.
+//
+// ⛔ THIS SIX-LINE TYPE IS THE ENTIRE REASON internal/llm DOES NOT IMPORT
+// internal/trajectory (decision D-B). llm declares the interface it consumes;
+// trajectory satisfies it structurally; the composition root — the one package
+// archtest lets import both — joins them. The payoff is not tidiness: it is that
+// a test of either package needs no fake from the other, and that a deployment
+// with tracing off links no exporter at all.
+//
+// ⚠️ IT IS INSTALLED UNCONDITIONALLY, and that is safe BECAUSE trajectory.Start
+// has a zero-allocation nop path when no Recorder is installed (span.go). There
+// is deliberately no "if tracing is on" branch here: a knob that changes which
+// code runs is a knob that gets exercised in exactly one of its two positions.
+type trajectoryRecorder struct{}
+
+// StartLLMCall opens the chat span and stamps everything about the REQUEST that
+// is safe to keep.
+//
+// ⛔ NOTHING HERE IS CONTENT. SpanStart carries a prompt HASH and a prompt
+// VERSION and no prompt; the tenant, user and subject come from the ambient
+// Scope the middleware installed. The one thing this stamps that the Scope
+// cannot is the feature, because the feature is named by the CALL SITE (nlq
+// says "nlq.translate") and a middleware that guessed it from the route would be
+// guessing.
+func (trajectoryRecorder) StartLLMCall(ctx context.Context, s llm.SpanStart) (context.Context, llm.LLMSpan) {
+	ctx, sp := trajectory.Start(ctx, trajectory.KindChat, trajectory.OpChat+" "+s.ModelID)
+	if s.Feature != "" {
+		sp.SetString(trajectory.AttrFeature, s.Feature)
+	}
+	// A tenant disagreement between the ambient Scope and the call's own
+	// TenantID is a WIRING DEFECT — one request's span attributed to another
+	// company — so it is said out loud rather than silently resolved in favour
+	// of either. It cannot be resolved here: neither value is more authoritative
+	// than the other, and picking one would hide the bug in whichever produced
+	// the wrong one.
+	if scope, ok := trajectory.ScopeFromContext(ctx); ok && s.TenantID != uuid.Nil && scope.TenantID != s.TenantID {
+		log.Printf("cored: trajectory scope tenant %s disagrees with the llm call's tenant %s for feature %q — one of the two is wrong and the span is attributed to the request scope",
+			scope.TenantID, s.TenantID, s.Feature)
+	}
+	sp.SetModelRequest(trajectory.ModelRequest{
+		System:        string(s.Provider),
+		ModelID:       s.ModelID,
+		PromptVersion: s.PromptVersion,
+		PromptHash:    s.PromptHash,
+	})
+	return ctx, &trajectorySpan{sp: sp}
+}
+
+type trajectorySpan struct{ sp *trajectory.Span }
+
+// End closes the span. resp may be non-nil WITH a non-nil err — that is the
+// refusal case, where the call was served and billed and the fingerprint is the
+// only evidence of what served it, so both halves are recorded rather than the
+// error alone.
+func (t *trajectorySpan) End(resp *llm.Response, err error) {
+	if resp != nil {
+		var reasons []string
+		if resp.FinishReason != "" {
+			reasons = []string{resp.FinishReason}
+		}
+		t.sp.SetModelResponse(trajectory.ModelResponse{
+			ModelID:           resp.Fingerprint.ServedModel,
+			Fingerprint:       resp.Fingerprint.SystemFingerprint,
+			ResponseID:        resp.Fingerprint.ResponseID,
+			FinishReasons:     reasons,
+			InputTokens:       resp.Usage.PromptTokens,
+			OutputTokens:      resp.Usage.CompletionTokens,
+			CachedInputTokens: resp.Usage.CachedPromptTokens,
+			RepairAttempts:    resp.Repairs,
+		})
+	}
+	if err != nil {
+		// SetError records error.type and NEVER the message: a provider message
+		// can quote the prompt back, and a prompt is content.
+		t.sp.SetError(err)
+		// ⛔ AND error.type ALONE IS "*fmt.wrapError" FOR ALMOST EVERY FAILURE
+		// THIS SEAM SEES, WHICH IS THE SAME AS RECORDING NOTHING. SetError
+		// stamps fmt.Sprintf("%T", err), and internal/llm wraps every sentinel
+		// with fmt.Errorf("%w: …") — so a trace store asking the question a
+		// trace store exists to answer ("was that an exhausted budget or a dead
+		// provider?") got one indistinguishable Go type for the exhausted
+		// budget, the 500, the over-size refusal and the tenant-id gate. The
+		// on-call response to each of those is different, and the taxonomy that
+		// names the difference (llm/errors.go: whose FAULT it is) was reachable
+		// only from the caller's own log, inside the tenant boundary.
+		//
+		// ⚠️ THE SENTINEL TEXT IS SAFE TO RECORD AND THE WRAPPED MESSAGE IS NOT.
+		// Each sentinel is a package-level errors.New with a fixed English
+		// string that no caller interpolates into — content-free by
+		// construction — whereas the wrap around it carries a provider snippet,
+		// a feature name, or a status line. So the NAME is what goes on the
+		// span, and it is written out as a literal rather than derived from the
+		// error, because deriving it would mean recording err.Error().
+		if name, ok := llmSentinelName(err); ok {
+			t.sp.SetString(trajectory.AttrErrorType, name)
+		}
+	}
+	t.sp.End()
+}
+
+// llmSentinelName renders the llm error taxonomy for a trace attribute.
+//
+// ⛔ THE ORDER IS NOT ALPHABETICAL AND MUST STAY MOST-SPECIFIC-FIRST. errors.Is
+// walks the wrap chain, so a sentinel that some other sentinel wraps would win
+// the wrong arm if it came first. Today none of them wrap each other and the
+// only Unwrap in llm/errors.go is UpstreamError -> ErrUpstreamUnavailable
+// (which is why an *llm.UpstreamError correctly reports the upstream arm rather
+// than its own struct type). The rule is written down for the sentinel somebody
+// adds later.
+//
+// ⚠️ A MISS IS NOT AN ERROR. An error from outside this taxonomy — an adapter
+// decode failure, a context deadline — keeps SetError's %T, which is the honest
+// answer for it. Returning ok=false rather than a placeholder is what keeps
+// "unclassified" distinguishable from "classified as other".
+func llmSentinelName(err error) (string, bool) {
+	for _, s := range []struct {
+		sentinel error
+		name     string
+	}{
+		// TENANT fault: this company has spent its cap. The one an operator
+		// looks for when a screen says the assistant is unavailable and every
+		// provider dashboard is green.
+		{llm.ErrBudgetExhausted, "llm.ErrBudgetExhausted"},
+		// DEPLOYMENT faults, all three: a PGBudget with no limit, a caller
+		// billing a company other than the one in scope, and a provider wired
+		// without a credential.
+		{llm.ErrBudgetNotConfigured, "llm.ErrBudgetNotConfigured"},
+		{llm.ErrBudgetScopeMismatch, "llm.ErrBudgetScopeMismatch"},
+		{llm.ErrNotConfigured, "llm.ErrNotConfigured"},
+		// OPERATOR fault: every non-2xx and every transport failure.
+		{llm.ErrUpstreamUnavailable, "llm.ErrUpstreamUnavailable"},
+		// MODEL fault: served, billed, and unusable after the repair bound.
+		{llm.ErrNoStructuredOutput, "llm.ErrNoStructuredOutput"},
+		// CALLER faults: an over-size prompt, and the tenant-id gate — which is
+		// a SECURITY control, so it must be legible in the trace store rather
+		// than only in a log line somebody has to go looking for.
+		{llm.ErrInputTooLarge, "llm.ErrInputTooLarge"},
+		{llm.ErrTenantIDInPrompt, "llm.ErrTenantIDInPrompt"},
+	} {
+		if errors.Is(err, s.sentinel) {
+			return s.name, true
+		}
+	}
+	return "", false
+}
+
+// Compile-time proof that the adapter satisfies the seam llm declares. If
+// somebody widens llm.Recorder, THIS LINE is what breaks first — which is the
+// point of writing it down here rather than relying on the assignment below.
+var _ llm.Recorder = trajectoryRecorder{}
+
+// trajectoryScopeMiddleware installs the ambient trajectory.Scope for the
+// /v1/companies/{companyID} subtree.
+//
+// WHY A MIDDLEWARE AND NOT A PARAMETER. The code that opens a span — internal/llm
+// on a model call, a tool implementation, W2's agent loop — sits four or five
+// frames below anything that knows whose request this is. A Scope threaded
+// through all of them as an argument is an argument somebody eventually forgets
+// to pass, and the result is an unattributed trace row that looks exactly like a
+// correct one (trajectory/span.go says this at length on Scope).
+//
+// ⛔ IT MOUNTS NO ROUTE OF ITS OWN, AND MUST NOT. Every route inside {companyID}
+// needs a routeAction() arm or it is default-denied;
+// TestEveryCompanyRouteIsMappedAndInVocabulary walks this router and goes red for
+// a route with no arm, so a middleware that quietly added, say, /v1/companies/
+// {companyID}/_trace would turn that suite red and, worse, would be a route the
+// PDP never evaluated.
+//
+// ⚠️ IT CALLS routeAction A SECOND TIME, and that is safe rather than merely
+// cheap: routeAction inspects the METHOD and the PATH only and never touches the
+// request body (auth_middleware.go states it in terms, and it is the reason the
+// service-principal branch may call it before the sync/import handlers read
+// their payloads). Only voucherDateFromRequest peeks a body, and it is not this.
+// Re-deriving the pair is what keeps the trace row honest: the alternative is
+// stashing the middleware's own copy in the context, which is a second source of
+// truth for route identity, and auth_middleware.go's ⛔ THE ROUTER IS THE ORACLE,
+// NOT A SECOND TABLE is about exactly that.
+//
+// An UNMAPPED route leaves Action and Resource empty rather than inventing a
+// pair. It should be unreachable — companyAuthMiddleware has already 403'd an
+// unmapped sub-path for both people and service principals — so if one ever shows
+// up in the trace store with no action, that is a finding and not a gap to be
+// papered over with a placeholder.
+func trajectoryScopeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		// Every one of these is already in the context, put there by
+		// companyAuthMiddleware. The `_` on each is deliberate: a service
+		// principal has a subject and NO user row, so a missing user id is a
+		// normal state and uuid.Nil is what trajectory expects for it (it omits
+		// enduser.id rather than emitting the all-zero UUID as if it were a
+		// person).
+		companyID, _ := db.CompanyFromContext(ctx)
+		userID, _ := db.UserFromContext(ctx)
+		subject, _ := db.SubjectFromContext(ctx)
+
+		sc := trajectory.Scope{
+			TenantID: companyID,
+			UserID:   userID,
+			Subject:  subject,
+			// chi's RequestID honours an inbound X-Request-Id, so this is
+			// CLIENT-SUPPLIABLE and trajectory treats it as a correlation hint
+			// only — never as authority, never as a file name.
+			RequestID: middleware.GetReqID(ctx),
+			// Feature is deliberately EMPTY here. It is the coarse product
+			// surface ("nlq.translate", "extraction") and the cassette directory
+			// name, and it is named by the CALL SITE, which is the only place
+			// that knows it; the adapter stamps it from llm.SpanStart. A route
+			// pattern is not a feature, and guessing one from it would put a
+			// wrong directory name in a cassette path.
+		}
+		if act, res, resName, mapped := routeAction(r); mapped {
+			sc.Action = string(act)
+			// RuleResource is the ONE renderer for "resource, with the report
+			// name after a colon". Calling it rather than concatenating here is
+			// what stops a trace row saying `report` where a rule says
+			// `report:day-book`, which would make the two impossible to join.
+			sc.Resource = string(actions.ActionSpec{Resource: res, ResourceName: resName}.RuleResource())
+		}
+		next.ServeHTTP(w, r.WithContext(trajectory.WithScope(ctx, sc)))
+	})
+}
+
+// buildTranslator selects the NL->DSL translator (wave-2 WS1, re-pointed at
+// internal/llm by W0).
+//
+// THREE MODES, IN PRECEDENCE ORDER:
+//
+//  1. LLM_PROVIDER set: the W0 path. Any of internal/llm's five adapters, with
+//     LLM_API_KEY / LLM_MODEL / LLM_BASE_URL / LLM_TIMEOUT. A broken selection
+//     REFUSES TO BOOT (buildLLM).
+//  2. LLM_PROVIDER unset, ANTHROPIC_API_KEY set: the pre-W0 path, byte for byte
+//     — same env vars, same default model, same default host. A deployment that
+//     has been answering questions since wave 2 must not change behaviour on the
+//     day the agent plane lands.
+//  3. Neither: the deterministic FakeTranslator that ships by default.
+//
+// ⛔ MODE 3 IS THE SHIPPED DEFAULT AND IT MUST STAY HERMETIC. Every CI gate in
+// this repo runs with no keys and no network; the day this function needs either
+// to return, the whole test suite starts depending on somebody's API budget.
+//
+//   - QUERY_TRANSLATOR_MODEL    overrides the model in mode 2 (default claude-haiku-4-5)
+//   - QUERY_TRANSLATOR_BASE_URL overrides the API host in mode 2 (proxy/gateway,
+//     and the test-injection seam — query_test.go points it at a dead loopback
+//     port to prove the 503 path without a network)
+//
+// ⚠️ QUERY_TRANSLATOR_BASE_URL IS DELIBERATELY NOT HONOURED IN MODE 1, and
+// LLM_BASE_URL is deliberately not defaulted to nlq.DefaultBaseURL. Passing
+// Anthropic's host unconditionally is what would send a Fireworks request to
+// api.anthropic.com, where the failure reads as a 404 on a model id — the exact
+// trap nlq/translate.go's comment on DefaultBaseURL names.
 //
 // Whatever Query the translator returns is re-validated by the query compiler and
 // executed read-only, so the safety model does not depend on which translator ran.
-func buildTranslator() query.Translator {
+func buildTranslator(pool *db.Pool) (query.Translator, error) {
+	set, configured, err := buildLLM()
+	if err != nil {
+		return nil, err
+	}
+	// ⛔ THE BUDGET IS RESOLVED BEFORE THE MODE IS CHOSEN. A cap validated only on
+	// the deployments that happen to have a provider configured is a cap whose
+	// typo is discovered at the moment it was supposed to start mattering — the
+	// first time somebody sets LLM_PROVIDER on a box that has carried a malformed
+	// LLM_BUDGET_TOKENS_PER_MONTH for a month.
+	budget, err := buildBudget(pool)
+	if err != nil {
+		return nil, err
+	}
+	if configured {
+		var httpc *http.Client
+		if set.Timeout > 0 {
+			httpc = &http.Client{Timeout: set.Timeout}
+		}
+		log.Printf("cored: NL query translator = %s/%s (trajectory spans recorded)", set.Provider, set.Model)
+		return &nlq.Translator{
+			APIKey:   set.APIKey,
+			Model:    set.Model,
+			BaseURL:  set.BaseURL,
+			Client:   httpc,
+			Provider: set.Provider,
+			Recorder: trajectoryRecorder{},
+			Budget:   budget,
+			Now:      time.Now,
+		}, nil
+	}
+
 	key := os.Getenv("ANTHROPIC_API_KEY")
 	if key == "" {
-		return query.FakeTranslator{Now: time.Now}
+		return query.FakeTranslator{Now: time.Now}, nil
 	}
+	log.Printf("cored: NL query translator = %s/%s via ANTHROPIC_API_KEY (pre-W0 path; set LLM_PROVIDER to select any provider)",
+		nlq.DefaultProvider, envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel))
 	// Now is wired for the SAME reason FakeTranslator gets one: the prompt's
 	// resolved period windows are built from it, and a translator with no clock
 	// guesses what "last quarter" means (D21).
+	//
+	// Recorder and Budget are wired here TOO, and that is not scope creep: this
+	// is the same translator making the same billed calls, and a trajectory that
+	// covered only deployments which had migrated to LLM_PROVIDER would be a
+	// trajectory with a hole in it exactly where the existing traffic is.
 	return &nlq.ClaudeTranslator{
-		APIKey:  key,
-		Model:   envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel),
-		BaseURL: envOr("QUERY_TRANSLATOR_BASE_URL", nlq.DefaultBaseURL),
-		Now:     time.Now,
-	}
+		APIKey:   key,
+		Model:    envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel),
+		BaseURL:  envOr("QUERY_TRANSLATOR_BASE_URL", nlq.DefaultBaseURL),
+		Recorder: trajectoryRecorder{},
+		Budget:   budget,
+		Now:      time.Now,
+	}, nil
 }
 
 // buildAuth selects the authentication mode FAIL-CLOSED. A stock binary with no
@@ -424,6 +1063,12 @@ func buildTranslator() query.Translator {
 //     /auth/login are not mounted and WebAuthn assert/finish 501s (the IdP does
 //     step-up). AUTH_ISSUER is REQUIRED alongside it — an unpinned issuer would
 //     accept tokens from any realm/client sharing the IdP's signing key.
+//     AUTH_AUDIENCE is REQUIRED alongside it too, and it is NOT redundant with
+//     the issuer: `iss` identifies the REALM, and every client in a realm mints
+//     tokens carrying the same `iss`, so the issuer pin cannot distinguish a
+//     token minted FOR cored from one a user obtained for any other application
+//     in that realm. Set it to the OIDC client/audience cored's tokens are
+//     minted for; the token's `aud` must contain it. (D102.)
 //     STARTUP BEHAVIOUR CHANGE (WS6): the JWKS is fetched ONCE here, with a 5s
 //     timeout, and a failure is a HARD BOOT FAILURE. An operator whose IdP is
 //     briefly unreachable now gets a refusal to start instead of a process that
@@ -443,7 +1088,15 @@ func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
 		if issuer == "" {
 			return nil, nil, errors.New("server: AUTH_JWKS_URL is set but AUTH_ISSUER is empty; without a pinned issuer the JWKS verifier would accept tokens from any realm sharing the signing key. Refusing to start fail-open")
 		}
-		verifier := authn.NewJWKSVerifier(jwksURL, issuer)
+		// ⚠️ ORDER MATTERS: the AUTH_ISSUER guard above stays FIRST. An operator
+		// who has set neither should be told about the issuer first (it is the
+		// coarser pin), and the boot-matrix test that asserts the AUTH_ISSUER
+		// message would otherwise start matching this branch instead.
+		audience := os.Getenv("AUTH_AUDIENCE")
+		if audience == "" {
+			return nil, nil, errors.New("server: AUTH_JWKS_URL is set but AUTH_AUDIENCE is empty; the issuer pin scopes acceptance to one REALM, and every client in a realm mints tokens carrying the same iss, so without a pinned audience a token a user obtained for ANY OTHER application in that realm authenticates here as that subject. Set AUTH_AUDIENCE to the OIDC client/audience cored's tokens are minted for. Refusing to start fail-open")
+		}
+		verifier := authn.NewJWKSVerifier(jwksURL, issuer, audience)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := verifier.Refresh(ctx); err != nil {
@@ -467,7 +1120,9 @@ func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
 // matching StaticKeyVerifier (issuer "cored-dev", kid "cored-dev-ed25519")
 // verifies tokens this signer mints.
 //
-// Production swap (SHIPPED as of WS6): set AUTH_JWKS_URL + AUTH_ISSUER and
+// Production swap (SHIPPED as of WS6): set AUTH_JWKS_URL + AUTH_ISSUER +
+// AUTH_AUDIENCE (all three REQUIRED — buildAuth refuses to boot without any of
+// them; the audience pin is D102) and
 // buildAuth uses authn.JWKSVerifier instead of this pair — it fetches the IdP's
 // JWKS (ES256/EdDSA only, symmetric keys never admitted) over the network, so
 // this package DOES make outbound requests in production mode. This dev issuer
@@ -504,13 +1159,48 @@ func (s *Server) Close() { s.pool.Close() }
 func (s *Server) Router() http.Handler { return s.router }
 
 // ListenAndServe starts the HTTP server on addr.
-func (s *Server) ListenAndServe(addr string) error {
+func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	return httpSrv.ListenAndServe()
+
+	// ⛔ IT RETURNS ON ctx.Done(), AND THAT IS WHAT MAKES cmd/cored's DEFERS RUN.
+	// Before this, the method was a bare httpSrv.ListenAndServe() that only ever
+	// returned on a listen error, and `cored serve` handled no signal at all — so
+	// on every deploy the process was killed inside ListenAndServe and NOTHING
+	// deferred in runServe executed. Measured, not supposed: with an OTLP sink on
+	// loopback and the binary sent SIGTERM, the log ended at "cored serving on
+	// :8080" and the trajectory flush, close and exported/failed/dropped
+	// accounting never printed. The exporter batches (512 spans or 5s), so the
+	// last batch — the one containing whatever the operator was looking at when
+	// they restarted the process — was silently lost every time, by a block of
+	// code whose comment promised otherwise.
+	errc := make(chan error, 1)
+	go func() { errc <- httpSrv.ListenAndServe() }()
+	select {
+	case err := <-errc:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		// ⚠️ A FRESH CONTEXT FOR THE SHUTDOWN, NOT ctx. ctx is the one that just
+		// fired; passing it to Shutdown would cancel in-flight requests
+		// immediately, which is a hard stop wearing a graceful stop's name. The
+		// deadline is the grace period: finish what is running, then go.
+		shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		log.Printf("cored: shutdown signal received; draining in-flight requests (up to 15s)")
+		if err := httpSrv.Shutdown(shutCtx); err != nil {
+			// Say it and keep going: the caller's deferred telemetry flush is
+			// worth more than a non-zero exit over a connection that would not
+			// close.
+			log.Printf("cored: graceful shutdown did not complete: %v", err)
+		}
+		return nil
+	}
 }
 
 func (s *Server) routes() {
@@ -526,8 +1216,10 @@ func (s *Server) routes() {
 	// not exist (404) and tokens come from the external IdP. This gating is the
 	// fix for the unauthenticated token-minting oracle: the endpoint mints a
 	// validly-signed token for any subject, so it must never serve in prod.
-	if s.signer != nil {
+	if s.signer != nil && !s.devTokenRouteOff {
 		r.Post("/auth/token", s.handleDevToken)
+	} else if s.signer != nil {
+		log.Printf("auth: AUTH_DEV_TOKEN_ROUTE_DISABLED=true — POST /auth/token is NOT mounted; only POST /auth/login (existing passwords) issues tokens")
 	}
 
 	// WebAuthn step-up ceremony (WS1 follow-up) + the first-party password login
@@ -537,11 +1229,27 @@ func (s *Server) routes() {
 	s.router = r
 	s.authWebAuthnRoutes()
 	s.authLoginRoutes()
+	s.cronRoutes()
 
 	// Company lifecycle (identity). authn-ONLY: verify JWT + resolve user
 	// (create-on-first-login); skip membership/PDP (the company does not exist
 	// yet). handleCreateCompany seeds the Owner level + membership afterward.
 	r.With(s.authnOnlyMiddleware).Post("/v1/companies", s.handleCreateCompany)
+
+	// RESTORE A COMPANY FROM AN ARCHIVE (T14). authn-ONLY, mounted BESIDE company
+	// creation and OUTSIDE the {companyID} subtree, because that is what it is:
+	// the company does not exist yet, so the subtree's membership check would 403
+	// every caller before the company it names could ever be created.
+	//
+	// ⛔ routeAction() THEREFORE NEVER SEES THIS ROUTE, and the only thing gating
+	// it is "you are a signed-in user" — exactly as for POST /v1/companies. That
+	// is a deliberate, stated hole and not an oversight: a restore CREATES a
+	// company from a file the caller already holds, it cannot read or overwrite
+	// any company that is already here (it refuses when the id exists, and there
+	// is no delete path in the product at all), and the restoring user becomes
+	// the Owner of what they created. The archive is the authority; whoever holds
+	// it already holds the books.
+	r.With(s.authnOnlyMiddleware).Post("/v1/companies/restore", s.handleRestoreCompany)
 
 	// Session bootstrap + invite claim. authn-ONLY for the same reason company
 	// creation is: an INVITED user is not yet a member of anything, so the
@@ -553,6 +1261,13 @@ func (s *Server) routes() {
 	r.Route("/v1/companies/{companyID}", func(r chi.Router) {
 		// Every route in this subtree is authn'd + PDP-enforced.
 		r.Use(s.companyAuthMiddleware)
+		// ...and every route in this subtree carries a trajectory Scope, so any
+		// model call made below it is attributable. ⛔ ORDER IS LOAD-BEARING: it
+		// runs AFTER companyAuthMiddleware because everything it copies —
+		// company, user, subject — is put in the context BY that middleware, and
+		// because a span for a request that was about to be 403'd is a span for
+		// a thing that never happened.
+		r.Use(trajectoryScopeMiddleware)
 
 		// Company master read-back (WS8a). The frontend hydrates
 		// CompanyInfo.homeStateCode from state_code so the in-browser GST split
@@ -581,6 +1296,65 @@ func (s *Server) routes() {
 		// voucherDateFromRequest returns nil for a route with none, which is
 		// correct: a policy switch is not a dated document.
 		r.Put("/", s.handleUpdateCompany)
+
+		// WHOLE-COMPANY BACKUP (T14). One gzipped JSON Lines archive of every
+		// table the tenant census says holds this company's data.
+		//
+		// TWO-TOUCH RULE: inert without the matching `GET "/backup"` arm in
+		// routeAction(). TestEveryCompanyRouteIsMappedAndInVocabulary walks THIS
+		// router and turns the suite red if the arm is missing, so the gap cannot
+		// ship as a 403 for the Owner.
+		//
+		// ⛔ ITS RESOURCE TOKEN IS `backup` AND NOT `report:NAME`. Migration 0011
+		// seeds Data Entry a coarse `allow display report`, so a report token is
+		// granted to every operator in every tenant the day it exists — and this
+		// route emits every ledger, every party and every salary as one file. See
+		// handler_backup.go.
+		r.Get("/backup", s.handleBackupCompany)
+
+		// THE AGENT PLANE (W2, D121) — runs and the approval inbox. See
+		// agent_http.go for the contract and routeAction's /agent/ arm for
+		// the two bare tokens (agent-run, agent-approval).
+		s.agentRoutes(r)
+		// THE MCP SERVER (W6, D126): grants (a human's delegation to an
+		// outside client) and the Streamable HTTP transport that spends one.
+		// See mcp_http.go and routeAction's /agent/mcp arms (`agent-mcp`).
+		s.mcpRoutes(r)
+
+		// THE INSIGHT ENGINE (W4, d125) — the inbox, evidence, feedback,
+		// suppressions, the digest. insights_http.go; routeAction's
+		// /insights arm maps every route to the bare token `insights`.
+		s.insightRoutes(r)
+
+		// ===================================================================
+		// PER-COMPANY PRINT TEMPLATES (track C). handler_print_templates.go.
+		// ===================================================================
+		// ⛔ WHAT WAS MISSING WAS ONLY THIS. printingdb.SaveOverrides has been
+		// implemented and tested since migration 0037, and the READ side has been
+		// wired the whole time — printingdb/document.go honours overrides on both
+		// document paths and handler_print_reports.go honours them on the report
+		// letterhead. Nothing could WRITE one: no route reached SaveOverrides and
+		// print_template held zero rows in the entire database. These three lines
+		// are the fix, and the printed bytes change the moment one is used.
+		//
+		// TWO-TOUCH RULE: inert without the matching
+		// `/print-templates/` arms in routeAction() — an unmapped {companyID}
+		// sub-path default-DENIES, and
+		// TestEveryCompanyRouteIsMappedAndInVocabulary walks THIS router and turns
+		// the suite red if a mapping is missing, so the gap cannot ship as a 403
+		// for the Owner.
+		//
+		// The token is `company`, the same as the F11 features write above: a
+		// print template is company configuration, and modelling it as report:NAME
+		// would hand it to every Data Entry operator by inheritance from migration
+		// 0011. The full argument is on the routeAction arm.
+		//
+		// DELETE is what makes the setting two-way: it removes the override row so
+		// the company returns to the built-in layout. Without it, a company that
+		// sets a declaration once could never go back.
+		r.Get("/print-templates/{docKind}", s.handleGetPrintTemplate)
+		r.Put("/print-templates/{docKind}", s.handleSavePrintTemplate)
+		r.Delete("/print-templates/{docKind}", s.handleClearPrintTemplate)
 
 		// ===================================================================
 		// THE AI BILL INBOX — cored's PROXY into insightd (register row D49).
@@ -612,6 +1386,13 @@ func (s *Server) routes() {
 		r.Post("/drafts/{draftID}/accepted", s.handleDraftProxy)
 
 		// Masters.
+		// ⛔ THE READ, ADDED FOR T11. `/groups` was already in isMasterPath — which
+		// maps a GET to (Display, "master"), the token /ledgers and /units read under
+		// — so this route arrives GOVERNED by a rule that already exists and grants
+		// nothing new: a group name is on every ledger row today. It exists because a
+		// budget line on a GROUP stores an account_group_id, and no master form in
+		// this product may ask a human for a uuid. See handler_groups_list.go.
+		r.Get("/groups", s.handleListGroups)
 		r.Post("/groups", s.handleCreateGroup)
 		r.Post("/ledgers", s.handleCreateLedger)
 		// Read the chart of accounts back. Until this existed a client could
@@ -624,6 +1405,9 @@ func (s *Server) routes() {
 		// ledgers seeded with every company — Cash, Profit & Loss A/c — an
 		// opening balance, since those are created before any client can speak.
 		r.Put("/ledgers/{ledgerID}/opening", s.handleSetLedgerOpening)
+		// Release an agent-created ledger for posting (0095, the bare token
+		// master-unblock). See handler_ledger_unblock.go.
+		r.Post("/ledgers/{ledgerID}/unblock", s.handleUnblockLedger)
 		r.Post("/voucher-types", s.handleCreateVoucherType)
 		r.Post("/units", s.handleCreateUnit)
 		r.Post("/stock-items", s.handleCreateStockItem)
@@ -649,6 +1433,41 @@ func (s *Server) routes() {
 		r.Post("/batches", s.handleCreateStockBatch)
 		r.Get("/stock-items", s.handleListStockItems)
 		r.Get("/units", s.handleListUnits)
+
+		// T9 — THE COSTING METHOD. Switching an item from weighted average to
+		// FIFO or LIFO restates every report that has ever priced it (no data
+		// moves; value is derived), so it is its own narrow route with its own
+		// audit row, mapped to (Alter, "master") so it inherits the back-dated
+		// cutoff and the step-up. The vocabulary is SERVED because a picker
+		// built from a client-side list can offer a method the reports cannot
+		// value; see handler_inventory_masters.go.
+		//
+		// ⚠️ ORDER MATTERS AND chi's ROUTER DOES NOT REORDER FOR YOU: this is
+		// the FIRST {id} sub-route under /stock-items, and the comment above
+		// which said there were none is now wrong wherever it still stands.
+		// A literal segment ("/stock-items") and a parameterised one
+		// ("/stock-items/{stockItemID}/...") do not collide, but a second
+		// literal added under the collection later would.
+		r.Put("/stock-items/{stockItemID}/valuation-method", s.handleSetStockItemValuationMethod)
+		r.Get("/inventory-vocabulary", s.handleInventoryVocabulary)
+
+		// T10 — STOCK GROUPS (migration 0079). The item hierarchy, which is what
+		// makes a Stock Summary readable on a company with four hundred items.
+		// Masters like every other inventory master: isMasterPath maps the POST
+		// to (Create, "master") and the GET to (Display, "master"), so the level
+		// that may pick a godown may pick a group and the level that may not mint
+		// one cannot mint a group either.
+		r.Get("/stock-groups", s.handleListStockGroups)
+		r.Post("/stock-groups", s.handleCreateStockGroup)
+
+		// T8 — FOREIGN CURRENCIES AND THEIR RATES (migration 0080).
+		// isMasterPath maps both to the `master` token, so the level that may
+		// read a godown may read a currency, and the level that may not mint one
+		// cannot decide what a dollar is worth either. See auth_middleware.go's
+		// note for why a bare `currency` token was rejected.
+		r.Get("/currencies", s.handleListCurrencies)
+		r.Post("/currencies", s.handleCreateCurrency)
+		r.Post("/currencies/rates", s.handleSetCurrencyRate)
 
 		// THE COST MASTERS (T2, migration 0040) — the AXES of cost analysis and the
 		// POSITIONS on them. A cost CATEGORY is an axis (Department, Branch, Project);
@@ -730,6 +1549,29 @@ func (s *Server) routes() {
 		r.Get("/cost-centres", s.handleListCostCentres)
 		r.Post("/cost-centres", s.handleCreateCostCentre)
 		r.Put("/cost-centres/{centreID}", s.handleAlterCostCentre)
+
+		// THE BUDGET MASTER (T11, migration 0085). All eight routes map to the BARE
+		// `budget` resource, so the seeded Data Entry level is refused every one of
+		// them with no ACL migration at all — see handler_budget.go's header.
+		//
+		// ⚠️ `/budgets` IS PLURAL AND THE REPORT IS `/budget-variance`, one character
+		// from a collision. routeAction's master arm is HasPrefix(rest, "/budgets"),
+		// which "/budget-variance" does not satisfy — so the report falls through to
+		// the reports arm and is governed by `report:budget-variance`. A master route
+		// at "/budget" would have swallowed it and made migration 0086 dead text.
+		//
+		// ⛔ DELETE IS MOUNTED, unlike every other master above. Migration 0085
+		// grants UPDATE and DELETE because A BUDGET IS A PLAN AND PLANS ARE REVISED,
+		// which is the opposite of a voucher. It maps to authz.Delete and not to
+		// Alter so "may revise a figure but may not drop a line" stays writable.
+		r.Get("/budgets", s.handleListBudgets)
+		r.Post("/budgets", s.handleCreateBudget)
+		r.Put("/budgets/{budgetID}", s.handleAlterBudget)
+		r.Delete("/budgets/{budgetID}", s.handleDeleteBudget)
+		r.Get("/budgets/{budgetID}/lines", s.handleListBudgetLines)
+		r.Post("/budgets/{budgetID}/lines", s.handleAddBudgetLine)
+		r.Put("/budgets/{budgetID}/lines/{lineID}", s.handleAlterBudgetLine)
+		r.Delete("/budgets/{budgetID}/lines/{lineID}", s.handleDeleteBudgetLine)
 
 		// Vouchers: one endpoint per accounting class (F4-F9). The body is the
 		// same generic voucher shape; the path fixes the class.
@@ -815,6 +1657,12 @@ func (s *Server) routes() {
 		// open reconciliation entries (refused alter/delete attempts).
 		r.Post("/vouchers/{voucherID}/external-reference", s.handleRegisterExternalReference)
 		r.Get("/reconciliation-queue", s.handleReconciliationQueue)
+		// The conflict compare screen's two missing halves (track D). The payload
+		// GET is the operator's own keyed intent, preserved when the sequencer
+		// refused it; the resolve POST is the only writer of resolved_at that has
+		// ever existed, without which a queue row is immortal.
+		r.Get("/reconciliation-queue/{reconID}/payload", s.handleReconciliationPayload)
+		r.Post("/reconciliation-queue/{reconID}/resolve", s.handleResolveReconciliation)
 
 		// Backward-compatible alias for the original F8 Sales endpoint.
 		r.Post("/sales", s.postVoucher(ledger.Sales))
@@ -825,6 +1673,10 @@ func (s *Server) routes() {
 		r.Get("/profit-and-loss", s.handleProfitAndLoss)
 		r.Get("/day-book", s.handleDayBook)
 		r.Get("/outstandings", s.handleOutstandings)
+		// ⭐⭐ T8 STEP 7 — THE UNADJUSTED-FOREX REPORT. A FLAT LITERAL equal to its PDP
+		// resource name, which is the arrangement `routeAction` and `reportName` cannot
+		// disagree about. The date rides in ?as_on=.
+		r.Get("/unadjusted-forex", s.handleUnadjustedForex)
 		// ⛔⛔ A SECOND FLAT LITERAL ROUTE, AND THE FLATNESS IS THE WHOLE POINT (D94).
 		// `routeAction` maps the literal path to the PDP resource, so a report NAME is
 		// what a rule can name and a QUERY PARAMETER is invisible to it. Serving the
@@ -908,6 +1760,21 @@ func (s *Server) routes() {
 		r.Post("/bank-statement/{ledgerID}/import", s.handleImportBankStatement)
 		r.Get("/bank-statement/{ledgerID}", s.handleImportedStatement)
 
+		// T4 SLICE 2b — MATCHING. Two of its three routes are here; the third
+		// and most important one is not, because ACCEPTING a match is the
+		// EXISTING bank-reconciliation PUT above with a statement_line_id in the
+		// body. handler_bank_match.go's header has the four properties that
+		// follow from sharing that route rather than minting a new one, and
+		// migration 0088's footer records why slice 2b writes no ACL migration.
+		//
+		// All three are mapped by routeAction's existing `/bank-statement/`
+		// prefix arm: the GET as Display/report:bank-statement (which 0063
+		// already disallows to Data Entry) and both POSTs as
+		// Create/bank-statement (which 0063 grants Data Entry nothing of).
+		r.Get("/bank-statement/{ledgerID}/matches", s.handleBankStatementMatches)
+		r.Post("/bank-statement/{ledgerID}/lines/{lineID}/set-aside", s.handleSetAsideStatementLine)
+		r.Post("/bank-statement/{ledgerID}/lines/{lineID}/restore", s.handleRestoreStatementLine)
+
 		// TDS DEDUCTOR STATUS (Item Zero step 2) — Tally's F11 > Enable TDS >
 		// "TDS Deductor Details" (RESEARCH.md:692). Whether this company is a
 		// s.402(11) designated person / s.402(37) specified person, per tax year.
@@ -939,6 +1806,22 @@ func (s *Server) routes() {
 		// behind.
 		r.Get("/tds-profile", s.handleGetTDSProfile)
 		r.Put("/tds-profile", s.handleSetTDSProfile)
+
+		// WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080).
+		//
+		// ⛔ THE OTHER HALF OF A REFUSAL. ledger/forex_settlement.go refuses any
+		// settlement that would realise an exchange difference at a company with no
+		// gain/loss ledger chosen, naming this setting — so without this route the
+		// refusal is a wall rather than a prompt and step 5 is unreachable from the
+		// product. Built first of step 5's parts for that reason.
+		//
+		// PUT with no key in the path: company_forex_settings.company_id is the whole
+		// primary key, so the company in the path prefix IS the key. An empty
+		// gain_loss_ledger_id CLEARS the choice — 0080 made the column nullable so
+		// that "not chosen" stays expressible, and an operator who picked the wrong
+		// ledger must be able to un-pick it.
+		r.Get("/forex-settings", s.handleGetForexSettings)
+		r.Put("/forex-settings", s.handleSetForexSettings)
 
 		// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3). A resident
 		// buyer's written statement that goods are for manufacturing and NOT for
@@ -1053,6 +1936,21 @@ func (s *Server) routes() {
 		r.Get("/cost-centre-summary", s.handleCostCentreSummary)
 		r.Get("/cost-category-summary", s.handleCostCategorySummary)
 
+		// BUDGET VS ACTUAL (T11, migrations 0085/0086). A FLAT LITERAL PATH SPELLING
+		// THE REPORT NAME, because TestReportVocabularyMatchesRouter asks routeAction
+		// for GET /v1/companies/{id}/<name> for every entry in
+		// authz.KnownReportNames — a tidier /budgets/{id}/variance would be a
+		// vocabulary entry no route serves, i.e. a `disallow` an administrator can
+		// write that can never match. The plan, the grain and the axis all ride in
+		// the query string for that reason.
+		//
+		// A Display, so it inherits neither the back-dated write cutoff nor the
+		// WebAuthn step-up (both gate on Action.IsWrite()). It carries what the owner
+		// PLANNED — the one figure in this product no voucher contains — which is why
+		// migration 0086 disallows it for the seeded Data Entry level in both the
+		// display and the print form.
+		r.Get("/budget-variance", s.handleBudgetVariance)
+
 		// THE TWO ORDER BOOKS (T3, migration 0042). What is still outstanding, per
 		// direction, as at a date.
 		//
@@ -1097,7 +1995,16 @@ func (s *Server) routes() {
 
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
+		// YEAR-END CLOSURE (0089). Two-touch: the routeAction arm for
+		// "/books-closure" in auth_middleware.go is the other half.
+		r.Get("/books-closure", s.handleGetBooksClosure)
+		r.Post("/books-closure", s.handleCloseBooks)
+		r.Delete("/books-closure", s.handleReopenBooks)
 		r.Get("/gstr3b", s.handleGSTR3B)
+		// THE ANNUAL RECONCILIATION (T12). Both touches of the two-touch rule:
+		// this mount, and `case "/gstr9"` in reportName() in auth_middleware.go.
+		// With only this one, even an Owner gets a 403.
+		r.Get("/gstr9", s.handleGSTR9)
 
 		// INPUT TAX CREDIT: the books-vs-GSTR-2B reconciliation, the IMS
 		// worklist, and the three writes that feed them (handler_itc.go).
@@ -1147,6 +2054,31 @@ func (s *Server) routes() {
 		// admitted by 0011's coarse `allow display report`.
 		r.Post("/employees", s.handleCreateEmployee)
 		r.Get("/employees", s.handleListEmployees)
+		// ⛔ THE TWO EFFECTIVE-DATED CHILDREN, WITHOUT WHICH THE EIGHT ROUTES
+		// ABOVE AND BELOW COULD NOT PAY ANYBODY. `payrolldb.SetSalaryComponent`
+		// and `SetStatutoryElection` shipped with Track 3 and had no route at
+		// all, so an employee created through POST /employees hit
+		// "no salary structure is in force" / "no statutory election is in
+		// force" on every pay run — a 422 arriving on the RUN, long after the
+		// master was created, with nothing anywhere saying it was incomplete.
+		// Every payroll test in this package set both up by calling the SERVICE,
+		// which is exactly why a green suite never noticed. See
+		// handler_payroll_structure.go's header.
+		//
+		// They resolve to the SAME `employee` authority as the master itself
+		// (Create for the writes, Display for the reads), so migration 0035's
+		// seeded `disallow create|alter|display employee` covers them from the
+		// moment they exist and no new token — granted by nothing, denied by
+		// nothing — guards a salary.
+		r.Post("/employees/{employeeID}/salary-components", s.handleSetSalaryComponent)
+		r.Get("/employees/{employeeID}/salary-components", s.handleListSalaryComponents)
+		r.Post("/employees/{employeeID}/statutory-elections", s.handleSetStatutoryElection)
+		r.Get("/employees/{employeeID}/statutory-elections", s.handleListStatutoryElections)
+		// The closed sets a payroll form chooses from — served, not hardcoded in
+		// the client, for the reason /security-levels/vocabulary is: `is_wages`
+		// is a LEGAL classification and a second copy of it in another language
+		// is the drift that under-contributes PF with no error anywhere.
+		r.Get("/payroll-vocabulary", s.handlePayrollVocabulary)
 		r.Post("/vouchers/payroll", s.handlePayrollRun)
 		r.Get("/payroll-register", s.handlePayrollRegister)
 		r.Get("/payroll-payslip", s.handlePayrollPayslip)
@@ -1289,7 +2221,7 @@ type devTokenReq struct {
 func (s *Server) handleDevToken(w http.ResponseWriter, r *http.Request) {
 	// Defense in depth: this handler must never run without the dev signer.
 	// routes() only mounts it in dev mode, but guard here too.
-	if s.signer == nil {
+	if s.signer == nil || s.devTokenRouteOff {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -1487,6 +2419,11 @@ type ledgerReq struct {
 	// is D43's shape on a second route, and it is why D87's form could not have
 	// carried the field honestly without this line.
 	CreditDays *int `json:"credit_days"`
+	// CreditLimit (0103, W4) is the party's credit limit as a decimal string;
+	// "" means no limit agreed and is stored NULL — never 0, which is the
+	// different instruction "no credit at all". It is what the insight
+	// engine's credit-limit-breach detector compares the debtor's balance to.
+	CreditLimit string `json:"credit_limit"`
 
 	CreatedBy string `json:"created_by"`
 
@@ -1539,6 +2476,52 @@ type openingBillReq struct {
 	DrCr    string `json:"dr_cr"`
 	Amount  string `json:"amount"`
 	DueDate string `json:"due_date"`
+
+	// ⭐⭐ T8 STEP 6 — THE TRIPLE ON AN OPENING BILL, WHICH HAD NO WIRE AT ALL.
+	// 0080 gave `ledger_opening_bill` the three currency columns for §0.2's stated
+	// reason (Outstandings nets this table in a UNION with `bill_allocation`), and
+	// no route could ever set them — so a MIGRATED foreign debtor, whose opening
+	// bill IS their whole history, could not be keyed as foreign, could not be
+	// reported as foreign, and could not be SETTLED at all: step 5's engine reads
+	// this very table and refuses with "bill %q is carried in the books' own
+	// currency and has no exchange rate".
+	//
+	// ⛔ ALL-OR-NONE, PARSED BY `buildForex` — the same function every voucher
+	// posting and bill allocation goes through, so `""` means absent in exactly
+	// one place and the zero uuid is refused in exactly one place.
+	CurrencyID    string `json:"currency_id"`
+	ForeignAmount string `json:"foreign_amount"`
+	Rate          string `json:"rate"`
+}
+
+// openingBillsFromReq maps the wire rows to masters rows, refusing a malformed
+// triple with a 400 that names the bill.
+//
+// ⛔ ONE MAPPER, TWO DOORS — `POST /ledgers` and `PUT /ledgers/{id}/opening` both
+// accept this array, and it was already duplicated between them before step 6 added
+// three fields to copy. Two spellings of the same mapping is how a currency reaches
+// the create path and not the setter, which presents as "the opening bill loses its
+// currency when you edit it".
+func openingBillsFromReq(w http.ResponseWriter, reqs []openingBillReq) ([]masters.OpeningBill, bool) {
+	out := make([]masters.OpeningBill, 0, len(reqs))
+	for _, b := range reqs {
+		amt, derr := optionalDecimal(b.Amount)
+		if derr != nil {
+			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
+			return nil, false
+		}
+		cur, foreign, rate, ok := buildForex(w, b.CurrencyID, b.ForeignAmount, b.Rate,
+			" on opening bill "+b.RefName)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, masters.OpeningBill{
+			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
+			Amount: amt, DueDate: b.DueDate,
+			CurrencyID: cur, ForeignAmount: foreign, Rate: rate,
+		})
+	}
+	return out, true
 }
 
 func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
@@ -1555,19 +2538,21 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid opening_balance")
 		return
 	}
-	openingBills := make([]masters.OpeningBill, 0, len(req.OpeningBills))
-	for _, b := range req.OpeningBills {
-		amt, derr := optionalDecimal(b.Amount)
-		if derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
+	openingBills, ok := openingBillsFromReq(w, req.OpeningBills)
+	if !ok {
+		return
+	}
+	var creditLimit *decimal.Decimal
+	if strings.TrimSpace(req.CreditLimit) != "" {
+		cl, err := decimal.NewFromString(strings.TrimSpace(req.CreditLimit))
+		if err != nil || cl.IsNegative() {
+			writeError(w, http.StatusBadRequest, "invalid credit_limit: a non-negative amount, or empty for no limit")
 			return
 		}
-		openingBills = append(openingBills, masters.OpeningBill{
-			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
-			Amount: amt, DueDate: b.DueDate,
-		})
+		creditLimit = &cl
 	}
 	id, err := s.masters.CreateLedger(ctx, masters.Ledger{
+		CreditLimit:        creditLimit,
 		Name:               req.Name,
 		GroupName:          req.GroupName,
 		OpeningBalance:     opening,
@@ -1584,7 +2569,10 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		BankAccountNumber:  req.BankAccountNumber,
 		BankIFSC:           req.BankIFSC,
 		OpeningBills:       openingBills,
-	}, req.CreatedBy)
+		// ⛔ BORN BLOCKED WHEN THE AGENT MAKES IT (0095). From the request's
+		// in-process agent identity, which no body can set or omit.
+		BornOfRun: agentRunOf(r),
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -1628,7 +2616,17 @@ type unitReq struct {
 	Symbol        string `json:"symbol"`
 	FormalName    string `json:"formal_name"`
 	DecimalPlaces int    `json:"decimal_places"`
-	CreatedBy     string `json:"created_by"`
+	// A COMPOUND unit (T10): 1 <symbol> = <conversion_factor> <base_unit_symbol>,
+	// e.g. 1 BOX = 12 NOS. Both or neither — a base with no factor cannot be
+	// converted and a factor with no base converts to nothing, and either half
+	// alone is a unit that looks compound to a reader and cannot be restated.
+	//
+	// ⚠️ conversion_factor IS A DECIMAL STRING, like every other number on this
+	// wire. A JSON number would be a float, and a float conversion factor is how
+	// 1 BOX quietly becomes 11.999999 NOS.
+	BaseUnitSymbol   string `json:"base_unit_symbol"`
+	ConversionFactor string `json:"conversion_factor"`
+	CreatedBy        string `json:"created_by"`
 }
 
 func (s *Server) handleCreateUnit(w http.ResponseWriter, r *http.Request) {
@@ -1640,10 +2638,17 @@ func (s *Server) handleCreateUnit(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	factor, err := optionalDecimal(req.ConversionFactor)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversion_factor (send a decimal STRING)")
+		return
+	}
 	id, err := s.masters.CreateUnit(ctx, masters.Unit{
-		Symbol:        req.Symbol,
-		FormalName:    req.FormalName,
-		DecimalPlaces: req.DecimalPlaces,
+		Symbol:           req.Symbol,
+		FormalName:       req.FormalName,
+		DecimalPlaces:    req.DecimalPlaces,
+		BaseUnitSymbol:   strings.TrimSpace(req.BaseUnitSymbol),
+		ConversionFactor: factor,
 	}, req.CreatedBy)
 	if err != nil {
 		writeMastersError(w, err)
@@ -1659,7 +2664,27 @@ type stockItemReq struct {
 	GSTRatePct  string `json:"gst_rate_pct"`
 	OpeningQty  string `json:"opening_qty"`
 	OpeningRate string `json:"opening_rate"`
-	CreatedBy   string `json:"created_by"`
+	// ValuationMethod is the item's COSTING METHOD (T9). Absent means the
+	// default, WEIGHTED_AVG, which is what every item created before T9 carries
+	// and what Tally defaults to.
+	//
+	// ⛔ IT IS ACCEPTED HERE RATHER THAN ONLY ON THE ALTER ROUTE ON PURPOSE. An
+	// item's method decided at creation values it from its first purchase; a
+	// method that could only be set afterwards would mean every item's first
+	// figures were on a basis nobody chose, and correcting it later would be a
+	// RESTATEMENT of reports that had already been read. Register row D43 is the
+	// nearby precedent for the other half of this: a body key that is accepted
+	// and discarded is worse than one that is refused.
+	ValuationMethod string `json:"valuation_method"`
+	// StockGroupName is the item's STOCK GROUP (T10). Absent or empty leaves the
+	// item UNGROUPED, which is a real state (Tally's "under Primary") and what
+	// every item created before T10 is.
+	//
+	// ⚠️ THE GROUP MUST ALREADY EXIST. Creating one implicitly from a misspelling
+	// here is how a company ends up with "Raw Materials" and "Raw materials"
+	// subtotalling half its stock each.
+	StockGroupName string `json:"stock_group_name"`
+	CreatedBy      string `json:"created_by"`
 }
 
 func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
@@ -1687,13 +2712,15 @@ func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.masters.CreateStockItem(ctx, masters.StockItem{
-		Name:        req.Name,
-		UnitSymbol:  req.UnitSymbol,
-		HSN:         req.HSN,
-		GSTRatePct:  rate,
-		OpeningQty:  qty,
-		OpeningRate: openRate,
-	}, req.CreatedBy)
+		Name:            req.Name,
+		UnitSymbol:      req.UnitSymbol,
+		HSN:             req.HSN,
+		GSTRatePct:      rate,
+		OpeningQty:      qty,
+		OpeningRate:     openRate,
+		ValuationMethod: strings.TrimSpace(req.ValuationMethod),
+		StockGroupName:  strings.TrimSpace(req.StockGroupName),
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -1705,19 +2732,49 @@ func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
 // Vouchers
 // --------------------------------------------------------------------------
 
+// postingReq is one double-entry line.
+//
+// T8's THREE FOREX VALUES are all-or-none and all three are STRINGS on the
+// wire. `amount` stays the BASE amount and stays authoritative — the foreign
+// figures sit beside it and never instead of it.
+//
+// ⛔ `rate` IS NOT MONEY AND MUST NOT BE PARSED AS MONEY. It is base units per
+// one foreign unit, carried to TEN decimals (migration 0080's NUMERIC(19,10)),
+// where every other number on this body is fixed-4. The client has a distinct
+// `Rate` type for exactly this reason: its `parseFixed4` TRUNCATES the fifth
+// decimal onward, so a rate fed through the money parser silently becomes a
+// different rate — and one that round-trips through its own type perfectly.
+//
+// ⚠️ EMPTY MEANS BASE, for all three together, and that is what every voucher
+// keyed before this feature sends. The SEMANTICS are not re-checked here:
+// ledger.forexTriple.validate owns the all-or-none rule and migration 0080's
+// CHECK is the authority behind it. A second copy in this layer is a copy that
+// drifts, and the drifted one always wins for whichever caller reaches it
+// first.
 type postingReq struct {
-	LedgerID string `json:"ledger_id"`
-	DrCr     string `json:"dr_cr"`
-	Amount   string `json:"amount"`
+	LedgerID      string `json:"ledger_id"`
+	DrCr          string `json:"dr_cr"`
+	Amount        string `json:"amount"`
+	CurrencyID    string `json:"currency_id"`
+	ForeignAmount string `json:"foreign_amount"`
+	Rate          string `json:"rate"`
 }
 
+// billAllocationReq carries the same triple as postingReq, and it must:
+// reporting.Outstandings reads bill_allocation, NOT posting, so a foreign bill
+// whose currency arrived only on the posting would be a base bill on the ageing
+// report. Its `rate` is the bill's HISTORICAL rate, which is the figure a
+// settlement differences against to realise a gain or loss.
 type billAllocationReq struct {
-	LedgerID string `json:"ledger_id"`
-	RefName  string `json:"ref_name"`
-	RefType  string `json:"ref_type"`
-	DrCr     string `json:"dr_cr"`
-	Amount   string `json:"amount"`
-	DueDate  string `json:"due_date"`
+	LedgerID      string `json:"ledger_id"`
+	RefName       string `json:"ref_name"`
+	RefType       string `json:"ref_type"`
+	DrCr          string `json:"dr_cr"`
+	Amount        string `json:"amount"`
+	DueDate       string `json:"due_date"`
+	CurrencyID    string `json:"currency_id"`
+	ForeignAmount string `json:"foreign_amount"`
+	Rate          string `json:"rate"`
 }
 
 type gstLineReq struct {
@@ -1938,8 +2995,35 @@ type voucherReq struct {
 	// those rules in the HTTP layer is a copy that drifts, and the drifted one
 	// always wins for whichever caller reaches it first.
 	Fulfilments []fulfilmentReq `json:"fulfilments"`
-	GST         *gstReq         `json:"gst"`
-	TDS         *tdsReq         `json:"tds"`
+	// DraftID is the insightd PurchaseVoucherDraft this POST is ACCEPTING
+	// (migration 0077, register row §7.3 B). Empty on every hand-keyed voucher,
+	// which is nearly all of them.
+	//
+	// ⛔⛔ THIS FIELD IS THE SERVER HALF OF "ACCEPT AN AI BILL ONCE", AND WITHOUT
+	// IT THE GUARANTEE IS A CLIENT-SIDE CLAIM. Accepting a draft is two writes to
+	// two services: this POST, and then the browser telling insightd the draft is
+	// `accepted`. When the second is lost — tab closed, network dropped, laptop
+	// asleep — insightd keeps offering the bill as `ready`. The browser's own
+	// retry queue is localStorage, so ONLY the machine that posted can drive it;
+	// a second machine used to be protected by a day-book lookup alone, which
+	// cannot see a bill whose supplier invoice number the OCR never read. Carrying
+	// the draft id here puts the decision under a unique index inside the SAME
+	// transaction as the voucher, so the loser writes nothing at all and gets a
+	// 409 naming the voucher the draft did produce.
+	//
+	// Carried on voucherReq rather than on a purchase-only body for the same
+	// reason Inventory and CostAllocations are: syncIntentReq.Payload IS a
+	// voucherReq and buildVoucherInput is the single translator, so an accept
+	// replayed from an offline node keeps its once-only key for free.
+	DraftID string `json:"draft_id"`
+	// IdempotencyKey names THIS REQUEST (W5, migration 0100): a retry under
+	// the same key and body is answered with the first request's result instead
+	// of posting a second voucher. Also accepted as the Idempotency-Key header;
+	// carried in the body too because syncIntentReq.Payload IS a voucherReq, so
+	// an outbox replay keeps its key without a second transport.
+	IdempotencyKey string  `json:"idempotency_key"`
+	GST            *gstReq `json:"gst"`
+	TDS            *tdsReq `json:"tds"`
 	// TCS is the collection-side mirror, honoured on Sales only. It carries no
 	// exemption flag: a s.394(2) declaration is read from the declarations table
 	// inside the post transaction, never asserted here.
@@ -1958,6 +3042,18 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
+		// The header and the body field are ONE key. Both present and different
+		// is refused: silently preferring one would replay (or not) on a key the
+		// caller did not mean.
+		if h := strings.TrimSpace(r.Header.Get("Idempotency-Key")); h != "" {
+			if req.IdempotencyKey != "" && req.IdempotencyKey != h {
+				writeError(w, http.StatusBadRequest,
+					"the Idempotency-Key header and the body's idempotency_key disagree; send one")
+				return
+			}
+			req.IdempotencyKey = h
+		}
+		req.CreatedBy = attributedTo(r, req.CreatedBy)
 		in, ok := buildVoucherInput(w, class, req)
 		if !ok {
 			return
@@ -1968,10 +3064,39 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			if errors.Is(err, ledger.ErrBadIdempotencyKey) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// THE SAME KEY, A DIFFERENT REQUEST. 422 with a machine-readable code,
+			// because a client must not retry this under the same key — and must
+			// not read it as "posted".
+			if errors.Is(err, ledger.ErrIdempotencyKeyReused) {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"error": err.Error(),
+					"code":  "idempotency_key_reused",
+				})
+				return
+			}
+			// THE DUPLICATED AI BILL — 409, not 422, and in insightd's OWN refusal
+			// SHAPE. See writeDraftAlreadyAccepted.
+			var dup *ledger.DraftAlreadyAcceptedError
+			if errors.As(err, &dup) {
+				writeDraftAlreadyAccepted(w, dup)
+				return
+			}
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, voucherResultJSON(res))
+		out := voucherResultJSON(res)
+		if res.Replayed {
+			// A REPLAY IS THE ORIGINAL ANSWER, SAID AGAIN — same status, same
+			// voucher — and it SAYS it is a replay, so a client can tell the
+			// operator "already posted as No. 5" rather than "saved".
+			out["idempotent_replay"] = true
+			w.Header().Set("Idempotent-Replayed", "true")
+		}
+		writeJSON(w, http.StatusCreated, out)
 	}
 }
 
@@ -1997,6 +3122,7 @@ func (s *Server) alterVoucher(class ledger.Class) http.HandlerFunc {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
+		req.CreatedBy = attributedTo(r, req.CreatedBy)
 		in, ok := buildVoucherInput(w, class, req)
 		if !ok {
 			return
@@ -2128,6 +3254,281 @@ func (s *Server) handleReconciliationQueue(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
+// handleReconciliationPayload returns the intent PARKED on one open
+// reconciliation entry — the voucher body an offline operator keyed, preserved
+// verbatim when the sequencer refused it. It is the right-hand pane of the
+// conflict compare screen; the left-hand pane is GET /vouchers/{voucherID},
+// which already exists and already returns real ledger ids.
+//
+// ⛔ WHY IT EXISTS AT ALL. sync.Service.ConflictPayload has read this column
+// since migration 0010 and had NO caller outside two Go test files, so a client
+// could learn THAT its work was refused and never WHAT it had typed. Without
+// this route the conflict screen can only ever show one side of the comparison
+// it exists to make.
+//
+// ⚠️ has_payload=false IS A REAL ANSWER, NOT AN ERROR, AND THE ASYMMETRY IS
+// DELIBERATE. Only sync.parkConflict writes the payload column; a FROZEN row is
+// raised by the ledger's freeze rule (kind IRN / FILED_GSTR1) and carries NO
+// payload. So the honest answer for a freeze row is "this entry exists and never
+// held one", which a 404 would spell the same way as "no such entry". The client
+// must source the operator's keyed version from its own outbox in that case, and
+// say so when the local copy is gone.
+//
+// The entry metadata is returned alongside so the compare screen needs ONE call:
+// which op was attempted, what pinned it, and the sequencer's own explanation.
+func (s *Server) handleReconciliationPayload(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	reconID, err := uuid.Parse(chi.URLParam(r, "reconID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid reconciliation id")
+		return
+	}
+
+	// Locate the entry among the OPEN rows first. This reuses the tested lister
+	// rather than adding a second query, and it pins the contract to open rows:
+	// ConflictPayload alone cannot tell an unknown id from a null payload (both
+	// answer (zero, false, nil)), and conflating those is exactly the confusion
+	// the has_payload flag exists to remove.
+	rows, err := s.ledger.ListReconciliationQueue(ctx)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var entry *ledger.ReconEntry
+	for i := range rows {
+		if rows[i].ID == reconID {
+			entry = &rows[i]
+			break
+		}
+	}
+	if entry == nil {
+		writeError(w, http.StatusNotFound, "no open reconciliation entry with that id")
+		return
+	}
+
+	body := map[string]any{
+		"reconciliation_id": entry.ID.String(),
+		"voucher_id":        entry.VoucherID.String(),
+		"attempted_op":      entry.AttemptedOp,
+		"kind":              entry.Kind,
+		"ref_value":         entry.Ref,
+		"frozen_voucher_no": entry.FrozenVoucherNo,
+		"detail":            entry.Detail,
+		"created_at":        entry.CreatedAt,
+	}
+
+	in, hasPayload, err := s.sync.ConflictPayload(ctx, reconID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body["has_payload"] = hasPayload
+	if !hasPayload {
+		// Name the reason rather than leaving a bare false: a freeze row never had
+		// a payload, and a client that cannot tell that from a fault would retry.
+		body["payload_absent_because"] = "this entry was raised by the freeze rule, " +
+			"which parks no keyed payload; the operator's own version exists only on the node that keyed it"
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	body["intent"] = syncIntentJSON(in)
+	writeJSON(w, http.StatusOK, body)
+}
+
+// syncIntentJSON serialises a parked sync.Intent for the compare screen.
+//
+// ⛔⛔ IT DOES NOT RETURN THE STORED BYTES, AND THAT IS THE WHOLE POINT. The
+// column holds json.Marshal(sync.Intent) verbatim, which is the tempting thing
+// to hand back — nothing omitted, nothing reformatted. MEASURED, that shape
+// renders a posting of 1180 as "Amount":"1180", because ledger.VoucherInput
+// carries no json tags and decimal.Decimal marshals bare. The LIVE side of the
+// comparison, voucherFullJSON, renders the same money as "1180.0000" via
+// StringFixed(4).
+//
+// So a compare screen fed the raw bytes would show "1180" beside "1180.0000" and
+// invite an operator to discard their work over a difference that does not
+// exist. Money is formatted HERE the way the live pane formats it, and the two
+// panes are only comparable because of that.
+func syncIntentJSON(in sync.Intent) map[string]any {
+	return map[string]any{
+		"idempotency_key":   in.IdempotencyKey,
+		"client_voucher_id": in.ClientVoucherID.String(),
+		"op":                string(in.Op),
+		"class":             string(in.Class),
+		"provisional_no":    in.ProvisionalNo,
+		"node_id":           in.NodeID,
+		"base_version":      in.BaseVersion,
+		"hlc": map[string]any{
+			"wall_millis": in.HLC.WallMillis,
+			"counter":     in.HLC.Counter,
+			"node_id":     in.HLC.NodeID,
+		},
+		"payload": parkedVoucherJSON(in.Payload),
+	}
+}
+
+// parkedVoucherJSON renders the parked ledger.VoucherInput with the SAME
+// conventions voucherFullJSON uses for a stored voucher: money as fixed-4
+// strings, canonical "D"/"C", zero uuids as "". See syncIntentJSON for why
+// re-formatting rather than echoing the stored bytes is the correct choice.
+//
+// ⚠️ THE FIELDS IT DOES NOT RENDER ARE NAMED, NOT DROPPED. A VoucherInput
+// carries six optional blocks (inward document, cost allocations, order
+// fulfilments, GST/TDS/TCS parameters) that a two-pane diff has no room for.
+// Omitting them silently is the failure this product keeps paying for: the
+// operator compares two panes that look identical and differ. So each one that
+// is PRESENT is named in `also_carries`, and the screen can say so.
+//
+// TestParkedVoucherAccountsForEveryVoucherInputField reflects over the struct
+// and fails if a field is added that is neither rendered here nor named there —
+// so a new field cannot go silently missing from the comparison.
+func parkedVoucherJSON(v ledger.VoucherInput) map[string]any {
+	postings := make([]map[string]any, 0, len(v.Postings))
+	for _, p := range v.Postings {
+		postings = append(postings, map[string]any{
+			"ledger_id": p.LedgerID.String(),
+			"dr_cr":     p.DrCr,
+			"amount":    p.Amount.StringFixed(4),
+		})
+	}
+	bills := make([]map[string]any, 0, len(v.BillAllocations))
+	for _, b := range v.BillAllocations {
+		bills = append(bills, map[string]any{
+			"ledger_id": b.LedgerID.String(),
+			"ref_name":  b.RefName,
+			"ref_type":  b.RefType,
+			"amount":    b.Amount.StringFixed(4),
+		})
+	}
+	inventory := make([]map[string]any, 0, len(v.Inventory))
+	for _, l := range v.Inventory {
+		inventory = append(inventory, map[string]any{
+			"stock_item_id": l.StockItemID.String(),
+			"godown_id":     uuidOrEmpty(l.GodownID),
+			"batch_id":      uuidOrEmpty(l.BatchID),
+			"direction":     string(l.Direction),
+			"qty":           l.Qty.StringFixed(4),
+			"rate":          l.Rate.StringFixed(4),
+			"discount_pct":  l.DiscountPct.StringFixed(4),
+			"amount":        l.Amount.StringFixed(4),
+			// A line that said NOTHING about price is not a line priced at zero,
+			// and the two must not read the same in a comparison.
+			"rate_unstated": l.RateUnstated,
+		})
+	}
+	counts := make([]map[string]any, 0, len(v.PhysicalCount))
+	for _, c := range v.PhysicalCount {
+		counts = append(counts, map[string]any{
+			"stock_item_id": c.StockItemID.String(),
+			"godown_id":     uuidOrEmpty(c.GodownID),
+			"batch_id":      uuidOrEmpty(c.BatchID),
+			"qty":           c.Qty.StringFixed(4),
+			"rate":          c.Rate.StringFixed(4),
+		})
+	}
+
+	// Presence of the blocks a diff cannot show. Named, never dropped.
+	var also []string
+	if v.Inward != nil {
+		also = append(also, "inward document")
+	}
+	if len(v.CostAllocations) > 0 {
+		also = append(also, "cost allocations")
+	}
+	if len(v.Fulfilments) > 0 {
+		also = append(also, "order fulfilments")
+	}
+	if v.GST != nil {
+		also = append(also, "GST parameters")
+	}
+	if v.TDS != nil {
+		also = append(also, "TDS parameters")
+	}
+	if v.TCS != nil {
+		also = append(also, "TCS parameters")
+	}
+	if also == nil {
+		also = []string{}
+	}
+
+	return map[string]any{
+		"class":           string(v.Class),
+		"voucher_type_id": uuidOrEmpty(v.VoucherTypeID),
+		"party_ledger_id": uuidOrEmpty(v.PartyLedgerID),
+		"item_ledger_id":  uuidOrEmpty(v.ItemLedgerID),
+		"voucher_no":      v.VoucherNo,
+		"voucher_date":    v.VoucherDate,
+		"narration":       v.Narration,
+		"party":           v.Party,
+		"created_by":      v.CreatedBy,
+		"source_guid":     v.SourceGUID,
+		"source_draft_id": v.SourceDraftID,
+		// W5 (0100): the request's once-only name. Shown so two panes that
+		// differ only in it are not presented as identical.
+		"idempotency_key":  v.IdempotencyKey,
+		"postings":         postings,
+		"bill_allocations": bills,
+		"inventory":        inventory,
+		"physical_count":   counts,
+		"also_carries":     also,
+	}
+}
+
+// handleResolveReconciliation marks one open reconciliation entry handled.
+//
+// ⛔ WHY IT EXISTS. resolved_at has been in the schema since migration 0009 and
+// every read filters on it, but NOTHING in this codebase ever wrote it — so a
+// reconciliation row was immortal and the queue could only grow. See
+// ledger.ResolveReconciliation.
+//
+// It is an Alter in the PDP (resource "reconciliation"), so it is a WRITE and
+// inherits whatever step-up the level requires. It carries no body and asserts
+// no date, so the back-dated cutoff correctly does not apply: clearing a
+// workflow item moves nothing in or out of a locked period.
+//
+// A second resolve of the same id answers 404, not 200 — the row is no longer
+// open. That makes the route idempotent in EFFECT (the timestamp never moves
+// forward) while still telling a client that its view is stale.
+func (s *Server) handleResolveReconciliation(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	reconID, err := uuid.Parse(chi.URLParam(r, "reconID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid reconciliation id")
+		return
+	}
+	stamped, err := s.ledger.ResolveReconciliation(ctx, reconID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !stamped {
+		writeError(w, http.StatusNotFound, "no open reconciliation entry with that id")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reconciliation_id": reconID.String(),
+		"resolved":          true,
+	})
+}
+
 // handleGetVoucher returns the CURRENT (head) version of one logical voucher.
 // Its postings carry the REAL ledger ids (not names), so a frontend alter path
 // can re-seed a form from the fetched voucher without smuggling a name into a
@@ -2164,26 +3565,67 @@ func (s *Server) handleGetVoucher(w http.ResponseWriter, r *http.Request) {
 // voucherFullJSON serialises a fetched voucher to the documented GET shape:
 // money as fixed-4 strings, dr_cr canonical "D"/"C", optional uuids rendered as
 // "" when nil, and postings/bill_allocations as nested arrays.
+// addForexJSON adds T8's three values to a posting or bill-allocation row of the
+// GET body — and adds them ONLY when the row is foreign.
+//
+// ⛔⛔ THIS FUNCTION IS THE WHOLE OF WHETHER AN ALTER PRESERVES A FOREIGN
+// VOUCHER. `posting` is rewritten from the request body on every version, so a
+// client rebuilding an alter from this GET can only send back what this GET
+// gave it. Emitting the amount and not the currency is exactly the defect
+// `cost_allocations` above records — the Go struct right, the wire not — and
+// its cost here is that editing the narration of a $1,000 invoice rewrites it
+// as a rupee invoice, with nothing refusing it.
+//
+// ⚠️ OMITTED ON A BASE ROW RATHER THAN EMITTED EMPTY, and that is the opposite
+// of the rule `cost_allocations` and `fulfilments` follow two fields down. The
+// difference is real: an empty ARRAY is the honest answer to "which splits does
+// this voucher have?", because none is a fact about the voucher. A currency,
+// though, is all-or-none — `"currency_id": ""` is not "no currency", it is a
+// two-of-three triple that ledger.forexTriple.validate refuses, so a client
+// echoing this body back verbatim would be 422 on every base voucher in the
+// book. Absent is the only spelling that round-trips.
+//
+// ⛔ `rate` AT TEN DECIMALS, NOT StringFixed(4). Money is fixed-4 and a rate is
+// not money; a fixed-4 here would hand the client 83.6512 and the client would
+// send 83.6512 back, so the ordinary round trip would silently reprice the
+// bill. `currency` (the code) is display only and is never read back — the id
+// is the fact.
+func addForexJSON(row map[string]any, currencyID uuid.UUID, code string,
+	foreign, rate decimal.Decimal,
+) {
+	if currencyID == uuid.Nil {
+		return
+	}
+	row["currency_id"] = currencyID.String()
+	row["currency"] = code
+	row["foreign_amount"] = foreign.StringFixed(4)
+	row["rate"] = rate.StringFixed(10)
+}
+
 func voucherFullJSON(v ledger.VoucherView) map[string]any {
 	postings := make([]map[string]any, 0, len(v.Postings))
 	for _, p := range v.Postings {
-		postings = append(postings, map[string]any{
+		row := map[string]any{
 			"ledger_id": p.LedgerID.String(),
 			"ledger":    p.LedgerName,
 			"dr_cr":     p.DrCr,
 			"amount":    p.Amount.StringFixed(4),
-		})
+		}
+		addForexJSON(row, p.CurrencyID, p.CurrencyCode, p.ForeignAmount, p.Rate)
+		postings = append(postings, row)
 	}
 	bills := make([]map[string]any, 0, len(v.BillAllocations))
 	for _, b := range v.BillAllocations {
-		bills = append(bills, map[string]any{
+		row := map[string]any{
 			"ledger_id": b.LedgerID.String(),
 			"ref_name":  b.RefName,
 			"ref_type":  b.RefType,
 			"dr_cr":     b.DrCr,
 			"amount":    b.Amount.StringFixed(4),
 			"due_date":  b.DueDate,
-		})
+		}
+		addForexJSON(row, b.CurrencyID, b.CurrencyCode, b.ForeignAmount, b.Rate)
+		bills = append(bills, row)
 	}
 	// The item grid. Built by inventoryLinesJSON (handler_voucher_inventory.go),
 	// which is where the reasoning about the round trip lives.
@@ -2446,6 +3888,64 @@ func writeVoucherEditError(w http.ResponseWriter, err error) {
 
 // buildVoucherInput converts a decoded voucherReq into a ledger.VoucherInput,
 // writing a 400 and returning ok=false on any malformed field.
+// buildForex parses T8's three wire values into the domain's three.
+//
+// ⛔ IT DECIDES NOTHING ABOUT ALL-OR-NONE. Whether a two-of-three triple is
+// legal is ledger.forexTriple.validate's question and migration 0080's CHECK is
+// the authority; this function only turns strings into values and reports a
+// string that is not a number. A second copy of the all-or-none rule here would
+// be a copy that drifts, and the drifted one always wins for whichever caller
+// reaches it first — the same reasoning costAllocationReq and fulfilmentReq
+// already record.
+//
+// ⛔ decimal.NewFromString, NEVER strconv.ParseFloat. Float parsing ACCEPTS
+// "NaN" and "Inf", which blow up inside the decimal package as a panic the
+// Recoverer turns into an opaque 500 — and it would round a rate's tenth
+// decimal away, which is the one digit this whole type exists to keep.
+//
+// ⚠️ AND THE ZERO UUID IS REFUSED EXPLICITLY. uuid.Parse ACCEPTS the all-zeros
+// string, and as a "present" currency id it would satisfy the all-or-none rule,
+// reach the composite foreign key and be refused by constraint name — or, on a
+// path with no key, mark a rupee posting foreign against a currency that does
+// not exist.
+func buildForex(w http.ResponseWriter, currencyID, foreignAmount, rate, where string) (
+	uuid.UUID, decimal.Decimal, decimal.Decimal, bool,
+) {
+	var (
+		cur     uuid.UUID
+		foreign decimal.Decimal
+		r       decimal.Decimal
+	)
+	if currencyID != "" {
+		parsed, err := uuid.Parse(currencyID)
+		if err != nil || parsed == uuid.Nil {
+			writeError(w, http.StatusBadRequest,
+				"currency_id must be the uuid of a currency master"+where)
+			return cur, foreign, r, false
+		}
+		cur = parsed
+	}
+	if foreignAmount != "" {
+		parsed, err := decimal.NewFromString(foreignAmount)
+		if err != nil {
+			writeError(w, http.StatusBadRequest,
+				"foreign_amount must be a decimal number"+where)
+			return cur, foreign, r, false
+		}
+		foreign = parsed
+	}
+	if rate != "" {
+		parsed, err := decimal.NewFromString(rate)
+		if err != nil {
+			writeError(w, http.StatusBadRequest,
+				"rate must be a decimal number (base units per ONE foreign unit)"+where)
+			return cur, foreign, r, false
+		}
+		r = parsed
+	}
+	return cur, foreign, r, true
+}
+
 func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq) (ledger.VoucherInput, bool) {
 	in := ledger.VoucherInput{
 		Class:       class,
@@ -2454,6 +3954,15 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		Narration:   req.Narration,
 		Party:       req.Party,
 		CreatedBy:   req.CreatedBy,
+		// The insightd draft being accepted. Passed through UNVALIDATED and
+		// unparsed: it is an opaque insightd identifier, not a uuid (its benchmark
+		// corpora use ids like "CO-DEMO/bill-3"), and the only thing cored needs of
+		// it is that two accepts of the same draft spell it the same way. Migration
+		// 0077's CHECK refuses the empty string; nullIfEmpty in the ledger maps ""
+		// to NULL before it can get there.
+		SourceDraftID: req.DraftID,
+		// Validated in the ledger (shape) and honoured on CREATE only.
+		IdempotencyKey: req.IdempotencyKey,
 	}
 	var err error
 	if in.VoucherTypeID, err = optionalUUID(req.VoucherTypeID); err != nil {
@@ -2475,7 +3984,7 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		writeError(w, http.StatusBadRequest, "invalid item_ledger_id")
 		return in, false
 	}
-	for _, p := range req.Postings {
+	for i, p := range req.Postings {
 		lid, err := uuid.Parse(p.LedgerID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid posting ledger_id")
@@ -2486,13 +3995,21 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			writeError(w, http.StatusBadRequest, "invalid posting amount")
 			return in, false
 		}
+		cur, foreign, rate, ok := buildForex(w, p.CurrencyID, p.ForeignAmount, p.Rate,
+			fmt.Sprintf(" on posting %d", i+1))
+		if !ok {
+			return in, false
+		}
 		in.Postings = append(in.Postings, ledger.PostingInput{
-			LedgerID: lid,
-			DrCr:     ledger.DrCr(p.DrCr),
-			Amount:   amt,
+			LedgerID:      lid,
+			DrCr:          ledger.DrCr(p.DrCr),
+			Amount:        amt,
+			CurrencyID:    cur,
+			ForeignAmount: foreign,
+			Rate:          rate,
 		})
 	}
-	for _, b := range req.BillAllocations {
+	for i, b := range req.BillAllocations {
 		lid, err := uuid.Parse(b.LedgerID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid bill allocation ledger_id")
@@ -2503,13 +4020,21 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			writeError(w, http.StatusBadRequest, "invalid bill allocation amount")
 			return in, false
 		}
+		cur, foreign, rate, ok := buildForex(w, b.CurrencyID, b.ForeignAmount, b.Rate,
+			fmt.Sprintf(" on bill allocation %d", i+1))
+		if !ok {
+			return in, false
+		}
 		in.BillAllocations = append(in.BillAllocations, ledger.BillAllocationInput{
-			LedgerID: lid,
-			RefName:  b.RefName,
-			RefType:  ledger.RefType(b.RefType),
-			DrCr:     ledger.DrCr(b.DrCr),
-			Amount:   amt,
-			DueDate:  b.DueDate,
+			LedgerID:      lid,
+			RefName:       b.RefName,
+			RefType:       ledger.RefType(b.RefType),
+			DrCr:          ledger.DrCr(b.DrCr),
+			Amount:        amt,
+			DueDate:       b.DueDate,
+			CurrencyID:    cur,
+			ForeignAmount: foreign,
+			Rate:          rate,
 		})
 	}
 	for i, l := range req.Inventory {
@@ -3012,12 +4537,45 @@ func (s *Server) handleOpenBills(w http.ResponseWriter, r *http.Request) {
 		found = true
 		ledgerName, groupName, pending = party.LedgerName, party.GroupName, party.Pending.StringFixed(4)
 		for _, b := range party.Bills {
+			// ⛔⛔ THE DERIVED ON-ACCOUNT ROW IS NOT A BILL AND MUST NOT BE OFFERED HERE.
+			// This picker's rows become AGAINST allocations, and an AGAINST names the
+			// reference it settles. `On Account` is not a stored reference — since D106
+			// it is the COMPUTED remainder of a party's balance — so settling "against"
+			// it would write an allocation naming a bill that does not exist, and the
+			// arithmetic would still foot.
+			//
+			// ⭐ APPLYING ON-ACCOUNT MONEY TO A BILL IS A REAL OPERATION AND IT HAS A
+			// DIFFERENT DOOR: alter the receipt that brought the money in and name the
+			// bill on it. That is the only path that can work here, because allocations
+			// live inside the voucher hash and a new version is how they change.
+			if b.OnAccount {
+				continue
+			}
 			bills = append(bills, map[string]any{
 				"ref_name":     b.RefName,
 				"pending":      b.Pending.StringFixed(4),
 				"due_date":     b.DueDate,
 				"overdue_days": b.OverdueDays,
 				"slab":         b.SlabLabel,
+				// ⭐⭐ T8 STEP 6, AND THIS IS WHERE STEPS 6 AND 8 MEET. Step 5 chose a
+				// VERIFY design: the CLIENT computes the realised difference and the
+				// server refuses any disagreement — so a settlement form has to know
+				// what the bill is carried at in BOTH currencies before it can offer a
+				// figure. This picker is the read that feeds it.
+				//
+				// ⛔ AND THE TWO FIGURES TOGETHER ARE WHAT `realisedFor` NEEDS, not the
+				// rate: the FINAL slice must clear `Pending` exactly, and a partial
+				// slice clears the pro-rata share of the bill's book value. A picker
+				// that offered only the rupee figure would let an operator key a
+				// plausible allocation that the engine then refuses, with the operator
+				// holding no number they could have got right.
+				//
+				// ⚠️ `currency_conflict` IS FORWARDED RATHER THAN FILTERED. A reference
+				// in conflict is exactly the one a picker must not silently offer as a
+				// single settleable bill — the form has to be able to say so.
+				"currency_code":     b.CurrencyCode,
+				"foreign_pending":   b.ForeignPending.StringFixed(4),
+				"currency_conflict": b.CurrencyConflict,
 			})
 		}
 		break
@@ -3115,6 +4673,29 @@ func (s *Server) writeOutstandings(w http.ResponseWriter, r *http.Request, kind 
 				"due_date":     b.DueDate,
 				"overdue_days": b.OverdueDays,
 				"slab":         b.SlabLabel,
+				// ⛔ EMITTED RATHER THAN LEFT TO THE CLIENT TO INFER FROM THE NAME. A
+				// client testing `ref_name === "On Account"` would re-derive a server
+				// fact from a display string, and a customer is perfectly entitled to
+				// name a real bill "On Account".
+				"on_account": b.OnAccount,
+				// ⭐⭐ T8 STEP 6 — THE FOREIGN HALF (Q5). `currency_code` is EMPTY for a
+				// bill carried in the books' own currency, which is the one encoding of
+				// base that 0080 allows; `foreign_pending` is signed exactly as
+				// `pending` is, so a client can add the two columns down the page.
+				//
+				// ⛔ NO RATE CROSSES THIS ROUTE, AND THAT IS DELIBERATE (§6.3). A rate is
+				// NUMERIC(19,10) and money is (19,4); `StringFixed(4)` on a rate READS as
+				// consistency with every other number here and silently changes it —
+				// 0.0033333333 becomes 0.0033. Step 7's unadjusted-forex report is where
+				// rates are rendered, and it must carry its own ten-decimal formatter.
+				"currency_code":   b.CurrencyCode,
+				"foreign_pending": b.ForeignPending.StringFixed(4),
+				// ⛔ EMITTED PER BILL RATHER THAN AS A REPORT-LEVEL FLAG, for the same
+				// reason `on_account` is emitted rather than inferred: the client has to
+				// mark the OFFENDING ROWS, not merely announce that the report contains a
+				// problem somewhere. A footnote with no row marker leaves an operator to
+				// find the pair by eye, on a report that may run to hundreds of bills.
+				"currency_conflict": b.CurrencyConflict,
 			})
 		}
 		parties = append(parties, map[string]any{
@@ -3165,6 +4746,13 @@ func (s *Server) writeOutstandings(w http.ResponseWriter, r *http.Request, kind 
 		"parties":     parties,
 		"slab_totals": slabs,
 		"total":       out.Total.StringFixed(4),
+		// ⛔ THE SLABS DO NOT SUM TO THE TOTAL, AND THIS FIELD IS THE DIFFERENCE.
+		// An on-account amount has no due date, so it sits in no ageing bucket (D106;
+		// Tally is the same — "On Account amounts are not reflected in ... Age
+		// Analysis Statement"). Emitting the remainder lets the client state
+		// `sum(slab_totals) + on_account_total == total` instead of leaving a reader
+		// to discover the gap by adding the column up.
+		"on_account_total": out.OnAccountTotal.StringFixed(4),
 	})
 }
 
@@ -3216,7 +4804,9 @@ func (s *Server) handleGSTR1(w http.ResponseWriter, r *http.Request) {
 	if opts.CGSTLedgerID != uuid.Nil || opts.SGSTLedgerID != uuid.Nil || opts.IGSTLedgerID != uuid.Nil {
 		g, rec, err := s.gstr.Reconcile(ctx, from, to, opts)
 		if err != nil {
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			// D117 — the same status decision the other two returns make. This
+			// arm was named in D117's row as "check /gstr1 at the same time".
+			writeGSTR1Error(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -3228,10 +4818,21 @@ func (s *Server) handleGSTR1(w http.ResponseWriter, r *http.Request) {
 
 	g, err := s.gstr.Generate(ctx, from, to, opts)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeGSTR1Error(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, g)
+}
+
+// writeGSTR1Error is /gstr1's half of the D117 status decision: a refusal about
+// the books keeps its 422 and its sentence; a failure to READ them is a 500 the
+// operator can report. Both /gstr1 arms go through it so the two cannot drift.
+func writeGSTR1Error(w http.ResponseWriter, err error) {
+	if gstr.IsDataSource(err) {
+		writeBooksUnreadable(w, "GSTR-1", err)
+		return
+	}
+	writeError(w, http.StatusUnprocessableEntity, err.Error())
 }
 
 // --------------------------------------------------------------------------
@@ -3264,11 +4865,72 @@ func (s *Server) handleImportTallyXML(w http.ResponseWriter, r *http.Request) {
 			"version_no":         p.VersionNo,
 		})
 	}
+	// ⛔ WARNINGS ARE PART OF THE RESULT, NOT A LOG LINE. The importer carries on
+	// past what it cannot represent exactly — an opening bill-wise breakup that
+	// does not add up, a ledger whose Tally group is not in the file — and an
+	// operator who is told only "121 vouchers posted" will believe the migration
+	// was lossless when parts of it were not.
+	warnings := res.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	groups := res.GroupsEnsured
+	if groups == nil {
+		groups = []string{}
+	}
+	// D101: money the SOURCE books exclude. Never nil on the wire — a client that
+	// has to distinguish "no voided vouchers" from "this server does not report
+	// them" will get it wrong, and the wrong answer is the reassuring one.
+	voided := res.VoidedVouchers
+	if voided == nil {
+		voided = []string{}
+	}
+	tombstoned := res.LedgersTombstoned
+	if tombstoned == nil {
+		tombstoned = []string{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"source_company":  res.SourceCompany,
-		"vouchers_posted": res.VouchersPosted,
-		"ledgers_ensured": res.LedgersEnsured,
-		"posted":          posted,
+		"source_company":   res.SourceCompany,
+		"vouchers_posted":  res.VouchersPosted,
+		"vouchers_altered": res.VouchersAltered,
+		"vouchers_deleted": res.VouchersDeleted,
+		"vouchers_skipped": res.Skipped,
+		// ---- MONEY THE SOURCE BOOKS EXCLUDE (D101) -------------------------
+		//
+		// ⛔ DELIBERATELY NOT FOLDED INTO vouchers_skipped. That figure means "a
+		// voucher with this GUID was already imported"; these were never imported
+		// and never will be, because Tally keeps a CANCELLED or OPTIONAL voucher
+		// out of the books. An operator told their voided sales were "skipped"
+		// would read it as a duplicate-detection message and move on.
+		//
+		// ⚠️ "3 posted" against a file of 5 is the same class of silence the
+		// stock counts below exist to prevent, which is why this is on the wire
+		// rather than in a log line.
+		"vouchers_voided":    res.VouchersVoided,
+		"voided_vouchers":    voided,
+		"ledgers_tombstoned": tombstoned,
+		"groups_ensured":     groups,
+		"ledgers_ensured":    res.LedgersEnsured,
+		"warnings":           warnings,
+		"posted":             posted,
+		// ---- THE GOODS. ⛔ THESE SIX ARE THE ONLY THING ON THE WIRE THAT CAN
+		// TELL AN OPERATOR WHETHER THEIR STOCK ARRIVED. Quantity is invisible in
+		// a trial balance, so an import that read every stock line and threw it
+		// away answered 200 with a report that looked complete — which is exactly
+		// what this route did until the importer was taught quantities. A caller
+		// that sees `stock_lines: 0` on a file full of invoices knows something
+		// is wrong; one that sees `vouchers_posted: 121` does not.
+		//
+		// ⚠️ `opening_positions: 0` ON A FILE WITH STOCK LINES IS A WARNING, not a
+		// clean result: it means the export carried no opening stock, so every
+		// position starts at nil and the first issue of older goods will either
+		// be refused or consume nothing at all.
+		"stock_lines":         res.StockLines,
+		"opening_positions":   res.OpeningPositions,
+		"stock_items_ensured": res.StockItemsEnsured,
+		"units_ensured":       res.UnitsEnsured,
+		"godowns_ensured":     res.GodownsEnsured,
+		"batches_ensured":     res.BatchesEnsured,
 	})
 }
 
@@ -3447,6 +5109,19 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	preview, err := s.query.Preview(q)
 	if err != nil {
 		writeQueryInvalid(w)
+		return
+	}
+
+	// (2b) The route right admitted the DOOR; the entity decides the BYTES. A
+	// caller must be able to open every report whose figures this entity can
+	// reveal (query_authz.go, §6.10). After the compile, so a malformed
+	// DSL keeps its 422 and only a valid query is judged; before Run, so a
+	// refused query reads nothing.
+	if reason, err := s.queryReportDenial(ctx, companyID, q); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check report access")
+		return
+	} else if reason != "" {
+		writeError(w, http.StatusForbidden, reason)
 		return
 	}
 	res, err := s.query.Run(ctx, q)
@@ -4146,7 +5821,7 @@ func peekTallyXMLVoucherDate(body []byte) *time.Time {
 		return beforeEveryCutoff()
 	}
 	var earliest *time.Time
-	for _, m := range env.Body.Data.Messages {
+	for _, m := range env.Messages() {
 		if m.Voucher == nil {
 			continue // a LEDGER master message: nothing dated, nothing to back-date.
 		}
@@ -4174,10 +5849,42 @@ func peekTallyXMLVoucherDate(body []byte) *time.Time {
 // comments and whitespace and hands back the first real element — which is the
 // same thing encoding/xml will hand the importer.
 func isTallyEnvelope(body []byte) bool {
-	dec := xml.NewDecoder(bytes.NewReader(body))
+	// ⛔⛔ THROUGH NewTallyDecodeReader, AND THAT WORD IS THE WHOLE FIX (2026-08-25).
+	//
+	// This decoded the RAW BYTES. Every real TallyPrime export is UTF-16LE — that
+	// is defect #1 of the seven T32 found — so `xml.Decoder` hit "invalid UTF-8"
+	// on the first byte pair, this returned FALSE, and false means "not an
+	// envelope, no voucher can hide in it". Measured on the corpus fixture that
+	// carries the real shapes, on IDENTICAL BYTES:
+	//
+	//	integration.ParseTallyEnvelope  ->  12 messages, 1 voucher, DATED
+	//	peekTallyXMLVoucherDate         ->  nil   (the cutoff does not apply)
+	//	peekTallyXMLSupersededGUIDs     ->  []    (the step-up names nothing)
+	//	CONTROL, the same document in UTF-8  ->  2025-04-10, seen correctly
+	//
+	// So the back-dated cutoff and the superseded-voucher step-up were BOTH inert
+	// on the only encoding a real Tally file actually uses, while the importer
+	// read that same file perfectly and posted every voucher in it. An operator
+	// who cannot key one back-dated journal could import ten thousand of them.
+	//
+	// ⚠️ T32 BELIEVED IT HAD FIXED THIS AND HAD NOT. It fixed the ENVELOPE SHAPE
+	// (BODY > IMPORTDATA > REQUESTDATA) in both peeks, so they now walk a real
+	// export's messages — but they never get there, because this gate upstream of
+	// them still could not read the bytes. A fix to the second stage of a pipeline
+	// is worth nothing while the first stage returns false.
+	//
+	// It is the SAME rule this file states six times over for JSON, in XML: A PEEK
+	// THAT DECIDES A WRITE'S FATE MUST DECODE THE BODY THE WAY THE HANDLER DECODES
+	// IT. The handler decodes it with NewTallyDecodeReader. So does this now.
+	dec := xml.NewDecoder(integration.NewTallyDecodeReader(bytes.NewReader(body)))
 	// Lenient for the same reason ParseTallyEnvelope is: real Tally exports
 	// declare namespace prefixes (xmlns:UDF) that the strict decoder rejects.
 	dec.Strict = false
+	// Anything reaching the decoder is already UTF-8, so a declared encoding is
+	// passed straight through rather than refused as unsupported — ParseTallyEnvelope
+	// does exactly this, and a peek that refused what the parser accepts would be
+	// the same disagreement in the other direction.
+	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -4399,4 +6106,55 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeCodedError is writeError plus a MACHINE-READABLE code, for the refusals a
+// client has to tell apart from every other failure of the same status.
+//
+// ⛔ THE TWO KEYS ARE FOR TWO DIFFERENT READERS and both are load-bearing — the
+// same split writeDraftAlreadyAccepted documents at length. `error` is the
+// sentence a human reads and the only key http.ts lifts into ApiError.message;
+// `code` is the stable token a screen switches on. A screen that has to
+// recognise a refusal by matching its PROSE is a screen that breaks the next
+// time somebody improves the wording — and it is why D112 shipped: the payroll
+// register had nothing but the sentence, so an ordinary unrun month and a real
+// server failure were literally indistinguishable to it.
+func writeCodedError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+}
+
+// writeDraftAlreadyAccepted refuses a second accept of one insightd draft.
+//
+// ⛔⛔ THE BODY SHAPE IS insightd'S, NOT CORED'S, AND THAT IS THE WHOLE POINT OF
+// WRITING IT BY HAND HERE. The browser's duplicate-bill guard reads
+// `err.body.detail.code` on a 409 and translates exactly three insightd codes
+// into sentences an operator can act on (draftAccept.ts's conflictCode /
+// conflictField). `draft_already_accepted` is one of them, and it already names
+// the winning voucher in `accepted_voucher_no` / `accepted_voucher_id`. Emitting
+// cored's usual {"error": ...} instead would leave the client with an unrecognised
+// 409 — still a refusal, but a generic one that could not tell the operator WHICH
+// voucher their bill is already on, which is the single most useful fact here.
+//
+// `error` is carried AS WELL so ApiError.message is a sentence rather than
+// "request failed: 409" — http.ts reads that key and nothing else for the message.
+// Two keys, one refusal, and both readers get what they parse.
+func writeDraftAlreadyAccepted(w http.ResponseWriter, e *ledger.DraftAlreadyAcceptedError) {
+	detail := map[string]any{
+		"code":     "draft_already_accepted",
+		"draft_id": e.DraftID,
+	}
+	// Only ever the winner's REAL identity. An empty voucher_no is left out rather
+	// than sent as "", because the client renders `accepted_voucher_no ||
+	// accepted_voucher_id` and an empty string that is present reads to a human as
+	// a voucher with no number.
+	if e.VoucherNo != "" {
+		detail["accepted_voucher_no"] = e.VoucherNo
+	}
+	if e.VoucherID != uuid.Nil {
+		detail["accepted_voucher_id"] = e.VoucherID.String()
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":  e.Error(),
+		"detail": detail,
+	})
 }

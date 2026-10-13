@@ -11,30 +11,29 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // TallyPrime "legacy-faithful" blue palette.
+        // Compatibility aliases keep every existing workspace screen on the
+        // shared CSS tokens. <alpha-value> preserves classes such as /50.
         tally: {
-          bg: "#0a1e5e", // deep blue application background
-          panel: "#13287a", // panel / menu background
-          field: "#ffffff", // white data-entry field background
-          fieldText: "#000080", // navy field text
-          accent: "#ffd24d", // yellow highlight / active field
-          active: "#1f9d55", // green active-field highlight (Tally's green cursor)
-          bar: "#c9d4ff", // light button-bar background
-          barText: "#0a1e5e",
-          barKey: "#b30000", // red key letter on a button
-          title: "#ffd24d",
+          bg: "rgb(var(--tw-color-canvas) / <alpha-value>)",
+          panel: "rgb(var(--tw-color-panel) / <alpha-value>)",
+          field: "rgb(var(--tw-color-text) / <alpha-value>)",
+          fieldText: "rgb(var(--tw-color-ink) / <alpha-value>)",
+          accent: "rgb(var(--tw-color-accent) / <alpha-value>)",
+          active: "rgb(var(--tw-color-success) / <alpha-value>)",
+          bar: "rgb(var(--tw-color-bar) / <alpha-value>)",
+          barText: "rgb(var(--tw-color-canvas) / <alpha-value>)",
+          barKey: "rgb(var(--tw-color-danger) / <alpha-value>)",
+          title: "rgb(var(--tw-color-accent) / <alpha-value>)",
+          muted: "rgb(var(--tw-color-muted) / <alpha-value>)",
+          border: "rgb(var(--tw-color-border) / <alpha-value>)",
         },
       },
       fontFamily: {
-        mono: [
-          "ui-monospace",
-          "SFMono-Regular",
-          "Menlo",
-          "Consolas",
-          "Liberation Mono",
-          "monospace",
-        ],
+        sans: ["var(--tw-font-sans)"],
+        mono: ["var(--tw-font-mono)"],
       },
+      spacing: Object.fromEntries([1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24].map(n => [n, `var(--tw-space-${n})`])),
+      borderRadius: { sm: "var(--tw-radius-sm)", md: "var(--tw-radius-md)", lg: "var(--tw-radius-lg)" },
     },
   },
   plugins: [],

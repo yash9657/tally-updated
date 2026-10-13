@@ -319,6 +319,85 @@ describe("⛔ a stock item can be given a REAL unit", () => {
     expect(seen[0]!.unit_symbol).not.toBe("Nos");
   });
 
+  it("⛔ T9: the COSTING METHOD is chosen here and it is what goes on the wire", async () => {
+    const base = createMockClient();
+    const seen: (string | undefined)[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockItem: vi.fn(async (c: string, req) => {
+        seen.push(req.valuation_method);
+        return base.createStockItem(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Stock Item");
+
+    type("master-name", "FIFO Rice");
+    const units = screen.getByRole("combobox", { name: "Units" });
+    fireEvent.change(units, { target: { value: "Kg" } });
+    fireEvent.mouseDown(screen.getByText("Kg"));
+
+    // The picker is built from the SERVER's vocabulary, not from a list in this
+    // file: a form that offered a method cored refuses would meet that refusal
+    // only after the whole master had been keyed.
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /^FIFO —/ })).toBeTruthy();
+    });
+    type("master-item-valuation-method", "FIFO");
+    // Choosing one shows what it MEANS. "FIFO" alone tells an operator nothing
+    // about which of the three to pick, and the choice moves the Balance Sheet.
+    expect(
+      screen.getByTestId("master-item-valuation-basis").textContent,
+    ).toMatch(/MOST RECENT purchases cost/);
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(seen).toEqual(["FIFO"]);
+    // ⛔ AND THE STORED ROW SAYS SO. The failure this guards against answers 201
+    // with the key accepted and discarded (register row D43), which no assertion
+    // on the request alone can tell apart from a working write.
+    const stored = await base.listStockItems(COMPANY);
+    expect(
+      stored.stock_items.find((i) => i.name === "FIFO Rice")?.valuation_method,
+    ).toBe("FIFO");
+    // The status line names the basis, so an item created on the default is
+    // distinguishable from one where the choice was dropped.
+    expect(statusLine()).toContain("valued FIFO");
+  });
+
+  it("⛔ T9: choosing NOTHING sends NOTHING, so the server's own default stands", async () => {
+    // The polarity that matters. Sending "WEIGHTED_AVG" explicitly would make
+    // this form assert a choice the operator never made — and it would be the
+    // client, not the server, deciding what an unspecified item is worth.
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockItem: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createStockItem(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Stock Item");
+    type("master-name", "Default Rice");
+    const units = screen.getByRole("combobox", { name: "Units" });
+    fireEvent.change(units, { target: { value: "Kg" } });
+    fireEvent.mouseDown(screen.getByText("Kg"));
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(seen).toHaveLength(1);
+    expect("valuation_method" in seen[0]!).toBe(false);
+    const stored = await base.listStockItems(COMPANY);
+    expect(
+      stored.stock_items.find((i) => i.name === "Default Rice")
+        ?.valuation_method,
+    ).toBe("WEIGHTED_AVG");
+  });
+
   it("⛔ an item with NO unit is refused here, STRICTER than the server", async () => {
     // masters.CreateStockItem writes `unit_id NULL` for an empty unit_symbol with
     // no CHECK and no refusal, and the ONLY thing that ever notices is the
@@ -330,7 +409,10 @@ describe("⛔ a stock item can be given a REAL unit", () => {
     // code is what row 20 was.
     const base = createMockClient();
     const create = vi.fn(base.createStockItem);
-    const app = renderShell({ ...base, createStockItem: create } as CoredClient);
+    const app = renderShell({
+      ...base,
+      createStockItem: create,
+    } as CoredClient);
     goTo(app, "Create Stock Item");
     type("master-name", "Unitless Widget");
     await act(async () => {
@@ -345,7 +427,10 @@ describe("⛔ a stock item can be given a REAL unit", () => {
     // A path that refuses everything looks identical to a working refusal.
     const base = createMockClient();
     const create = vi.fn(base.createStockItem);
-    const app = renderShell({ ...base, createStockItem: create } as CoredClient);
+    const app = renderShell({
+      ...base,
+      createStockItem: create,
+    } as CoredClient);
     goTo(app, "Create Stock Item");
     type("master-name", "Unitless Widget");
     fireEvent.mouseDown(screen.getByText("Nos"));
@@ -572,9 +657,9 @@ describe("⛔ D92: a refused Ctrl+A keeps the form, the keying and the cursor", 
     expect(screen.queryByTestId("master-opening-balance")).not.toBeNull();
     // ⛔ AND THE KEYING SURVIVED. This is the assertion the operator cares
     // about; the frame being up is worth nothing if it came back empty.
-    expect(
-      (screen.getByTestId("master-name") as HTMLInputElement).value,
-    ).toBe("Pop Probe Party");
+    expect((screen.getByTestId("master-name") as HTMLInputElement).value).toBe(
+      "Pop Probe Party",
+    );
     // Nothing was sent — a refusal that also POSTs is D89's shape.
     expect(calls).toHaveLength(0);
     // The reason reached the operator, on the screen they can still act on.
@@ -725,9 +810,9 @@ describe("⛔ D87: the party block reaches the wire, and a party without a state
     expect(calls).toHaveLength(0);
     expect(statusLine()).toMatch(/needs a STATE CODE/i);
     // And D92: the form is still up with the keying intact.
-    expect(
-      (screen.getByTestId("master-name") as HTMLInputElement).value,
-    ).toBe("Stateless Party");
+    expect((screen.getByTestId("master-name") as HTMLInputElement).value).toBe(
+      "Stateless Party",
+    );
   });
 
   it("does NOT demand a state code on a non-party ledger", async () => {
@@ -858,5 +943,330 @@ describe("⛔ D87: the party block reaches the wire, and a party without a state
     // Before D87 this request carried no registration_type at all and the
     // column default made it UNKNOWN.
     expect(calls[0]!.registration_type).toBe("UNREGISTERED");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// T10 — STOCK GROUPS AND COMPOUND UNITS, from the keyboard.
+//
+// ⛔ THESE CASES LIVE HERE RATHER THAN IN A FILE OF THEIR OWN, exactly as T9's
+// did, because the helpers above are the whole point of the file: `altMac`
+// sends the key a Mac ACTUALLY sends (Option+G composes to "©"), and a second
+// copy of that idiom in a sibling file is how one of them drifts back to
+// `key: "g"` and certifies a door that does not open.
+//
+// What is pinned: the door (Alt+G reaches both forms), the fact that the stock
+// group picker is SERVED (there are no built-in stock groups, so a hardcoded
+// list would be a list the server refuses), what goes ON THE WIRE for both
+// masters, and the half-a-conversion refusal that happens BEFORE the request.
+// ---------------------------------------------------------------------------
+describe("⛔ T10: the stock group picker is SERVED, because there are no built-in groups", () => {
+  it("Alt+G > Create Stock Group opens the form, with a PARENT field and nothing else to key", () => {
+    const app = renderShell(createMockClient());
+    expect(screen.queryByTestId("master-create:stock-group")).toBeNull();
+    goTo(app, "Create Stock Group");
+    expect(screen.getByTestId("master-create:stock-group")).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Under (parent stock group)" }),
+    ).toBeTruthy();
+    // A group holds no stock of its own — its items do — so there is no opening,
+    // no rate and no unit here. The form says so rather than showing nothing.
+    expect(screen.queryByTestId("master-item-opening-qty")).toBeNull();
+    expect(screen.queryByTestId("master-unit-decimals")).toBeNull();
+  });
+
+  it("⛔ offers NOTHING on a company with no groups, and the company's OWN group once it has one", async () => {
+    // ⛔ THE MUTATION THIS CATCHES: seed the picker with Tally's built-in-looking
+    // names ("Primary", "Raw Materials", "Finished Goods") the way LEDGER_PARENT_GROUPS
+    // seeds the ledger form. A stock group has no built-ins at all — a company
+    // starts with NONE — so every one of those options would be refused with a
+    // 404 AFTER the whole master had been keyed.
+    const client = createMockClient();
+    const app = renderShell(client);
+    goTo(app, "Create Stock Group");
+    const picker = screen.getByRole("combobox", {
+      name: "Under (parent stock group)",
+    });
+    fireEvent.change(picker, { target: { value: "" } });
+    expect(screen.queryByText("Primary")).toBeNull();
+    expect(screen.queryByText("Raw Materials")).toBeNull();
+    // The ledger form's own built-ins are RIGHT there in the same component, so
+    // this is not a vacuous absence: they must not leak across kinds.
+    expect(screen.queryByText("Sundry Creditors")).toBeNull();
+
+    // Give the company one group and the picker offers it — served, not listed.
+    await client.createStockGroup(COMPANY, { name: "Provisions" });
+    cleanup();
+    const app2 = renderShell(client);
+    goTo(app2, "Create Stock Group");
+    await waitFor(() => {
+      expect(screen.getByText("Provisions")).toBeTruthy();
+    });
+  });
+
+  it("sends name + parent_name, and the stored hierarchy says so", async () => {
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockGroup: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createStockGroup(c, req);
+      }),
+    };
+    await base.createStockGroup(COMPANY, { name: "Provisions" });
+
+    const app = renderShell(client);
+    goTo(app, "Create Stock Group");
+    type("master-name", "Grains");
+    const picker = screen.getByRole("combobox", {
+      name: "Under (parent stock group)",
+    });
+    fireEvent.change(picker, { target: { value: "Provisions" } });
+    await waitFor(() => {
+      expect(screen.getByText("Provisions")).toBeTruthy();
+    });
+    fireEvent.mouseDown(screen.getByText("Provisions"));
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(seen).toEqual([{ name: "Grains", parent_name: "Provisions" }]);
+    // ⛔ AND IT IS READ BACK. A body key accepted and discarded answers 201
+    // (register row D43), which no assertion on the request alone can tell apart
+    // from a working write — and a child that lost its parent is a subtotal in
+    // the wrong branch.
+    const stored = await base.listStockGroups(COMPANY);
+    const grains = stored.stock_groups.find((g) => g.name === "Grains");
+    expect(grains?.parent_name).toBe("Provisions");
+    expect(grains?.depth).toBe(1);
+  });
+
+  it("a TOP-LEVEL group sends no parent_name at all, rather than an empty one", async () => {
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockGroup: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createStockGroup(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Stock Group");
+    type("master-name", "Provisions");
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(seen).toHaveLength(1);
+    expect("parent_name" in seen[0]!).toBe(false);
+    expect(statusLine()).toMatch(/top of the item tree/i);
+  });
+
+  it("⛔ the item form sends stock_group_name, and the item is STORED in that group", async () => {
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockItem: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createStockItem(c, req);
+      }),
+    };
+    await base.createStockGroup(COMPANY, { name: "Provisions" });
+
+    const app = renderShell(client);
+    goTo(app, "Create Stock Item");
+    type("master-name", "Basmati Rice");
+    const units = screen.getByRole("combobox", { name: "Units" });
+    fireEvent.change(units, { target: { value: "Nos" } });
+    fireEvent.mouseDown(screen.getByText("Nos"));
+    // The group picker is a <select> over the company's own groups — no
+    // create-as-you-type, because a group minted from a misspelling subtotals
+    // half a company's stock under a name nobody meant.
+    await waitFor(() => {
+      expect(
+        Array.from(
+          screen
+            .getByTestId("master-item-stock-group")
+            .querySelectorAll("option"),
+        ).map((o) => o.textContent),
+      ).toContain("Provisions");
+    });
+    type("master-item-stock-group", "Provisions");
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.stock_group_name).toBe("Provisions");
+    const stored = await base.listStockItems(COMPANY);
+    expect(
+      stored.stock_items.find((i) => i.name === "Basmati Rice")?.stock_group,
+    ).toBe("Provisions");
+  });
+
+  it("an UNGROUPED item sends no stock_group_name — ungrouped is a real state", async () => {
+    // The polarity that matters, and the same one T9's default-method case pins:
+    // sending "" would be the client asserting a filing the operator never made,
+    // and the Stock Summary reports the ungrouped bucket by name.
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockItem: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createStockItem(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Stock Item");
+    type("master-name", "Loose Widget");
+    const units = screen.getByRole("combobox", { name: "Units" });
+    fireEvent.change(units, { target: { value: "Nos" } });
+    fireEvent.mouseDown(screen.getByText("Nos"));
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(seen).toHaveLength(1);
+    expect("stock_group_name" in seen[0]!).toBe(false);
+  });
+});
+
+/**
+ * The symbols the base-unit picker is OFFERING. It is a served list (GET /units)
+ * and therefore arrives a tick after the form does, which is why every use of it
+ * below is inside a `waitFor` — a test that read it synchronously would read the
+ * placeholder alone and then quietly select nothing.
+ */
+function baseUnitOptions(): (string | null)[] {
+  return Array.from(
+    screen.getByTestId("master-unit-base").querySelectorAll("option"),
+  ).map((o) => o.textContent);
+}
+
+describe("⛔ T10: a compound unit is keyed as 1 BOX = 12 Nos, and half of one is refused", () => {
+  it("sends base_unit_symbol and a conversion_factor that is a DECIMAL STRING", async () => {
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createUnit: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createUnit(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Unit");
+    type("master-name", "BOX");
+    type("master-unit-decimals", "0");
+    // The base picker offers the company's OWN units, SERVED by GET /units —
+    // a base unit has to exist before something can be measured in it, so a
+    // hardcoded list here would offer bases this company does not have.
+    await waitFor(() => {
+      expect(baseUnitOptions()).toContain("Nos");
+    });
+    type("master-unit-base", "Nos");
+    type("master-unit-conversion", "12");
+    // Choosing a base states the consequence BEFORE the save: quantities stay in
+    // the outer unit, and the base figure is a derived column.
+    expect(
+      screen.getByTestId("master-unit-compound-note").textContent,
+    ).toMatch(/restates the closing quantity/i);
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.base_unit_symbol).toBe("Nos");
+    // ⛔ A DECIMAL STRING, NOT A NUMBER. Every quantity and every money figure on
+    // this wire is a fixed-4 string; a JSON number here would go through a float
+    // on the way to a NUMERIC(20,4) column, and 1 BOX = 12 Nos is exactly the
+    // shape of value where nobody would ever notice.
+    expect(seen[0]!.conversion_factor).toBe("12.0000");
+    expect(typeof seen[0]!.conversion_factor).toBe("string");
+
+    const stored = await base.listUnits(COMPANY);
+    const box = stored.units.find((u) => u.symbol === "BOX");
+    expect(box?.base_unit_symbol).toBe("Nos");
+    expect(box?.conversion_factor).toBe("12.0000");
+    expect(statusLine()).toContain("1 BOX = 12.0000 Nos");
+  });
+
+  it("a SIMPLE unit sends neither half, rather than a base of \"\" and a factor of zero", async () => {
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createUnit: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createUnit(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Unit");
+    type("master-name", "Kg");
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(seen).toHaveLength(1);
+    expect("base_unit_symbol" in seen[0]!).toBe(false);
+    expect("conversion_factor" in seen[0]!).toBe(false);
+    // And the conversion field is not even rendered until a base is chosen, so
+    // "a factor with no base" is unreachable from this form — it is still
+    // refused in `build`, in the service and by a CHECK, because HTTP is not
+    // this screen.
+    expect(screen.queryByTestId("master-unit-conversion")).toBeNull();
+  });
+
+  it("⛔ HALF a conversion is refused BEFORE the request, naming the missing field", async () => {
+    // ⛔ THE POINT IS THAT NOTHING IS SENT. The server refuses this too (and a
+    // CHECK constraint refuses behind it), but a form that spends the operator's
+    // whole keying on a 422 about a conversion tells them less than a sentence
+    // naming the field they left blank.
+    const base = createMockClient();
+    const create = vi.fn(base.createUnit);
+    const app = renderShell({ ...base, createUnit: create } as CoredClient);
+    goTo(app, "Create Unit");
+    type("master-name", "BOX");
+    await waitFor(() => {
+      expect(baseUnitOptions()).toContain("Nos");
+    });
+    type("master-unit-base", "Nos");
+    // ...and no factor.
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(statusLine()).toMatch(/1 BOX = \? Nos/);
+    expect(statusLine()).toMatch(/Nothing was created/i);
+    // The form is still up with the keying in it (D92) — a refusal that costs
+    // the operator their typing is a refusal they will route around.
+    expect(screen.getByTestId("master-create:unit")).toBeTruthy();
+    expect(
+      (screen.getByTestId("master-name") as HTMLInputElement).value,
+    ).toBe("BOX");
+  });
+
+  it("⛔ a factor of ZERO is refused, because it would make every quantity worth nothing", async () => {
+    const base = createMockClient();
+    const create = vi.fn(base.createUnit);
+    const app = renderShell({ ...base, createUnit: create } as CoredClient);
+    goTo(app, "Create Unit");
+    type("master-name", "BOX");
+    await waitFor(() => {
+      expect(baseUnitOptions()).toContain("Nos");
+    });
+    type("master-unit-base", "Nos");
+    type("master-unit-conversion", "0");
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(statusLine()).toMatch(/greater than zero/i);
   });
 });

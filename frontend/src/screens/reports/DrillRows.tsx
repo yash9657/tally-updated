@@ -30,6 +30,24 @@ export interface DrillRow {
   readonly depth?: number;
   /** Whether this row is drillable (false = a total/computed line). */
   readonly drillable?: boolean;
+  /**
+   * WHAT KIND OF ROW THIS IS, in the report's own words — `Section`, `Group`,
+   * `Ledger`, `Computed`, `Total`, `Party`, `Bill` (D109, D118).
+   *
+   * ⛔ IT IS FOR THE EXPORT AND NOT FOR THE SCREEN. On screen a row's kind is in
+   * its indentation and its CSS — the section header is bold, a child is `pl-4`
+   * — and CSS does not survive Alt+E, which is the whole defect: a file whose
+   * parents and children look alike sums to a multiple of its own total.
+   *
+   * ⛔ DECLARED, NOT INFERRED. It could be read off the `rowKey` prefix, and
+   * that inference would be wrong the first time a screen picked a prefix for a
+   * NAVIGATION reason — which is what those prefixes are for. It is one word at
+   * the site that already knows the answer.
+   *
+   * A screen supplies it on EVERY row or on none; `useReportView`'s `levels`
+   * flag is what turns the column on. See reportView.ts.
+   */
+  readonly level?: string;
   /** The rendered cells, laid out by the parent's column template. */
   readonly cells: React.ReactNode;
   /**

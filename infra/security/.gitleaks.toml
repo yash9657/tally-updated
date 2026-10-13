@@ -41,6 +41,18 @@ description = "Known dev-only fixtures and local credentials — not real secret
 regexes = [
   '''tally_app:tally_app''',
   '''postgres:postgres''',
+  # SYNTHETIC GSTINs/PANs keyed by the browser drive scripts
+  # (frontend/scripts/drive-*.mjs). They are allowed BY VALUE, not by path, so
+  # a real GSTIN pasted into a drive script still fails this scan:
+  #   29AABCU9603R1ZM  the sample GSTIN published in GST documentation
+  #   29AAACA1111A1Z5  a made-up Karnataka party
+  #   ABCPD1234E, ABCPD9999F  made-up employee PANs (drive-payroll)
+  #   AAACP1234A              a made-up Form 138 deductor PAN
+  '''29AABCU9603R1ZM''',
+  '''29AAACA1111A1Z5''',
+  '''ABCPD1234E''',
+  '''ABCPD9999F''',
+  '''AAACP1234A''',
 ]
 paths = [
   '''Makefile''',

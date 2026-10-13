@@ -63,6 +63,7 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   // prints a SAVED voucher — including one saved a moment ago by Ctrl+A — and
   // says so when there is nothing to print yet.
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Ctrl+A", "Accept"),
   item("Ctrl+Q", "Quit"),
   item("F1", "Help"),
@@ -106,6 +107,10 @@ const GATEWAY_BAR: readonly ButtonBarItem[] = [
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
   item("Ctrl+N", "Calculator"),
+  // W2: the agent side panel. On the Gateway's bar because the Gateway is where
+  // an operator who has never heard of Ctrl+K will look; the key works on every
+  // screen.
+  item("Ctrl+K", "Agent"),
 ];
 
 const REPORT_BAR: readonly ButtonBarItem[] = [
@@ -117,6 +122,7 @@ const REPORT_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+F", "Filter"),
   item("Alt+E", "Export"),
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
   item("F1", "Help"),
@@ -153,6 +159,7 @@ const BANK_RECON_BAR: readonly ButtonBarItem[] = [
   item("F4", "Bank"),
   item("Alt+O", "Import"),
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Ctrl+A", "Accept"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
@@ -323,6 +330,113 @@ const BOM_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * THE EMPLOYEE MASTER bar (Track 3).
+ *
+ * ⛔ TWO WRITE KEYS, AND THE SECOND ONE IS NOT A REFINEMENT. Alt+C creates the
+ * person; Alt+S sets their salary structure and statutory election, WITHOUT WHICH
+ * cored refuses the entire pay run — "no salary structure is in force", "no
+ * statutory election is in force" — and refuses it on the RUN, long after the
+ * operator left this screen believing the record was complete. A bar that
+ * advertised only Alt+C would be advertising half a task.
+ *
+ * Ctrl+P is NOT here, for the reason TDS_CHALLAN_BAR gives: there is no printed
+ * layout for a list of employees, so the key could only explain itself — and an
+ * operator reaches for a bar button by position from then on. It stays bound
+ * globally, and printTarget answers it with a sentence.
+ */
+const EMPLOYEES_BAR: readonly ButtonBarItem[] = [
+  item("Alt+C", "New Employee"),
+  item("Alt+S", "Set Pay"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE PAY RUN bar (Track 3).
+ *
+ * Ctrl+A is the only write, and it writes a whole month at once. F2 is NOT here:
+ * a pay run has no date to set — the server DERIVES the voucher date from the
+ * wage month (the last day of it), which is also the date the back-dated cutoff
+ * judges, so a date on this bar would advertise a choice the server overwrites.
+ */
+const PAY_RUN_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+A", "Post Pay Run"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE PAYROLL REGISTER bar (Track 3).
+ *
+ * Ctrl+P IS here, unlike on every other screen added in this wave, and that is a
+ * fact and not a preference: `payroll-register` has a REAL printed layout on the
+ * server (handler_print_reports.go's `printPayrollRegister`, with the ruleset
+ * versions laid out on the page), so the key produces a document rather than a
+ * sentence. Alt+E writes the rows on screen to a spreadsheet.
+ *
+ * Alt+S opens the statutory files panel — the EPFO ECR and the ESIC monthly
+ * return for the month on screen. ⚠️ Form 138 is deliberately NOT on this bar: it
+ * is QUARTERLY and needs a TAN, a deductor PAN and every challan's counterfoil,
+ * none of which is in the database, so it is a FORM on its own screen (Alt+G >
+ * Form 138). A button beside two one-click downloads would imply it takes one
+ * click, and the operator would meet four 400s discovering otherwise.
+ *
+ * F2 is NOT here: this register's dimension is a WAGE MONTH typed on its own
+ * face, never a From/To range — see the keymap's note on F2 for why a range is a
+ * span no statutory scheme has an answer for.
+ */
+const PAYROLL_REGISTER_BAR: readonly ButtonBarItem[] = [
+  item("Alt+S", "Statutory Files"),
+  item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
+  item("Alt+E", "Export"),
+  item("Enter", "Payslip"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE PAYSLIP bar (Track 3). A pure reader with a real printed layout
+ * (`printPayrollPayslip`), so Ctrl+P produces the document an employee is handed.
+ *
+ * There is no Alt+E: a payslip is one person's document, not a table of rows, and
+ * a CSV of it invites the one thing a payslip must not become — a column in
+ * somebody's spreadsheet of everybody's pay. The register is where rows are
+ * exported, and it is ACL'd as its own report name for exactly that reason.
+ */
+const PAYSLIP_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE FORM 138 bar (Track 3). Ctrl+A builds and downloads the statement.
+ *
+ * ⛔ "Download" AND NOT "File". Nothing this screen produces has been through the
+ * department's FVU — it cannot run in this environment — and the archive says so
+ * on its own face, in a README the download cannot be separated from. A button
+ * labelled "File Return" would be a claim about a filing that has not happened.
+ */
+const FORM_138_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+A", "Download"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** Screens that are pure readers (Help, Features): Esc out, nothing to save. */
 const READER_BAR: readonly ButtonBarItem[] = [
   item("Esc", "Back"),
@@ -330,12 +444,127 @@ const READER_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+G", "Switch To"),
 ];
 
+/**
+ * THE DATA SCREEN (Alt+Y) — backup and restore.
+ *
+ * Ctrl+A is not offered and that is deliberate: this screen has nothing to
+ * "accept". Its two actions are a download and an upload, each with its own
+ * consequence, and a generic Accept would have to pick one of them for the
+ * operator.
+ */
+const DATA_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * MIGRATE FROM TALLY (Alt+O) — the TallyPrime XML import screen (T32).
+ *
+ * Ctrl+A is not offered, deliberately and for the same reason the Data screen
+ * does not offer it: this screen has nothing to "accept". Its one action is an
+ * import that is not undoable, and it is behind a named button next to the file
+ * that was chosen — a generic "Accept (save) the screen" would fire an
+ * irreversible write from a key an operator presses reflexively on every form in
+ * the product.
+ */
+const TALLY_IMPORT_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * RECONCILIATION QUEUE (track D) — the refused alters and deletes.
+ *
+ * ⛔ NO ACCEPT KEY AND NO ADVERTISED WRITE. The screen's one write — clearing an
+ * entry — is a NAMED BUTTON per row and deliberately not on the bar: "Accept"
+ * would fire it from a key operators press reflexively on every form, and what it
+ * clears is the only record that somebody's work was refused. The same reasoning
+ * TALLY_IMPORT_BAR above carries for its irreversible import.
+ */
+const RECONCILIATION_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * PRINT TEMPLATES (track C) — the per-company document layouts.
+ *
+ * Ctrl+A is not offered, for the reason the Data and import screens do not offer
+ * it: this screen has TWO named actions with different consequences — save a
+ * layout, and clear a customisation — and a generic "Accept (save) the screen"
+ * cannot say which it would do. Both are behind named buttons, and the clear
+ * button appears only when there is something to clear.
+ */
+const PRINT_TEMPLATES_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * OFFLINE OUTBOX (track D) — the vouchers this machine is holding.
+ *
+ * Ctrl+A is not offered, for exactly the reason the two bars above do not offer
+ * it: this screen has TWO named actions with different consequences — commit the
+ * whole queue to the books, and discard one voucher — and a generic "Accept the
+ * screen" cannot say which it would do. On a screen where one of those two
+ * choices writes somebody's invoices into the ledger and the other deletes work
+ * that exists nowhere else, an ambiguous key is the wrong kind of convenience.
+ * Both are named buttons.
+ */
+const OFFLINE_OUTBOX_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** The AI-native screens (Bill Inbox, Ask your books). */
+/**
+ * ⛔ ALT+M SITS BESIDE Ctrl+P ON EVERY BAR THAT HAS ONE, AND NOWHERE ELSE (B2).
+ *
+ * That is not a layout preference, it is the same invariant `usePrintAction`
+ * enforces in code: Alt+M asks `resolvePrintTarget` the identical question Ctrl+P
+ * does, so a screen that can print its document can e-mail it and a screen that
+ * cannot refuses both with the same sentence. A bar offering one without the other
+ * would advertise a difference that does not exist — and the bars that omit Ctrl+P
+ * (the TDS challan register, both order books, the BOM screen) omit Alt+M for the
+ * reason they already state: there is no printed layout to send.
+ *
+ * ⚠️ THE LABEL IS "E-Mail" AND THE FULL SENTENCE IS IN `actionLabel()`. There is
+ * no room on a bar for "saves the PDF, opens your mail client", and F1's keyboard
+ * help is where an operator reads what a key actually does.
+ */
 const AI_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
+];
+
+/**
+ * THE APPROVAL INBOX (W2). Every decision key is on the bar because the inbox
+ * is where a person commits the business to what an agent proposed, and a key
+ * that has to be remembered rather than read is a key somebody presses by
+ * mistake. "Approve" and not "Accept": Ctrl+A here records a decision and posts
+ * nothing — the agent commits afterwards — and "Accept (save)" would say it did.
+ */
+const APPROVAL_INBOX_BAR: readonly ButtonBarItem[] = [
+  item("Enter", "Open to edit"),
+  item("Ctrl+A", "Approve"),
+  item("Alt+X", "Reject"),
+  item("Alt+B", "Ask back"),
+  item("Ctrl+K", "Agent"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("F1", "Help"),
 ];
 
 /**
@@ -392,6 +621,21 @@ export function buttonBarFor(
       return ORDER_REGISTER_BAR;
     case "boms":
       return BOM_BAR;
+    // The five PAYROLL screens, for the reason every case here exists: without
+    // them they fall through to GATEWAY_BAR, WHICH NO TEST CATCHES. The bar would
+    // advertise F3 Company and F11 Features over a half-keyed employee and say
+    // nothing about Alt+C — or about Alt+S, which is the only key that makes a
+    // person payable at all, and whose absence cored reports only on the pay run.
+    case "employees":
+      return EMPLOYEES_BAR;
+    case "payroll-run":
+      return PAY_RUN_BAR;
+    case "payroll-register":
+      return PAYROLL_REGISTER_BAR;
+    case "payroll-payslip":
+      return PAYSLIP_BAR;
+    case "payroll-form-138":
+      return FORM_138_BAR;
     case "master-create":
       return MASTER_BAR;
     case "gateway":
@@ -402,6 +646,24 @@ export function buttonBarFor(
     case "help":
     case "features":
       return READER_BAR;
+    case "data":
+      return DATA_BAR;
+    case "tally-import":
+      return TALLY_IMPORT_BAR;
+    case "reconciliation":
+      return RECONCILIATION_BAR;
+    case "print-templates":
+      return PRINT_TEMPLATES_BAR;
+    case "offline-outbox":
+      return OFFLINE_OUTBOX_BAR;
+    // W2, for the reason every case here exists: without it the inbox falls
+    // through to GATEWAY_BAR and advertises F3 Company over a list of proposals
+    // while saying nothing about the three decision keys.
+    case "approval-inbox":
+      return APPROVAL_INBOX_BAR;
+    // W4: a reader with screen-local letter keys; nothing on the bar applies.
+    case "insights":
+      return AI_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;

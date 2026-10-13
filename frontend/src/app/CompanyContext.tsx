@@ -100,6 +100,9 @@ function configHomeStateCode(): string {
  *      rewrites a `?company=` that is still sitting in the address bar.
  *   2. `?company=<uuid>` in the URL (below). It beats localStorage, and on a
  *      successful hydrate it BECOMES the persisted id.
+ *      ⛔ **A `?company=` that is present but NOT uuid-shaped stops here — it
+ *      does NOT fall through to 3.** Falling through was a defect, not a
+ *      convenience: see {@link URLCompanyId}.
  *   3. The persisted id in localStorage (the previous session's company).
  *   4. Nothing at all -> mint "My Company" (only when `bootstrap` is on).
  *
@@ -123,32 +126,80 @@ function configHomeStateCode(): string {
  */
 
 /**
- * A company id supplied in the URL (`?company=<uuid>`). It WINS over whatever is
- * persisted and is itself persisted, so a link opens a specific set of books and
- * subsequent reloads stay on them — the seeded demo company (see
- * `scripts/seed-demo.mts`) is shared exactly this way. Anything that is not a
- * plausible uuid is ignored rather than sent to the server.
+ * What the address bar asks for. THREE states, and the difference between the
+ * last two is a defect this file shipped with:
+ *
+ *  - `absent`    — no `?company=` at all (or one carrying nothing; see below).
+ *                  Fall through to localStorage, which is the documented rule.
+ *  - `malformed` — `?company=` IS present, carries something, and that something
+ *                  is not a plausible uuid.
+ *  - `ok`        — a plausible uuid, which WINS over whatever is persisted and is
+ *                  itself persisted, so a link opens a specific set of books and
+ *                  subsequent reloads stay on them (the seeded demo company —
+ *                  see `scripts/seed-demo.mts` — is shared exactly this way).
+ *
+ * ⚠️ **`malformed` USED TO BE FOLDED INTO `absent`, AND THAT WAS THE DEFECT.**
+ * This function returned `null` for both, so `?company=demo-co` (a typo, a
+ * half-substituted template, an id copied out of the in-memory mock) was
+ * SILENTLY DISCARDED and the bootstrap fell through to the localStorage id —
+ * opening REAL, POPULATED books that nobody asked for, with nothing on screen
+ * saying so. Same "work lands in the wrong company" class as the 403 that is
+ * refused below, and the same rule now applies: refuse legibly, open nothing,
+ * mint nothing. It cannot be answered by "send it to the server and let cored
+ * judge it", because the danger is not what the server says about the bad id —
+ * it is that the bad id is dropped and a GOOD id is used in its place.
+ *
+ * An EMPTY `?company=` (present with no value, or whitespace) is deliberately
+ * `absent`, not `malformed`: it names nothing, so there is nothing to be wrong
+ * about, and `App.tsx`'s `readCompanyIdInURL` — the other reader of this same
+ * parameter, which decides whether D25 may adopt an invited company — treats it
+ * as "no preference" too. The two readers must not disagree about one URL.
  */
-function readCompanyIdFromURL(): string | null {
+type URLCompanyId =
+  | { kind: "absent" }
+  | { kind: "malformed"; raw: string }
+  | { kind: "ok"; id: string };
+
+function readCompanyIdFromURL(): URLCompanyId {
   try {
     const raw = new URLSearchParams(globalThis.location?.search ?? "").get(
       "company",
     );
-    if (!raw) return null;
+    if (raw === null) return { kind: "absent" };
     const id = raw.trim();
-    return /^[0-9a-fA-F-]{36}$/.test(id) ? id : null;
+    if (!id) return { kind: "absent" };
+    if (!/^[0-9a-fA-F-]{36}$/.test(id)) return { kind: "malformed", raw: id };
+    return { kind: "ok", id };
   } catch {
-    return null;
+    return { kind: "absent" };
   }
 }
 
-function readPersistedCompanyId(): string | null {
+/**
+ * The id the bootstrap should try to open, AND WHICH DOOR IT CAME THROUGH —
+ * resolved ONCE, before any await, so the rest of the effect never re-reads the
+ * address bar to work out what the operator asked for.
+ *
+ * `malformed-url` is a terminal answer, not a step on the way to another one:
+ * see {@link URLCompanyId}.
+ */
+type CompanyIdToOpen =
+  | { kind: "url"; id: string }
+  | { kind: "persisted"; id: string }
+  | { kind: "malformed-url"; raw: string }
+  | { kind: "none" };
+
+function resolveCompanyIdToOpen(): CompanyIdToOpen {
   const fromURL = readCompanyIdFromURL();
-  if (fromURL) return fromURL;
+  if (fromURL.kind === "malformed") {
+    return { kind: "malformed-url", raw: fromURL.raw };
+  }
+  if (fromURL.kind === "ok") return { kind: "url", id: fromURL.id };
   try {
-    return globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY) ?? null;
+    const stored = globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY) ?? "";
+    return stored ? { kind: "persisted", id: stored } : { kind: "none" };
   } catch {
-    return null;
+    return { kind: "none" };
   }
 }
 
@@ -169,6 +220,18 @@ export function clearPersistedCompanyId(): void {
  * (whose ids are NOT uuids, so cored 400s on them). A dead id names no books, so
  * there is nothing to be wrong ABOUT: opening a new company cannot be mistaken
  * for opening someone else's.
+ *
+ * ⛔ **THE 404 ARM IS DEAD CODE AGAINST CORED, AND NOTHING HERE MAY ASSUME
+ * OTHERWISE.** cored checks MEMBERSHIP in the auth middleware, before any
+ * handler can look for the row (`auth_middleware.go`: `if !member { 403 "not a
+ * member of this company" }`), so a well-formed uuid naming a company that has
+ * never existed answers **403, not 404** — deliberately, so a non-member cannot
+ * enumerate which tenants exist. The 404 arm is kept because the in-memory mock
+ * and any future backend that answers it are still correct to; it is simply not
+ * the recovery valve for a typo'd uuid. That is why {@link isMembershipRefusal}
+ * has to carry its OWN way out (the notice's "forget it and continue" action) —
+ * without one, `?company=<uuid that does not exist>` refuses on every load and
+ * a reload can never change the answer.
  *
  * ⚠️ **400 AND 404 ARE THE ONLY TWO STATUSES THAT MAY STILL MINT.** This
  * predicate used to include 403 as well, and that third arm was the defect:
@@ -206,11 +269,44 @@ function isMembershipRefusal(err: unknown): boolean {
 }
 
 /**
+ * ⛔ WHAT A 403 ON A COMPANY ID DOES **NOT** TELL YOU, AND WHY THE NOTICE SAYS SO.
+ *
+ * cored answers 403 for BOTH of these, and there is no way here to tell them
+ * apart (see {@link isDeadCompanyId}):
+ *
+ *   - the company exists and this session's user is not a member of it, and
+ *   - the company DOES NOT EXIST AT ALL — a mistyped or stale uuid.
+ *
+ * That is a correct server: distinguishing them would let a stranger enumerate
+ * tenants. But it means the "just wait for the invite" advice is a guess, and —
+ * worse — the second case can never resolve on its own. A URL id is not
+ * forgotten (it lives in the address bar, and storage may hold an unrelated good
+ * id), so a reload asks the same dead question and gets the same refusal, for
+ * ever. Hence the notice's action: see `RefusedCompanyNotice` and
+ * `forgetRefusalAndRetry`.
+ */
+
+/**
  * Which door the refused id came in through: `?company=` in the address bar, or
  * localStorage left behind by an earlier session on this browser. It changes the
  * RECOVERY and the wording of the notice — never whether the refusal is honoured.
  */
 type RefusedIdSource = "url" | "persisted";
+
+/**
+ * Everything the operator is owed an explanation for. TWO shapes, because one of
+ * them never reached the server at all.
+ */
+type CompanyRefusal =
+  /** The server said 403 for an id we actually sent it (ambiguously — above). */
+  | { kind: "forbidden"; id: string; source: RefusedIdSource }
+  /**
+   * `?company=` was present and not uuid-shaped, so NOTHING was sent and nothing
+   * was opened. The refusal is OURS, not the server's — which is exactly why it
+   * has to be visible: the alternative, and the defect, was opening the
+   * localStorage company instead and saying nothing.
+   */
+  | { kind: "malformed-url"; raw: string };
 
 function persistCompanyId(id: string): void {
   try {
@@ -282,20 +378,29 @@ export function CompanyProvider({
   children: ReactNode;
 }) {
   const [company, setCompany] = useState<CompanyInfo | null>(initialCompany);
-  // The company id the server REFUSED for this session (403, "not a member"),
-  // plus WHICH DOOR it came in through. Non-null means: nothing was opened,
-  // nothing was minted, and the operator is owed an explanation naming the books
-  // that were reached for. Rendered below; it disappears by itself once a company
-  // IS selected (F3), because the notice is gated on `!company`.
+  // WHY NO BOOKS ARE OPEN. Non-null means: nothing was opened, nothing was
+  // minted, and the operator is owed an explanation naming what was reached for.
+  // Rendered below; it disappears by itself once a company IS selected (F3),
+  // because the notice is gated on `!company`.
   //
-  // `source` is carried because the two cases need DIFFERENT advice: a URL id is
-  // still in the address bar and can simply be dropped, whereas a persisted id
-  // has already been forgotten by the time this is set, so the honest thing to
-  // say is "reload and you will get a fresh company".
-  const [refusedCompany, setRefusedCompany] = useState<{
-    id: string;
-    source: RefusedIdSource;
-  } | null>(null);
+  // Two kinds (see {@link CompanyRefusal}): a 403 the server gave us, and a
+  // `?company=` that never got that far because it is not uuid-shaped. For the
+  // 403, `source` is carried because the two doors need DIFFERENT advice: a URL
+  // id is still in the address bar, whereas a persisted id has already been
+  // forgotten by the time this is set, so the honest thing to say is "continue
+  // and you will get a fresh company".
+  const [refusedCompany, setRefusedCompany] = useState<CompanyRefusal | null>(
+    null,
+  );
+  // Bumped by {@link forgetRefusalAndRetry} to re-run the bootstrap effect
+  // WITHOUT a page reload.
+  //
+  // ⚠️ IT HAS TO BE AN EFFECT DEPENDENCY, NOT JUST A STATE SET. Clearing
+  // `refusedCompany` re-renders but does not re-run the effect (its deps —
+  // bootstrap/client/company — are all unchanged), so the retry would clear the
+  // notice and then do nothing at all: worse than no button, because the screen
+  // would look recovered.
+  const [retryTick, setRetryTick] = useState(0);
   // Guard so React 18 StrictMode's double-invoke (and re-renders) don't mint two
   // companies. Bootstrap runs at most once per provider instance.
   const bootstrapped = useRef(false);
@@ -319,7 +424,28 @@ export function CompanyProvider({
     if (!bootstrap || company || bootstrapped.current) return;
     bootstrapped.current = true;
     (async () => {
-      const persisted = readPersistedCompanyId();
+      const target = resolveCompanyIdToOpen();
+      if (target.kind === "malformed-url") {
+        // ── A `?company=` THAT IS NOT A UUID. REFUSE; DO NOT FALL THROUGH. ──
+        // This used to return `null` from the URL reader, indistinguishable from
+        // "no ?company= at all", so the bootstrap read localStorage next and
+        // OPENED THE PREVIOUS SESSION'S BOOKS — real, populated, and nothing on
+        // screen said the id in the address bar had been thrown away. Every
+        // screen then answered 200 about the wrong company, which is the same
+        // invisible substitution the 403 branch below exists to prevent.
+        //
+        // Nothing is sent to the server (there is no id to send), nothing is
+        // opened, nothing is minted, and localStorage is left ALONE — the stored
+        // id is very likely fine and this refusal says nothing about it. The way
+        // out is the notice's action, which drops the parameter and re-runs this
+        // effect; the stored id is then reached deliberately rather than by
+        // accident.
+        if (mounted.current) {
+          setRefusedCompany({ kind: "malformed-url", raw: target.raw });
+        }
+        return;
+      }
+      const persisted = target.kind === "none" ? null : target.id;
       if (persisted) {
         // HYDRATE the persisted company from the server (GET /v1/companies/{id})
         // instead of assuming anything about it. This is what makes a
@@ -345,7 +471,12 @@ export function CompanyProvider({
           // Did the OPERATOR ask for this id, or did we merely find it in
           // localStorage? This does NOT decide whether a 403 is honoured (it
           // always is, below) — only how we recover and what the notice says.
-          const askedForInURL = readCompanyIdFromURL() === persisted;
+          //
+          // Taken from the door resolved BEFORE the await, not by re-reading the
+          // address bar after it: an F3 switch or the retry action can rewrite
+          // `?company=` while `getCompany` is in flight, and a second read would
+          // then attribute this refusal to the wrong door.
+          const askedForInURL = target.kind === "url";
           if (isMembershipRefusal(err)) {
             // ── 403 FROM EITHER DOOR: REPORT, NEVER MINT. ─────────────────
             // "When the id came from the URL the user ASKED for those books, so
@@ -391,6 +522,7 @@ export function CompanyProvider({
             }
             if (mounted.current) {
               setRefusedCompany({
+                kind: "forbidden",
                 id: persisted,
                 source: askedForInURL ? "url" : "persisted",
               });
@@ -453,7 +585,60 @@ export function CompanyProvider({
         bootstrapped.current = false;
       }
     })();
-  }, [bootstrap, client, company]);
+  }, [bootstrap, client, company, retryTick]);
+
+  /**
+   * ────────────────────────────────────────────────────────────────────────────
+   * THE WAY OUT OF A REFUSAL, AND WHY THE URL DOOR NEEDED ONE AT ALL.
+   * ────────────────────────────────────────────────────────────────────────────
+   * The refusal rules above are right and are not being softened here: a 403 or a
+   * malformed id still opens nothing and mints nothing. But two of them had NO
+   * EXIT, and a control with no exit is a wedge:
+   *
+   *  - `?company=<uuid that does not exist>` — cored answers 403, not 404 (it
+   *    checks membership before existence, on purpose), so the documented
+   *    "400/404 → drop it and mint" valve NEVER FIRES for a typo. The id is not
+   *    forgotten either, because it lives in the address bar. Every reload asks
+   *    the same dead question and gets the same refusal, for ever.
+   *  - `?company=<not a uuid>` — same shape: the parameter stays in the URL, so
+   *    the refusal repeats on every load.
+   *
+   * "Press F3" is not an exit for either, because F3 selects among companies the
+   * session IS a member of — it does not remove the parameter that is refusing,
+   * and the next reload lands back on the notice.
+   *
+   * So: DROP `?company=` and re-run the bootstrap. That is a deliberate operator
+   * act on a notice that has already named the id and stated that nothing was
+   * opened or created — not a silent substitution, which is what this whole file
+   * exists to prevent. Afterwards the ordinary precedence applies: the stored id
+   * (reached knowingly now, not by accident), else a mint.
+   *
+   * ⚠️ `replaceState`, NOT a reload, and not `pushState`: a reload would throw
+   * away an unsaved session for no reason, and a Back press must not walk the
+   * operator back onto the refusing URL.
+   */
+  function forgetRefusalAndRetry(): void {
+    try {
+      const href = globalThis.location?.href;
+      if (href) {
+        const url = new URL(href);
+        url.searchParams.delete("company");
+        globalThis.history?.replaceState?.(
+          globalThis.history?.state ?? null,
+          "",
+          `${url.pathname}${url.search}${url.hash}`,
+        );
+      }
+    } catch {
+      // Non-fatal (same reasoning as persistCompanyId). The retry below still
+      // runs; on the persisted-403 door there is no parameter to drop anyway.
+    }
+    setRefusedCompany(null);
+    // Let the effect run again (it guards on this ref), and give it a dependency
+    // change to run FROM. Both are required — see `retryTick`.
+    bootstrapped.current = false;
+    setRetryTick((n) => n + 1);
+  }
 
   const value = useMemo<CompanyContextValue>(
     () => ({ client, company, setCompany }),
@@ -470,8 +655,8 @@ export function CompanyProvider({
       */}
       {refusedCompany && !company ? (
         <RefusedCompanyNotice
-          id={refusedCompany.id}
-          source={refusedCompany.source}
+          refusal={refusedCompany}
+          onForgetAndRetry={forgetRefusalAndRetry}
         />
       ) : null}
       {children}
@@ -484,26 +669,37 @@ export function CompanyProvider({
  * reached for".
  *
  * It NAMES THE REFUSED ID, because the failure it replaces was invisible: the
- * app used to mint a new "My Company" owned by this user and open that, so every
+ * app used to mint a new "My Company" owned by this user and open that (403), or
+ * quietly open the localStorage company (a malformed `?company=`), so every
  * screen answered 200 and nothing on screen distinguished the requested tenant
- * from an empty new one. It also states what did NOT happen (no company opened,
- * none created), since that is the fact an auditor needs, and points at the one
- * door that fixes it.
+ * from a different one. It also states what did NOT happen (no company opened,
+ * none created), since that is the fact an auditor needs, and — this is the part
+ * that was missing — gives an action that actually ENDS the refusal.
  *
- * TWO WORDINGS, ONE REFUSAL. `source` exists because the second half of this bug
- * was found by a browser re-drive that planted the id in localStorage instead of
- * the URL: telling that operator "you asked for those books with ?company=…"
- * would be a lie about their own address bar, and — worse — would hide the one
- * thing they need to know, that the stale id has been forgotten and a reload
- * therefore starts them clean instead of wedging them.
+ * THREE WORDINGS, ONE RULE. The rule never varies (nothing opened, nothing
+ * minted); the wording and the exit do:
+ *
+ *  - `url` — a `?company=<uuid>` the server refused. ⛔ It must NOT assert that
+ *    the company exists and the user merely lacks membership: cored answers 403
+ *    for a company that does not exist AT ALL, so "claim your invite and reload"
+ *    on its own is a guess that can never come true. Both possibilities are
+ *    stated, and the exit drops the parameter.
+ *  - `persisted` — found in this browser's storage. Telling that operator "you
+ *    asked for those books with ?company=…" would be a lie about their own
+ *    address bar and would hide the thing they need: the stale id has been
+ *    forgotten, so continuing starts them clean.
+ *  - `malformed-url` — never sent to the server at all. This one must say what
+ *    was IGNORED and what would have been opened in its place, because that
+ *    substitution is the defect and it is otherwise undetectable.
  */
 function RefusedCompanyNotice({
-  id,
-  source,
+  refusal,
+  onForgetAndRetry,
 }: {
-  id: string;
-  source: RefusedIdSource;
+  refusal: CompanyRefusal;
+  onForgetAndRetry: () => void;
 }) {
+  const source = refusal.kind === "malformed-url" ? "url-malformed" : refusal.source;
   return (
     <div
       role="alert"
@@ -511,41 +707,105 @@ function RefusedCompanyNotice({
       data-refused-source={source}
       className="fixed inset-x-0 top-0 z-50 border-b-2 border-red-500 bg-tally-panel p-3 font-mono text-sm text-tally-field"
     >
-      <p className="font-bold text-red-400">
-        Not your books — company {id} was refused (HTTP 403).
-      </p>
-      {source === "url" ? (
-        <p>
-          You asked for those books with <code>?company={id}</code>, but this
-          session&apos;s user is not a member of that company. No company has
-          been opened and none was created — nothing you key now would land
-          anywhere near the company you asked for.
-        </p>
+      {refusal.kind === "malformed-url" ? (
+        <>
+          <p className="font-bold text-red-400">
+            Not a company id — <code>?company={refusal.raw}</code> was ignored.
+          </p>
+          <p>
+            That is not a valid company id, so it was never sent to the server.
+            No company has been opened and none was created. In particular this
+            browser has NOT been quietly switched to whichever company it had
+            stored from an earlier session — those would be real books, keyed
+            with real vouchers, that nobody asked for.
+          </p>
+          <p>
+            Fix the <code>?company=</code> in the address bar, or drop it and
+            carry on with the company this browser already knows:
+          </p>
+        </>
       ) : (
-        <p>
-          This browser still had company <code>{id}</code> stored from an earlier
-          session, but this session&apos;s user is not a member of it. No company
-          has been opened and none was created — in particular you have NOT been
-          made Owner of a new, empty company that would answer every screen with
-          a cheerful 200. The stale id has been forgotten, so a reload starts
-          clean.
-        </p>
+        <>
+          <p className="font-bold text-red-400">
+            Not your books — company {refusal.id} was refused (HTTP 403).
+          </p>
+          {refusal.source === "url" ? (
+            <p>
+              You asked for those books with <code>?company={refusal.id}</code>,
+              but the server refused. That answer means one of two things and does
+              not say which: either this session&apos;s user is not a member of
+              that company, or <strong>no such company exists</strong> — cored
+              checks membership before existence on purpose, so a mistyped or
+              deleted id looks exactly like someone else&apos;s books. No company
+              has been opened and none was created — nothing you key now would
+              land anywhere near the company you asked for.
+            </p>
+          ) : (
+            <p>
+              This browser still had company <code>{refusal.id}</code> stored from
+              an earlier session, but the server refused it. No company has been
+              opened and none was created — in particular you have NOT been made
+              Owner of a new, empty company that would answer every screen with a
+              cheerful 200. The stale id has been forgotten, so continuing starts
+              clean.
+            </p>
+          )}
+          <p>
+            If you were just invited, claim the invite and reload. Otherwise press
+            <strong> F3 (Select Company)</strong> to open a company you are a
+            member of. (For a seeded demo company, a 403 usually means it was
+            seeded under a different subject than the app authenticates as — see
+            scripts/seed-demo.mts.)
+          </p>
+          {refusal.source === "url" ? (
+            <p>
+              ⛔ A reload will NOT change this answer: the id is still in the
+              address bar, so the same refusal repeats for ever. If the id is
+              wrong or names a company that is gone, drop it and carry on:
+            </p>
+          ) : (
+            <p>Or start over without it:</p>
+          )}
+        </>
       )}
-      <p>
-        If you were just invited, claim the invite and reload. Otherwise press
-        <strong> F3 (Select Company)</strong> to open a company you are a member
-        of{source === "persisted"
-          ? ", or reload to start a fresh company"
-          : ""}
-        . (For a seeded demo company, a 403 usually means it was seeded under a
-        different subject than the app authenticates as — see
-        scripts/seed-demo.mts.)
-      </p>
+      {/*
+        The one control on this notice. It is a real <button> so it is reachable
+        by keyboard, but it is NOT autofocused: the shell's key capture must keep
+        seeing F9/F3 (the notice's own advice names F3), and stealing focus from
+        the screen underneath would be a second defect on top of the first.
+      */}
+      <button
+        type="button"
+        data-testid="company-refused-forget"
+        onClick={onForgetAndRetry}
+        className="mt-1 border border-tally-field px-2 py-0.5 underline"
+      >
+        {refusal.kind === "forbidden" && refusal.source === "persisted"
+          ? "Forget it and start a fresh company"
+          : "Drop ?company= and continue"}
+      </button>
     </div>
   );
 }
 
 /** Access the full company context (throws outside a provider). */
+/**
+ * The company context, or `null` OUTSIDE a provider — never a throw.
+ *
+ * ⚠️ IT EXISTS FOR PROVIDERS THAT ARE SCOPED BY COMPANY BUT DO NOT REQUIRE ONE,
+ * and `OfflineOutboxProvider` is the first: it takes explicit company/subject
+ * overrides so it can be rendered in a test with no shell around it, and
+ * `useCompanyContext()` would throw before those overrides were ever read. This
+ * mirrors `useAuth()`, which is null outside its provider for the same reason.
+ *
+ * ⛔ SCREENS MUST STILL USE `useCompanyID()`. A screen that silently rendered
+ * with no company would be showing somebody nothing and calling it empty; the
+ * throw is what routes them to the company picker.
+ */
+export function useOptionalCompanyContext(): CompanyContextValue | null {
+  return useContext(CompanyContext);
+}
+
 export function useCompanyContext(): CompanyContextValue {
   const ctx = useContext(CompanyContext);
   if (!ctx) {

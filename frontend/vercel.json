@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/v1/:path*",
+      "destination": "https://api.tallyweb.world/v1/:path*"
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "https://api.tallyweb.world/auth/:path*"
+    },
+    {
+      "source": "/signin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/app",
+      "destination": "/index.html"
+    }
+  ]
+}

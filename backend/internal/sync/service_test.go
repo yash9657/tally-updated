@@ -17,9 +17,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 // newSyncCompany is setupSync without the t.Cleanup registration: callers that

@@ -3,6 +3,7 @@ package ledger
 import (
 	"encoding/json"
 
+	"github.com/shopspring/decimal"
 	"github.com/zeebo/blake3"
 )
 
@@ -25,6 +26,41 @@ type CanonicalPosting struct {
 	LedgerID string `json:"ledger_id"`
 	DrCr     string `json:"dr_cr"`
 	Amount   string `json:"amount"`
+	// T8's three forex values, and they obey EXACTLY the three rules Inward and
+	// the two optional payload fields record — applied here one level down, to
+	// an ELEMENT type rather than to the payload:
+	//
+	//   * they are LAST, after Amount. encoding/json emits keys in
+	//     struct-declaration order, so inserting them anywhere above would move
+	//     every following key and change the bytes of every posting ever
+	//     written.
+	//   * each is `omitempty`. A BASE posting — which is every posting in every
+	//     book that existed before this commit, and most postings for ever —
+	//     must marshal to BYTE-IDENTICAL JSON to what it marshalled to before
+	//     these fields existed, or VerifyChain retroactively reports the whole
+	//     field as tampered with, which is indistinguishable from an attack.
+	//   * they are STRINGS. The chain is verified by decoding the stored JSONB
+	//     back into this struct and re-marshalling it (history.go), and that
+	//     re-derivation is exact only while every value is a string. A rate as
+	//     a JSON number would come back as 83.6512345678 or 8.36512345678e+01
+	//     depending on magnitude and Postgres's own numeric rendering, and
+	//     every foreign voucher would fail to verify.
+	//
+	// ⭐ AND `omitempty` ON EACH OF THREE IS SAFE HERE ONLY BECAUSE THE TRIPLE
+	// IS ALL-OR-NONE. Inward's comment warns that per-field omitempty lets the
+	// same recorded facts hash under two different key sets depending on which
+	// happened to be blank. That cannot arise here: migration 0080's CHECK, and
+	// forexTriple.validate above it, admit exactly two states — all three
+	// present or all three absent — so the key set is a function of the fact,
+	// not of its history.
+	//
+	// ⚠️ Rate IS NOT StringFixed(4). It is written at the full ten decimals the
+	// column holds. This is the single most tempting line in the change to get
+	// wrong: a StringFixed(4) here compiles, round-trips through its own type
+	// perfectly, and silently signs 83.6512 for ever.
+	CurrencyID    string `json:"currency_id,omitempty"`
+	ForeignAmount string `json:"foreign_amount,omitempty"`
+	Rate          string `json:"rate,omitempty"`
 }
 
 // CanonicalBillAllocation is the stable view of a bill-wise allocation used for
@@ -36,6 +72,44 @@ type CanonicalBillAllocation struct {
 	DrCr     string `json:"dr_cr"`
 	Amount   string `json:"amount"`
 	DueDate  string `json:"due_date"`
+	// The same three values, under the same three rules, for the same reasons —
+	// see CanonicalPosting above, which carries the full argument.
+	//
+	// ⛔ AND THE RATE HERE IS THE ONE AN AUDIT MOST NEEDS TO TRUST. It is the
+	// rate the bill was RAISED at, and step 5 differences the settlement rate
+	// against it to compute a realised gain or loss. Left out of the signature,
+	// a bill's historical rate could be restated in the database from 83.65 to
+	// 90.00 and VerifyChain would go on reporting the book as intact, because
+	// the base amount it does cover has not moved.
+	CurrencyID    string `json:"currency_id,omitempty"`
+	ForeignAmount string `json:"foreign_amount,omitempty"`
+	Rate          string `json:"rate,omitempty"`
+}
+
+// rateScale is the number of decimals a rate is CANONICALISED to, and it is
+// migration 0080's NUMERIC(19,10) spelled in Go.
+//
+// ⛔ IT MATCHES THE COLUMN ON PURPOSE, so the row and the signature are two
+// renderings of one value rather than two values that agree today. Postgres
+// stores 83.65 into NUMERIC(19,10) as 83.6500000000 and rounds anything finer;
+// a payload that echoed the client's own spelling would sign "83.65" beside a
+// row reading "83.6500000000", and an auditor comparing the two would be
+// looking at a discrepancy that is purely notational — the worst kind, because
+// it is indistinguishable from a real one until someone works out which.
+const rateScale = 10
+
+// canonicalRate renders an exchange rate for the signed payload.
+//
+// ⛔⛔ NOT StringFixed(4), AND THIS IS THE ONE LINE OF THE WHOLE FEATURE MOST
+// LIKELY TO BE "TIDIED" INTO A BUG. Every other number in this file is money
+// and money is fixed-4 end to end, so a fixed-4 here reads as consistency. It
+// is not: base-per-foreign for a weak currency is 0.0033333333, which at four
+// decimals becomes 0.0033 — a relative error around 1.5e-4, or thousands of
+// rupees on a fifty-lakh invoice. And because the value would still round-trip
+// through its own type perfectly, nothing would fail; the book would simply be
+// signed at the wrong rate for ever.
+func canonicalRate(r decimal.Decimal) string {
+	return r.StringFixed(rateScale)
 }
 
 // CanonicalStockLine is the stable view of ONE inventory line used for hashing.

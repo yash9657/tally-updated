@@ -51,9 +51,18 @@ func TestValuerForRejectsUnknownMethod(t *testing.T) {
 		wantErr bool
 	}{
 		{MethodWeightedAverage, false},
-		{"FIFO", true},
-		{"LIFO", true},
+		{MethodFIFO, false},
+		{MethodLIFO, false},
+		// ⛔ THESE THREE ARE THE POINT OF THIS TEST, AND THEY ARE NOT PLACEHOLDERS.
+		// Tally ships EIGHT costing methods; this build implements three, and the
+		// five it does not must fail LOUDLY rather than be valued at whichever
+		// arm happens to be first. When FIFO and LIFO landed these rows were
+		// FIFO and LIFO — the assertion is the property, never the list.
+		{"LAST_PURCHASE_COST", true},
+		{"STANDARD_COST", true},
+		{"MONTHLY_AVG", true},
 		{"weighted_avg", true}, // the CHECK constraint is case-sensitive; so are we.
+		{"fifo", true},
 		{"", true},
 	}
 	for _, c := range cases {

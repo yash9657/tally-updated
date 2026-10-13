@@ -42,9 +42,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 // tenantTables is the ORIGINAL SEVEN — the core ledger tables. It is kept as a

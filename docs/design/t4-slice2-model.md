@@ -308,3 +308,128 @@ forward, because 2a needs one and the match table is 2b's:
 **2b's table takes a fresh number rather than renumbering**, following the precedent T6 set when
 it came back for `0067`: `PLAN-TALLY-PARITY.md` §2.5's rule is *renumber unstarted blocks, never
 renumber a migration that exists*, and once 0062–0064 are applied the block is consumed.
+
+## 9. SLICE 2b AS BUILT — 2026-08-28, migration 0088
+
+Written when the track shipped. §§0–8 are the design as it stood BEFORE the build; this section
+records what was actually made, and **the three places it departs from the sections above**, so a
+reader is never left comparing a plan against a tree and guessing which is current.
+
+### 9.1 The map
+
+| File | What it is |
+|---|---|
+| `backend/migrations/0088_bank_statement_match.sql` | The `bank_statement_match` table. **No ACL rules** — see §9.3 |
+| `backend/internal/bankstatement/match.go` | The tier engine. **PURE**: no clock, no database, no writes |
+| `backend/internal/bankstatement/matchdata.go` | The reads that feed it, and the two writes (`SetAside`, `UndoSetAside`) |
+| `backend/internal/banking/banking.go` | `SetBankDateFromStatementLine` — the resolve, on the EXISTING clearance write |
+| `backend/internal/server/handler_bank_match.go` | Two routes; the third is the bank-reconciliation PUT |
+| `frontend/src/screens/BankMatchPanel.tsx` | The Alt+S panel |
+| `frontend/scripts/drive-t4-slice2b-matching.mjs` | The browser drive, **35/35** |
+
+### 9.2 ⛔ DEPARTURE 1 — THE TABLE STORES RESOLUTIONS, NOT CANDIDATES
+
+§2.2 and 0062's header both call `bank_statement_match` *"the candidate links"*. **It holds no
+candidates.** Proposals are DERIVED on every read by `ProposeMatches`, exactly as every report in
+this product is derived.
+
+The reason is the one that governs the rest of the codebase: **a stored candidate goes stale
+silently.** A voucher altered, deleted, cleared by the manual loop, or claimed by another line
+between the proposal and the acceptance leaves the operator choosing from a list that no longer
+describes the books — while still looking authoritative. In its worst form it offers a match to a
+voucher that has already been matched.
+
+So the table records only what a PERSON decided: `matched` (carrying the clearance it produced) or
+`set-aside` (carrying none). ⛔ **`set-aside` is not in §1.2's field list and is new here.** It is
+the operator recording that a bank row corresponds to nothing in the books — `RESEARCH.md:873`'s
+*bank-only unreconciled* made assertable. It writes no clearance and moves no balance, and 0088's
+`clearance_matches_status` CHECK is what makes that structural rather than a promise.
+
+### 9.3 ⛔ DEPARTURE 2 — ACCEPTING A MATCH IS THE EXISTING BANK-DATE ROUTE
+
+§8.3 lists *"the resolved match writing a `bank_reconciliation` row"* as 2b's work, and §2.1 says
+why the clearance must land in 0045's table. Both are honoured — but **not by a route of its own.**
+`PUT .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo}` gained an optional
+`statement_line_id`, and there is no other way to resolve a match.
+
+⭐ **THIS IS THE SLICE'S LOAD-BEARING DECISION.** Matching must not become a SECOND WAY TO ACQUIRE
+THE AUTHORITY TO ASSERT A CLEARANCE: a level refused `alter bank-reconciliation` but granted the
+statement would otherwise reconcile by matching what it may not reconcile by ticking, and the rule
+list would say the opposite of what the product did. Three further properties come free, and every
+one of them would have had to be re-implemented (and could have been forgotten) on a new route:
+
+* **The back-dated cutoff.** `peekBankDate` reads `bank_date` out of THAT body. A resolve carrying
+  only a line id would have left the PDP with no date and `cutoffDeny` would have skipped —
+  byte for byte the defect `auth_middleware.go`'s bank-reconciliation comment records shipping once.
+* **The WebAuthn step-up**, which gates on `Action.IsWrite()`.
+* **Invariant B-2**, which stops being a convention: there is nowhere else to write.
+
+⛔ **AND THE REQUEST STILL CARRIES THE DATE, though the server could read it off the line.** The
+operator is asserting a date and an assertion they never see is not one they made — and the cutoff
+needs it on the wire. A date that disagrees with the line's own value date is **refused naming
+both**, never resolved in either direction: preferring one silently would write a clearance the
+operator never asserted, preferring the other would file a bank row under a date that is not on the
+statement it came from, and neither is visible afterwards because every figure would be real.
+
+**The consequence for the ACL is that slice 2b writes no rules at all**, and the seeder census
+still reads 16 PERFORMs. 0088's footer states that as a decision, because "no ACL migration" is
+exactly the shape of an oversight.
+
+### 9.4 ⛔ DEPARTURE 3 — NOTHING AUTO-CLEARS, NOT EVEN AN UNAMBIGUOUS EXACT MATCH
+
+§0 forbids auto-clearing an **ambiguous** match, which leaves room for an unambiguous one to tick
+itself. It does not. `ProposeMatches` returns `AcceptableInBulk`, and the operator presses one key
+to assert all of those at once — the typing is saved, the judgement is not.
+
+The reason is the handoff's own design rule for this slice: a fuzzy match that ticks itself is a
+reconciliation that attests to nothing, and it fails in the direction that **foots perfectly**.
+
+⭐ **AND B-1 IS TWO-SIDED, WHICH §4 DOES NOT SAY.** §4's B-1 is *one line, two candidate legs*. The
+mirror — **one leg, two candidate lines** — is the one that is easy to miss, because each line has
+exactly one candidate and looks perfectly unambiguous on its own: two ₹25,000 bank rows against a
+single ₹25,000 payment. Without `markContestedLegs` both would be offered for bulk acceptance, the
+first would be asserted, and the second would collide with 0088's one-match-per-clearance index
+**after** a wrong clearance had been written. `TestTheMirrorAmbiguityIsCaughtTooWhenTwoBankRowsWantOneVoucher`
+pins it, and the pure B-1 test deliberately does not catch it.
+
+### 9.5 THE INVARIANTS, AND WHERE EACH IS PINNED
+
+| # | Where |
+|---|---|
+| B-1 | `match_test.go` (both directions) + `TestAnAmbiguousLineWritesZeroClearances` — the DB arm counts `bank_reconciliation` rows in SQL rather than trusting the response |
+| B-2 | `TestAcceptingAMatchWritesOneClearanceAndMovesTheStatement` — the BRS's un-cleared net moves by exactly the matched amount |
+| B-7 | `TestAPaisaOutIsNotAMatchAtAnyTier`; the drive's ODD AMOUNT row is the live control |
+| B-8 | `TestUnTickingAMatchedLegRemovesTheMatchToo` — **structural**, via 0088's `ON DELETE CASCADE`, so there is no second write path to drift |
+| B-9 | `TestAVoucherAlteredAfterMatchingIsStillReportedBroken` — the matcher gained no exemption because it stores no clearance of its own |
+| B-3, B-4, B-5, B-6, B-10, B-11, B-12 | slice 2a's, unchanged |
+
+### 9.6 ⚠️ WHAT IS NOT BUILT, AND THE SCREEN SAYS EACH OF IT
+
+1. **Partial matching is PAIRS ONLY.** Subset-sum over a year's statement does not terminate
+   usefully, so the search is bounded and the bound is **disclosed** — "none found by this search",
+   never silence that reads as "none exists".
+2. **No voucher is created from a bank row** (§7 item 3), still deliberately out of scope: it is a
+   write to the books from an outside file and needs its own memo.
+3. **No printed layout** for the matching screen.
+4. **F5's amount-view toggle stays refused** — §6 says it is a display toggle and not matching, and
+   flipping it would also re-open the hazard that the global F5 opens a Payment voucher.
+5. **The date window is a SEARCH WIDTH, not a statutory rule** — stated on screen, adjustable, and
+   safe to choose precisely because widening it cannot clear anything.
+
+   ⛔ **CORRECTED 2026-08-28, HOURS AFTER THE TRACK SHIPPED: THE DEFAULT WAS 7 AND 7 WAS INVENTED.**
+   The constant's own comment said *"no authority anywhere says how late a cheque may clear"* and
+   then chose a number regardless, justifying it as *"a cheque written on a Friday and cleared after
+   a weekend and a bank holiday"*. That is reasoning from nothing dressed as reasoning from
+   something, and it survived review precisely because the sentence admitting the invention sat
+   directly above it — the admission read as diligence.
+
+   ⭐ **The default is now 30, which is TALLY'S OWN DOCUMENTED DEFAULT** for this exact parameter:
+   TallyPrime's auto bank reconciliation exposes it as **"Find Potential Matches within"**, states
+   *"the default number of days set is 30 days"*, and treats 0 as "the dates must be identical"
+   (`help.tallysolutions.com/auto-bank-reconciliation/`, read 2026-08-28).
+
+   ⚠️ **THAT IS A PARITY CITATION AND NOT A STATUTORY ONE.** A vendor help page is good evidence
+   about what Tally does — which is what this product is measured against — and is worth nothing as
+   evidence about what a law requires. `docs/statutory/README.md`'s rule ("the notified form, the
+   gazette text… **Not** blog articles, and not summaries") governs rates and is untouched by this.
+   The two kinds of source must never be filed in the same drawer.

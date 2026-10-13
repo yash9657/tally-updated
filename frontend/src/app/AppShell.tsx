@@ -16,8 +16,11 @@ import {
   type ScreenActionKind,
 } from "./ScreenActions";
 import { LoadedVoucherProvider } from "./LoadedVoucher";
+import { OfflineOutboxProvider } from "../offline/OfflineOutbox";
 import { VOUCHER_CONFIGS } from "../screens/vouchers/voucherConfig";
 import { LoadedDraftProvider } from "./LoadedDraft";
+import { LoadedProposalProvider } from "./LoadedProposal";
+import { AgentPanel } from "./AgentPanel";
 import { Chrome } from "./Chrome";
 import { ScreenRegistry } from "./screenRegistry";
 import { createDefaultRegistry } from "./defaultScreens";
@@ -69,6 +72,18 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // `e-invoice` token is denied to a level whose default_access is 'none', so
   // Data Entry cannot raise or see one until an administrator grants it).
   "e-invoice",
+  // THE FIVE PAYROLL SCREENS. All five read (and three of them write) ONE
+  // company's employees, pay runs and statutory files, so all five need a scope.
+  // Same failure mode as every screen above: omit one and useCompanyID() THROWS
+  // before the screen can render its own state — including its 403 panel, which
+  // is a NORMAL answer on every one of them (migration 0035 disallows
+  // create/alter/display of the bare `employee` token for the seeded Data Entry
+  // level, and refuses all five payroll report names to it as well).
+  "employees",
+  "payroll-run",
+  "payroll-register",
+  "payroll-payslip",
+  "payroll-form-138",
   // The EDIT LOG reads ONE company's voucher versions, so it needs a scope for
   // the same reason as every screen above: omit it and useCompanyID() THROWS
   // before the screen can render anything, including its own empty state.
@@ -79,6 +94,59 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // second entry point — a Go To row, or a deep link — which is exactly the kind
   // of change nobody expects to break an unrelated screen.
   "edit-log",
+  // T14 — the DATA screen (Alt+Y). It backs up ONE company, so it needs a scope
+  // for the same reason every screen above does: omit it and useCompanyID()
+  // THROWS before the screen can render anything, including the sentence
+  // explaining that a restore creates a new company rather than replacing one.
+  "data",
+  // T32 — MIGRATE FROM TALLY (Alt+O). It imports INTO one company, so it needs a
+  // scope for the same reason every screen above does: omit it and
+  // useCompanyID() THROWS before the screen can render anything, including the
+  // line naming the company the export is about to be posted into.
+  "tally-import",
+  // RECONCILIATION QUEUE (track D). Every route it drives is company-scoped, so
+  // omit it and useCompanyID() THROWS during render, taking the whole shell down
+  // before the screen can say anything — including which company's refused
+  // changes these are.
+  //
+  // ⛔ §0.1 item 2: NO TEST IN THIS REPOSITORY CAN SEE THIS ENTRY unless one
+  // renders the screen with company === null. ReconciliationScreen.test.tsx has
+  // that case; it is the test the handoff asked track D to add.
+  "reconciliation",
+  // PRINT TEMPLATES (track C). Every route it drives is company-scoped, so it
+  // needs a scope for the same reason every screen above does: omit it and
+  // useCompanyID() THROWS during render, taking the whole shell down before the
+  // screen can show anything — including the line naming which company's
+  // documents are being edited.
+  //
+  // ⛔ NO TEST IN THIS REPOSITORY COULD SEE THIS ENTRY BEFORE ONE WAS WRITTEN FOR
+  // IT. This set is consulted ONLY when company === null, and every screen test
+  // passes an initialCompany, so deleting an entry here breaks nothing in the
+  // suite. PrintTemplateScreen.test.tsx has the company-less case; it is the
+  // second screen in the set to have one.
+  "print-templates",
+  // OFFLINE OUTBOX (track D). ⚠️ THE REASON IS DIFFERENT FROM EVERY ENTRY ABOVE,
+  // AND THAT IS WHY IT IS EASY TO GET WRONG. This screen drives NO company-scoped
+  // route — it reads a queue out of this browser's IndexedDB — so nothing here
+  // would throw. It needs the scope because the QUEUE ITSELF is scoped by
+  // (company, subject): with no company selected there is no queue to show, and
+  // the honest thing is the company picker rather than an empty table that reads
+  // as "nothing is waiting".
+  //
+  // ⛔ NO TEST IN THIS REPOSITORY CAN SEE THIS ENTRY unless one renders with
+  // company === null — this set is consulted only then, and every screen test
+  // passes an initialCompany. OfflineOutboxScreen.test.tsx has that case.
+  "offline-outbox",
+  // THE APPROVAL INBOX (W2). Every route it drives is company-scoped
+  // (/agent/approvals), so omit it and useCompanyID() THROWS during render —
+  // taking the whole shell down over the one screen that decides what an agent
+  // may put in these books.
+  "approval-inbox",
+  // AGENT SETTINGS (W2 breadth): every route is company-scoped
+  // (/agent/autonomy, /ledgers/{id}/unblock, /agent/anchors/verify).
+  "agent-settings",
+  // THE INSIGHTS INBOX (W4): every route is company-scoped (/insights).
+  "insights",
 ]);
 
 /**
@@ -87,7 +155,7 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
  * the registered handler with the PRE-transition snapshot, then lets the
  * machine move the stack.
  */
-const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = {
+export const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = {
   accept: "accept",
   delete: "delete",
   exportScreen: "export",
@@ -96,6 +164,16 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   prevVoucher: "prevVoucher",
   nextVoucher: "nextVoucher",
   print: "print",
+  // Alt+M — E-MAIL THIS DOCUMENT (B2).
+  //
+  // ⛔⛔ THIS LINE IS THE ONE THAT SHIPS THE KEY DEAD. Everything else can be
+  // present and correct — the keymap binding, the KeymapAction, the
+  // ScreenActionKind, the button-bar item and the screen's own
+  // useEmailDocumentAction — and Alt+M STILL does nothing, silently, because the
+  // shell never dispatches it. Read the comment on `importBankStatement` below:
+  // that is exactly how Alt+O shipped, with every unit test passing because they
+  // call the dispatcher directly and bypass this map.
+  emailDocument: "emailDocument",
   bankReconciliation: "bankReconciliation",
   // Alt+O on the reconciliation screen — statement IMPORT (T4 slice 2a).
   //
@@ -109,6 +187,24 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // routes it), and the failure only appeared when the app was driven in a real
   // browser. Add the entry here whenever you add a screen action.
   importBankStatement: "importBankStatement",
+  // T4 SLICE 2b — the five matching keys on the same screen. ⛔ THESE SIX LINES
+  // ARE THE REGISTRATION POINT THE COMMENT ABOVE IS ABOUT: without them every
+  // key below resolves, finds no screen action, and is forwarded to a machine
+  // case that deliberately does nothing — silently, with every unit test still
+  // passing, because they call the dispatcher directly and bypass this map.
+  // ⛔⛔ Esc — GIVE THE SCREEN FIRST REFUSAL ON IT (D114). Every other entry in
+  // this map routes a key the machine has no answer for; this one routes a key
+  // the machine answers WELL — it pops a frame — to a screen that may be
+  // holding a panel the machine cannot see. A handler that has no panel open
+  // returns undefined and Esc goes on being Esc, so this line changes nothing
+  // on the twenty-odd screens that register no handler for it.
+  escape: "closePanel",
+  matchBankRows: "matchBankRows",
+  modifyBankMatch: "modifyBankMatch",
+  unlinkBankMatch: "unlinkBankMatch",
+  setAsideBankRow: "setAsideBankRow",
+  bankExceptionReport: "bankExceptionReport",
+  bankBasisOfValues: "bankBasisOfValues",
   // Alt+C on the TDS challan register — RECORD A DEPOSIT (T6).
   //
   // ⛔ THIS IS THE LINE THE COMMENT ABOVE IS ABOUT. Alt+O shipped completely
@@ -132,6 +228,33 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // Ditto: a Cost Centre Summary with no axis chosen renders a picker, and
   // without this entry F4 could never reopen it.
   selectCostCategory: "selectCostCategory",
+  // Alt+C on the BUDGETS screen — create a plan, or a line on the open one (T11).
+  // Same registration point and the same silent failure mode as the two above.
+  createBudget: "createBudget",
+  // F4 on the BUDGET VARIANCE report — choose the plan it compares against (T11).
+  // The report has NO default plan, so without this entry a company with several
+  // budgets could never re-point the report after the first choice.
+  selectBudget: "selectBudget",
+  // F4 on the GSTR-9 ANNUAL RETURN — choose the FINANCIAL YEAR (T12).
+  //
+  // ⛔⛔ THIS LINE WAS MISSING AND THE KEY WAS DEAD IN THE SHIPPED PRODUCT. Every
+  // other registration for it was present and correct — the keymap binding
+  // (keymaps/tallyprime.ts `gstr9.F4`), the KeymapAction (types.ts), the
+  // actionLabel, the ScreenActionKind (ScreenActions.tsx) and the screen's own
+  // useRegisterScreenAction (reports/GSTR9Screen.tsx) — so the omission was
+  // invisible in review from any one of those six files. The shell resolved F4,
+  // found no screen action, forwarded it to a machine with no `selectFinancialYear`
+  // case, saw an unchanged stack and printed "F4 — Choose the financial year does
+  // not apply on this screen." THE YEAR PICKER COULD NOT BE REOPENED: it renders
+  // once when the screen has no year, and after the first pick the report was
+  // pinned to that year for the life of the frame.
+  //
+  // ⚠️ FOUND BY THE UI-COMMAND CENSUS (src/actions/uiCommandManifest.ts), not by
+  // a test of this screen, and that is the argument for the census: no unit test
+  // could see it, because they all call the dispatcher directly and bypass this
+  // map. It is the same failure `importBankStatement` above records, and it had
+  // been shipped a second time in a different quarter of the app.
+  selectFinancialYear: "selectFinancialYear",
   // ---- THE FOUR T3 SCREEN ACTIONS (Alt+C / Alt+W on the two order registers,
   // Alt+C / Alt+X on the BOM screen).
   //
@@ -147,6 +270,30 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   closeOrder: "closeOrder",
   createBom: "createBom",
   explodeBom: "explodeBom",
+  // ---- THE THREE PAYROLL SCREEN ACTIONS (Alt+C / Alt+S on the employee master,
+  // Alt+S on the payroll register).
+  //
+  // ⛔ THE Alt+O LESSON AGAIN, and one of these three is the worst place yet to
+  // repeat it. `setEmployeePay` is the ONLY key that gives an employee a salary
+  // structure and a statutory election, and without both cored refuses the entire
+  // pay run — on the RUN, days later, naming a person. A silently dead Alt+S here
+  // would look exactly like a complete employee master right up to pay day.
+  createEmployee: "createEmployee",
+  setEmployeePay: "setEmployeePay",
+  payrollStatutoryFiles: "payrollStatutoryFiles",
+  // Alt+V on the Stock Summary — the COSTING METHOD (T9). Without this line the
+  // panel never opens and NOTHING says so: the keymap binding, the
+  // ScreenActionKind, the navMachine case and the screen's own handler all look
+  // correct in review. That is the Alt+O lesson, and this key is the only way an
+  // operator can re-value an item created before T9 — which is every item in
+  // every existing company.
+  setValuationMethod: "setValuationMethod",
+  // ---- THE AGENT PLANE (W2). The Alt+O lesson a fifth time: without these three
+  // lines Ctrl+K, and Alt+X / Alt+B on the approval inbox, resolve, find no screen
+  // action, and are forwarded to a machine that deliberately does not move.
+  agentPanel: "agentPanel",
+  rejectApproval: "rejectApproval",
+  askBackApproval: "askBackApproval",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -172,6 +319,9 @@ const ALWAYS_MEANINGFUL = new Set<KeymapAction["kind"]>([
   "eWayBill",
   // Alt+I on the e-invoice screen it already opens — same pushOnce reasoning.
   "eInvoice",
+  // Ctrl+F4 on the pay run screen it already opens — same pushOnce reasoning as
+  // orderRegister above.
+  "payRun",
   "date",
   "help",
   "features",
@@ -208,7 +358,25 @@ export function AppShell({
     <ScreenActionsProvider>
       <LoadedVoucherProvider>
         <LoadedDraftProvider>
-          <AppShellInner registry={registry} />
+          {/* THE AGENT PROPOSAL SLOT (W2). ⚠️ useLoadedProposal is INERT outside
+              this provider — on purpose, see LoadedProposal.tsx — so a shell
+              without it would render every proposal as an ordinary empty
+              voucher and nothing would throw. AgentPanel.test.tsx drives the
+              prefill through THIS shell, which is what can see it missing. */}
+          <LoadedProposalProvider>
+          {/* ⛔⛔ THE OFFLINE QUEUE'S ONLY MOUNT POINT, AND THE ONE PLACE THE
+              WHOLE TRACK CAN GO SILENTLY MISSING. `useOfflineOutbox()` returns
+              null outside a provider and the accept path then REFUSES to queue —
+              correctly, and invisibly to every screen test, because those render
+              a screen and not the shell. So AppShell.test.tsx asserts this
+              provider is mounted here, by driving a failed post on the real
+              shell. Wrapping INSIDE LoadedVoucher/LoadedDraft is arbitrary; it
+              must be inside CompanyProvider and the auth gate, which are above
+              AppShell, because it is scoped by (company, subject). */}
+          <OfflineOutboxProvider>
+            <AppShellInner registry={registry} />
+          </OfflineOutboxProvider>
+          </LoadedProposalProvider>
         </LoadedDraftProvider>
       </LoadedVoucherProvider>
     </ScreenActionsProvider>
@@ -308,6 +476,23 @@ function AppShellInner({
         return;
       }
 
+      // ⛔ A KEY THE SCREEN ALREADY ANSWERED DOES NOT REACH THE MACHINE EITHER
+      // (register row D114). Esc with an in-screen panel open is the case: the
+      // panel closes and the FRAME MUST SURVIVE, because the machine's escape
+      // reducer pops a frame it cannot see a panel on — which put an operator
+      // who pressed Esc in the statement-import panel on the Gateway of Tally,
+      // two screens from where the panel's own footer said they would be, and
+      // Bank Reconciliation is not in Alt+G Go To to get back with.
+      //
+      // ⚠️ SEPARATE FROM `refused` ON PURPOSE. That branch means "nothing
+      // happened and here is why"; this one means "it happened HERE". Merging
+      // them would report a working key as a rejected one.
+      if (effect.handled) {
+        ev.preventDefault();
+        if (effect.message) showStatus(effect.message);
+        return;
+      }
+
       // Did the key move the machine? Measured across the send against the
       // machine's LIVE stack (not the rendered snapshot, which is a tick behind
       // when a SelectionList fires SELECT and KEY in the same keypress).
@@ -400,7 +585,15 @@ function AppShellInner({
         {needsCompany && !companyReady ? (
           <CompanyLoadingScreen />
         ) : Screen ? (
-          <Screen snapshot={snapshot} onSelect={onSelect} />
+          // ⛔ `onConfig` IS PASSED TO THE SCREEN AND NOT ONLY TO THE OVERLAY
+          // HOST. A screen whose dimension is typed on its own face — the
+          // Payroll Register's wage month is the first — has no other way to put
+          // that dimension on the frame, and a drill from it therefore carried
+          // NOTHING. That was measured in a browser: Enter on a register row
+          // opened a payslip screen with no month, which is the state that says
+          // "open this from the register", from the register. See
+          // ScreenComponentProps.onConfig.
+          <Screen snapshot={snapshot} onSelect={onSelect} onConfig={onConfig} />
         ) : (
           <UnregisteredScreen snapshot={snapshot} />
         )}
@@ -408,6 +601,17 @@ function AppShellInner({
           snapshot={snapshot}
           onConfig={onConfig}
           onClose={() => pressCombo("Esc")}
+        />
+        {/* THE AGENT SIDE PANEL (W2), Ctrl+K. Mounted beside the screen rather
+            than as a frame because it must survive screen changes; it renders
+            nothing while closed. It gets the machine's `onSelect` for exactly
+            one purpose — opening a proposal in its native voucher screen — and
+            hands focus back to this root when it closes, so the next key drives
+            the screen again. */}
+        <AgentPanel
+          snapshot={snapshot}
+          onSelect={onSelect}
+          onClose={() => rootRef.current?.focus({ preventScroll: true })}
         />
       </Chrome>
     </div>
@@ -527,14 +731,72 @@ function screenTitle(snap: NavSnapshot): string {
     // screen produces a government reference number, which this build cannot.
     case "e-invoice":
       return "e-Invoice";
+    // ⛔ THE TITLE SAYS "Data" AND NOT "Backup". The screen is Tally's Data menu
+    // — backup, restore, and a deliberate refusal of Split Company Data — and a
+    // title bar naming only the first would leave an operator looking for the
+    // other two somewhere else.
+    case "data":
+      return "Data";
+    // ⛔ THE TITLE NAMES TALLY. Without this case the chrome reads "Tally" — the
+    // `default` below — over a screen that is about to post somebody's whole
+    // book into the open company, which is the one screen where a wrong title is
+    // more than cosmetic.
+    case "tally-import":
+      return "Import from Tally";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over
+    // the screen that lists work these books REFUSED. A wrong title here is not
+    // cosmetic: it is the screen an operator reaches while trying to find out why
+    // their edit did not take.
+    case "reconciliation":
+      return "Reconciliation Queue";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
+    // list of vouchers that are NOT IN THE BOOKS. That is the one title this
+    // application cannot afford to get wrong: the whole screen exists to say
+    // "these are not posted yet", and a frame labelled with the product name
+    // makes it look like any other register.
+    case "offline-outbox":
+      return "Offline Outbox";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over
+    // the screen that decides what every invoice this company issues will say.
+    case "print-templates":
+      return "Print Templates";
     // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
     // screen showing a voucher's hash-chained version history. The screen itself
     // is real and honest (it renders voucher_version with tri-state chain
     // verification); it was the frame around it that said nothing. A title bar is
     // read as the name of what you are looking at, and an audit trail that will
     // not name itself is the one screen where that matters most.
+    // The five PAYROLL screens. ⛔ THE REGISTER AND THE PAYSLIP DELIBERATELY DO
+    // NOT NAME THE MONTH IN THE TITLE BAR, for the reason the Cost Centre Summary
+    // does not name its axis: the month is chosen INSIDE the screen, and a stale
+    // title naming the previous one over another month's figures is precisely the
+    // confusion payroll must avoid. Each screen prints the month in its own
+    // heading, from the response the figures came in.
+    case "employees":
+      return "Employees";
+    case "payroll-run":
+      return "Pay Run";
+    case "payroll-register":
+      return "Payroll Register";
+    // ⛔ AND THE PAYSLIP DOES NOT NAME THE EMPLOYEE EITHER — a title bar carrying
+    // one person's name over another person's figures is the single worst
+    // rendering error this screen can make, and it is exactly what a title
+    // derived from the frame (rather than from the served payslip) would produce
+    // when a drill resolves to a different row than the one highlighted.
+    case "payroll-payslip":
+      return "Payslip";
+    case "payroll-form-138":
+      return "Form 138 — Salary TDS (Annexure I)";
     case "edit-log":
       return "Edit Log";
+    // W2. Without it the chrome reads "Tally" over the screen that decides what
+    // an agent may put in these books.
+    case "approval-inbox":
+      return "Approval Inbox";
+    case "agent-settings":
+      return "Agent Settings";
+    case "insights":
+      return "Insights";
     default:
       return "Tally";
   }
@@ -630,12 +892,61 @@ function hintsFor(snap: NavSnapshot): string[] {
       return ["Esc: Back"];
     case "features":
       return ["Esc: Back", "F1: Help"];
+    case "data":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN — and worse, next to a
+    // button that fires an import that cannot be undone.
+    case "tally-import":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" — on a screen whose rows open with a named button, and one of
+    // whose buttons CLEARS the only record that somebody's work was refused.
+    case "reconciliation":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" on a screen whose rows open nothing — and whose two actions
+    // (commit the queue to the books, discard a voucher) are named buttons
+    // precisely because a generic accept cannot say which it would do.
+    case "offline-outbox":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. This is a form: its two
+    // actions are named buttons, deliberately, because "save a layout" and
+    // "clear a customisation" are different consequences and a generic accept
+    // key cannot say which it would fire.
+    case "print-templates":
+      return ["Esc: Back", "F1: Help"];
     // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. The edit log is a read-only
     // list of versions; there is no drill-down behind a row, so the one hint an
     // operator was given here was the one thing that does not work.
     case "edit-log":
       return ["Esc: Back", "F1: Help"];
+    // W2 — every decision key, spelled as what it does. "Approve", never
+    // "Accept": nothing on this screen posts a voucher.
+    case "approval-inbox":
+      return [
+        "↑/↓: Proposal",
+        "Enter: Open to edit",
+        "Ctrl+A: Approve",
+        "Alt+X: Reject",
+        "Alt+B: Ask back",
+        "Ctrl+K: Agent",
+        ...common,
+      ];
+    // W4 — the screen-local letters, and Enter only where it drills (a voucher
+    // highlighted in the insight's voucher list).
+    case "insights":
+      return [
+        "↑/↓: Insight",
+        "U/N/W: Useful/Not useful/Wrong",
+        "V: Evidence",
+        "S/L: Suppress/Lift",
+        "D: Digest",
+        "Tab+Enter: Voucher",
+        ...common,
+      ];
     default:
       return ["Enter: Open", ...common];
   }

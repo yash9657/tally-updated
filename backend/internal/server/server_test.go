@@ -30,9 +30,13 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+// The DSNs honour ADMIN_DATABASE_URL / DATABASE_URL (the Makefile's names).
+// Every live test here applies migrations, so a hardcoded shared DSN meant a
+// branch with an unmerged migration migrated everyone's database the moment
+// this package ran (W3 lane, 2026-09-28).
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 // newServer applies migrations (idempotent) and returns a wired Server. It
@@ -89,10 +93,38 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 		}
 	})
 
+	// D102: the audience pin. The issuer pin above scopes acceptance to a REALM,
+	// and every client in a realm mints tokens carrying the same iss — so without
+	// this second pin a token a user legitimately obtained for ANY OTHER
+	// application in that realm authenticates here as that subject.
+	t.Run("AUTH_JWKS_URL without AUTH_AUDIENCE refuses to start", func(t *testing.T) {
+		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
+		t.Setenv("CORED_ENV", "")
+		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		t.Setenv("AUTH_AUDIENCE", "")
+		t.Setenv("AUTH_JWKS_URL", "http://127.0.0.1:1/jwks")
+		srv, err := server.New(ctx, appDSN)
+		if err == nil {
+			srv.Close()
+			t.Fatal("server.New must refuse to start with AUTH_JWKS_URL and no AUTH_AUDIENCE (any client in the pinned realm would be accepted)")
+		}
+		if !strings.Contains(err.Error(), "AUTH_AUDIENCE") {
+			t.Fatalf("expected an AUTH_AUDIENCE fail-closed error, got: %v", err)
+		}
+		// ⭐ AND IT MUST REFUSE BEFORE IT DIALS. The URL above is a dead port: if
+		// the audience guard ran AFTER the fetch this would be the unreachable
+		// error instead, and an operator with a LIVE IdP and no audience would
+		// boot wide open — the exact configuration this defect is about.
+		if strings.Contains(err.Error(), "unreachable") {
+			t.Fatalf("the audience guard ran after the JWKS fetch; it must run before: %v", err)
+		}
+	})
+
 	t.Run("AUTH_JWKS_URL at a dead endpoint fails closed", func(t *testing.T) {
 		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
 		t.Setenv("CORED_ENV", "")
 		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		t.Setenv("AUTH_AUDIENCE", jwksTestAudience)
 		// Port 1 on loopback: guaranteed-dead, no DNS, refuses immediately (so
 		// this cannot hang on the 5s boot timeout in CI).
 		t.Setenv("AUTH_JWKS_URL", "http://127.0.0.1:1/jwks")
@@ -101,8 +133,11 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 			srv.Close()
 			t.Fatal("server.New must not boot (nor fall back to the dev issuer) when the JWKS endpoint is unreachable")
 		}
-		if !strings.Contains(err.Error(), "JWKS") {
-			t.Fatalf("expected a JWKS boot error, got: %v", err)
+		// ⛔ "unreachable", not merely "JWKS". The audience refusal added by D102
+		// also contains the substring "JWKS" (inside "AUTH_JWKS_URL"), so the
+		// looser assertion this replaced would pass against the WRONG error.
+		if !strings.Contains(err.Error(), "unreachable") {
+			t.Fatalf("expected an UNREACHABLE-JWKS boot error, got: %v", err)
 		}
 	})
 
@@ -116,14 +151,18 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
 		t.Setenv("CORED_ENV", "")
 		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		t.Setenv("AUTH_AUDIENCE", jwksTestAudience)
 		t.Setenv("AUTH_JWKS_URL", js.URL)
 		srv, err := server.New(ctx, appDSN)
 		if err == nil {
 			srv.Close()
 			t.Fatal("server.New must not boot against a JWKS with no usable asymmetric key")
 		}
-		if !strings.Contains(err.Error(), "JWKS") {
-			t.Fatalf("expected a JWKS boot error, got: %v", err)
+		// Same reasoning as the subtest above: name the actual failure. A JWKS
+		// carrying only a symmetric key is SERVED fine — it is invalid, not
+		// unreachable — so this must not match the audience refusal either.
+		if !strings.Contains(err.Error(), "invalid JWKS") {
+			t.Fatalf("expected an INVALID-JWKS boot error, got: %v", err)
 		}
 	})
 
@@ -148,6 +187,7 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
 		t.Setenv("CORED_ENV", "")
 		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		t.Setenv("AUTH_AUDIENCE", jwksTestAudience)
 		t.Setenv("AUTH_JWKS_URL", js.URL)
 		srv, err := server.New(ctx, appDSN)
 		if err != nil {
@@ -184,6 +224,9 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 		idpToken, err := authn.NewSigner(priv, "idp-1", jwksTestIssuer).Sign(authn.Claims{
 			Subject:   "idp-user-" + uuid.NewString(),
 			ExpiresAt: time.Now().Add(time.Hour).Unix(),
+			// D102: minted FOR this application. Without it the token is refused,
+			// which is the whole point of the audience pin.
+			Audience: authn.Audience{jwksTestAudience},
 		})
 		if err != nil {
 			t.Fatalf("sign IdP token: %v", err)
@@ -220,11 +263,50 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("token forged under the published kid = %d, want 401", rec.Code)
 		}
+
+		// ⛔⛔ D102 END TO END, AND THIS IS THE ARM THAT ACTUALLY PROVES THE FIX.
+		// A token signed by the REAL IdP key, under the published kid, carrying the
+		// PINNED ISSUER, with a valid exp and a well-formed subject — everything
+		// the pre-D102 verifier checked — but minted for a DIFFERENT application in
+		// the same realm. This is precisely the token a user legitimately holds for
+		// another internal app, and before the fix it authenticated here as that
+		// subject and reached the authorization gate (403). It must now be 401.
+		//
+		// ⚠️ 401-vs-403 IS THE WHOLE ASSERTION. 403 would mean the token was
+		// AUTHENTICATED and merely lacked permissions — i.e. the audience check did
+		// not run. Do not loosen this to "not 200".
+		otherApp, err := authn.NewSigner(priv, "idp-1", jwksTestIssuer).Sign(authn.Claims{
+			Subject:   "idp-user-" + uuid.NewString(),
+			ExpiresAt: time.Now().Add(time.Hour).Unix(),
+			Audience:  authn.Audience{"some-other-app-in-the-same-realm"},
+		})
+		if err != nil {
+			t.Fatalf("sign other-audience token: %v", err)
+		}
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/v1/companies/"+uuid.NewString()+"/reports/trial-balance", nil)
+		req.Header.Set("Authorization", "Bearer "+otherApp)
+		srv.Router().ServeHTTP(rec, req)
+		if rec.Code == http.StatusForbidden {
+			t.Fatalf("a token minted for ANOTHER application in the same realm was AUTHENTICATED (403 = it got past the 401 gate). The audience check is not running on the request path — this is D102 exactly")
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("other-audience token = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+		}
 	})
 }
 
 // jwksTestIssuer is the iss the JWKS-mode boot tests pin via AUTH_ISSUER.
 const jwksTestIssuer = "https://idp.test/realms/tally"
+
+// jwksTestAudience is the OIDC client id cored's tokens are minted for (D102).
+// ⛔ EVERY JWKS SUBTEST MUST SET IT, INCLUDING THE ONES THAT EXPECT A REFUSAL.
+// buildAuth checks the audience BEFORE it fetches the JWKS, so a subtest that
+// leaves it empty gets the audience refusal rather than the failure it is
+// actually testing — and because that message contains the substring
+// "AUTH_JWKS_URL", a Contains(err, "JWKS") assertion goes on PASSING while
+// testing nothing at all.
+const jwksTestAudience = "cored"
 
 func newServer(t *testing.T) *server.Server {
 	t.Helper()

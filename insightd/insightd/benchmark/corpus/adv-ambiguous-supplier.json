@@ -1,6 +1,6 @@
 {
   "id": "adv-ambiguous-supplier",
-  "description": "Two party ledgers match -> no auto-select -> manual. Both candidates are the SAME vendor's ledgers and both sit in state 27, so which account to credit is unresolved but the supplier's STATE is not: the document's own place of supply is 27 too, and the split is the ordinary intra-state cgst 90 / sgst 90. This fixture previously expected igst 180 on the reasoning that an unmatched supplier has an unknown state — true when there is NO candidate (see adv-missing-gstin), false here, where every candidate agrees. 'supplier' is therefore NOT unresolved; only 'party' is.",
+  "description": "Two party ledgers match -> no auto-select -> manual. Both candidates are the SAME vendor's ledgers and both sit in state 27, so which account to credit is unresolved but the supplier's STATE is not: the document's own place of supply is 27 too, and the split is the ordinary intra-state cgst 90 / sgst 90. This fixture previously expected igst 180 on the reasoning that an unmatched supplier has an unknown state \u2014 true when there is NO candidate (see adv-missing-gstin), false here, where every candidate agrees. 'supplier' is therefore NOT unresolved; only 'party' is.",
   "rulesetVersion": "gst-2024-09",
   "ocr_quality": "clean",
   "input": {
@@ -55,7 +55,7 @@
           "confidence": 0.97
         },
         {
-          "text": "GSTIN: 27ABCDE1234F1Z5",
+          "text": "GSTIN: 27ABCDE1234F1Z0",
           "bbox": [
             10,
             130,
@@ -148,7 +148,7 @@
         {
           "id": "L-PARTY-1",
           "name": "Acme Components Pvt Ltd",
-          "gstin_masked": "27ABC…1Z5",
+          "gstin_masked": "27ABC\u20261Z0",
           "state_code": "27",
           "kind": "party"
         },
@@ -185,7 +185,7 @@
         {
           "id": "L-PARTY-2",
           "name": "Acme Components (Mumbai)",
-          "gstin_masked": "27ABC…1Z5",
+          "gstin_masked": "27ABC\u20261Z0",
           "state_code": "27",
           "kind": "party"
         }
@@ -196,7 +196,7 @@
     },
     "planted_pii": {
       "GSTIN": [
-        "27ABCDE1234F1Z5"
+        "27ABCDE1234F1Z0"
       ],
       "PAN": [
         "ABCDE1234F"

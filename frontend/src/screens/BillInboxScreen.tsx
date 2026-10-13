@@ -11,6 +11,7 @@ import { useLoadedDraft } from "../app/LoadedDraft";
 import { OPEN_PURCHASE_DRAFT_SENTINEL } from "../keystroke/navMachine";
 import type { ScreenComponentProps } from "../app/screenRegistry";
 import { SelectionList } from "./SelectionList";
+import { drainPendingDraftConfirms } from "./vouchers/draftAccept";
 
 /**
  * The F9 Bill Inbox — the AI-native upload-to-voucher entry point.
@@ -270,6 +271,18 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
     setLoading(true);
     setError(null);
     try {
+      // ⛔ §7.3 B — SETTLE OWED ACCEPTANCE CONFIRMS BEFORE LISTING, NOT AFTER.
+      // A confirm that never landed leaves the draft non-terminal in insightd, so
+      // this list would OFFER A BILL THAT IS ALREADY ON THE BOOKS — the row that
+      // invited the second post. Draining first means the list reflects the
+      // acceptance if the retry lands, so the operator never sees the invitation.
+      //
+      // This screen is the other natural retry trigger besides the next accept:
+      // it is where an operator goes to look for the bill they think they still
+      // owe. `drainPendingDraftConfirms` never throws, so it cannot turn a
+      // reachable inbox into an error screen; a still-failing insightd simply
+      // leaves the confirm queued and the list is fetched as before.
+      await drainPendingDraftConfirms(companyID);
       const list = await insightd.listDrafts(companyID);
       setDrafts(list);
     } catch (e) {

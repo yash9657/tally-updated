@@ -5,13 +5,14 @@
  * filters as query params. Money stays string end to end.
  */
 
-import type { CoredClient } from "./client";
+import type { CoredClient, RestoreResult } from "./client";
 import {
   createHttpClient,
   type HttpClient,
   type HttpClientOptions,
 } from "./http";
 import type {
+  BooksClosure,
   BalanceSheetResponse,
   CompanyFeaturesRequest,
   CompanyFeaturesResponse,
@@ -35,11 +36,27 @@ import type {
   GSTR1Response,
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
+  PrintTemplateRequest,
+  PrintTemplateResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  CreateStockGroupRequest,
+  CreateCurrencyRequest,
+  CreateCurrencyResponse,
+  ForexSettingsResponse,
+  SetForexSettingsRequest,
+  ListCurrenciesResponse,
+  SetCurrencyRateRequest,
+  CreateStockGroupResponse,
+  InventoryVocabularyResponse,
+  ListStockGroupsResponse,
+  ListUnitsResponse,
+  SetValuationMethodRequest,
+  SetValuationMethodResponse,
   ListStockItemsResponse,
   OutstandingsQuery,
   OutstandingsResponse,
+  UnadjustedForexResponse,
   PartyOpenBillsResponse,
   ProfitLossResponse,
   StockSummaryResponse,
@@ -47,10 +64,12 @@ import type {
   VoucherRequest,
   VoucherResponse,
   VoucherView,
+  ListGroupsResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankMatchesResponse,
   BankReconciliationResponse,
   ImportedStatementResponse,
   ImportStatementRequest,
@@ -97,8 +116,42 @@ import type {
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
+  SetAsideRequest,
+  SetAsideResponse,
   SetBankDateRequest,
   SetBankDateResponse,
+  ListEmployeesResponse,
+  CreateEmployeeRequest,
+  CreateEmployeeResponse,
+  PayRunRequest,
+  PayRunResponse,
+  PayrollRegisterResponse,
+  PayslipResponse,
+  Form138Request,
+  StatutoryFileDownload,
+  ListSalaryComponentsResponse,
+  SetSalaryComponentRequest,
+  SetSalaryComponentResponse,
+  ListStatutoryElectionsResponse,
+  SetStatutoryElectionRequest,
+  SetStatutoryElectionResponse,
+  PayrollVocabularyResponse,
+  ReconciliationPayloadResponse,
+  ReconciliationQueueResponse,
+  ResolveReconciliationResponse,
+  SyncCommitResponse,
+  AlterBudgetResponse,
+  BudgetDimension,
+  BudgetLineListResponse,
+  BudgetListResponse,
+  BudgetVarianceResponse,
+  GSTR9Envelope,
+  GSTR9TaxLedgers,
+  CreateBudgetLineRequest,
+  CreateBudgetLineResponse,
+  CreateBudgetRequest,
+  CreateBudgetResponse,
+  DeleteBudgetResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -117,9 +170,48 @@ import type {
   UpdateMemberResponse,
   UpdateSecurityLevelResponse,
 } from "./admin";
+import type {
+  AgentApprovalResponse,
+  AgentApprovalsResponse,
+  AgentDecisionRequest,
+  AgentEventsResponse,
+  AgentRunResponse,
+  AgentRunsResponse,
+  StartAgentRunRequest,
+  AgentAutonomyResponse,
+  AgentEditPreviewResponse,
+  AgentVerifyAnchorsResponse,
+  AgentVerifyRunResponse,
+  SetAgentAutonomyRequest,
+  UnblockLedgerResponse,
+} from "./agent";
+import type {
+  Insight,
+  InsightDigest,
+  InsightEvidenceResponse,
+  InsightRunResponse,
+  InsightSuppression,
+  InsightsListResponse,
+  InsightState,
+  InsightVerdict,
+  SuppressInsightRequest,
+} from "./insights";
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
+}
+
+/**
+ * The print-template path for one document kind.
+ *
+ * ⚠️ THE KIND IS ENCODED. Every kind the server knows is a plain kebab-case slug
+ * that needs no escaping, so this looks like ceremony — but the value reaching
+ * here comes from a screen's picker, and an unencoded segment is how a stray
+ * slash turns one path into another route entirely. The server refuses an unknown
+ * kind with a 400 that names the vocabulary; it should never see a mangled one.
+ */
+function printTemplate(companyID: string, docKind: string): string {
+  return `${company(companyID)}/print-templates/${encodeURIComponent(docKind)}`;
 }
 
 /**
@@ -146,6 +238,61 @@ function wireVoucher(req: VoucherRequest): VoucherRequest {
 }
 
 /** Build a REST CoredClient over an HttpClient (constructed from opts if absent). */
+/**
+ * The server's restore response, snake_case on the wire. Mapped rather than
+ * spread so a field the server renames fails HERE, in one place, instead of
+ * arriving as undefined on a screen that then renders "undefined memberships
+ * were not restored".
+ */
+interface RestoreWire {
+  company_id: string;
+  company_name: string;
+  row_count: number;
+  rows: Record<string, number>;
+  skipped_tables: string[] | null;
+  skipped_rows: number;
+  memberships_not_restored: string[] | null;
+  source_schema_version: string;
+  schema_version: string;
+}
+
+function fromRestoreWire(w: RestoreWire): RestoreResult {
+  return {
+    companyID: w.company_id,
+    companyName: w.company_name,
+    rowCount: w.row_count,
+    rows: w.rows ?? {},
+    skippedTables: w.skipped_tables ?? [],
+    skippedRows: w.skipped_rows,
+    membershipsNotRestored: w.memberships_not_restored ?? [],
+    sourceSchemaVersion: w.source_schema_version,
+    schemaVersion: w.schema_version,
+  };
+}
+
+/** The wire shape of the year-end lock; see BooksClosure for the camelCase one. */
+interface BooksClosureWire {
+  closed: boolean;
+  closed_through?: string;
+  closed_at?: string;
+  closed_by?: string;
+}
+
+/**
+ * ⚠️ ABSENT KEYS BECOME null, NOT undefined. The server omits closed_through
+ * entirely when nothing is closed (omitempty), and a screen that switched on
+ * `undefined` vs `null` would read "never closed" and "closed but unknown" as
+ * the same thing.
+ */
+function fromClosureWire(w: BooksClosureWire): BooksClosure {
+  return {
+    closed: w.closed,
+    closedThrough: w.closed_through ?? null,
+    closedAt: w.closed_at ?? null,
+    closedBy: w.closed_by ?? null,
+  };
+}
+
 export function createRestClient(
   opts: HttpClientOptions | { http: HttpClient } = {},
 ): CoredClient {
@@ -174,6 +321,12 @@ export function createRestClient(
     listLedgers(companyID) {
       return http.get<ListLedgersResponse>(`${company(companyID)}/ledgers`);
     },
+    listGroups(companyID) {
+      // A flat list with each row's parent NAMED, ordered by name. Not a tree: the
+      // caller that needs one can build it, and the caller that only needs a picker
+      // is not made to walk one first.
+      return http.get<ListGroupsResponse>(`${company(companyID)}/groups`);
+    },
     setLedgerOpening(companyID, ledgerID, req: SetLedgerOpeningRequest) {
       return http.put<SetLedgerOpeningResponse>(
         `${company(companyID)}/ledgers/${ledgerID}/opening`,
@@ -191,6 +344,49 @@ export function createRestClient(
     },
     printReport(companyID, slug, query) {
       return http.getBlob(`${company(companyID)}/print/reports/${slug}`, query);
+    },
+
+    // ---- T14: DATA (Alt+Y) — backup and restore.
+    backupCompany(companyID) {
+      // getBlob and NOT get: the body is gzip, and `request` reads every
+      // response as text and then tries JSON.parse, which for a compressed
+      // archive yields a lossy string rather than a file.
+      return http.getBlob(`${company(companyID)}/backup`);
+    },
+    restoreCompany(archive) {
+      // NO company() PREFIX, deliberately: the route is outside the
+      // {companyID} subtree because the company does not exist yet, so the
+      // subtree's membership check would 403 every caller before the company
+      // it names could be created.
+      return http.postRaw<RestoreWire>(
+        "/v1/companies/restore",
+        archive,
+        "application/gzip",
+      ).then(fromRestoreWire);
+    },
+
+    // ---- YEAR-END CLOSURE (0089): the third item on the Alt+Y Data menu.
+    //
+    // ⛔ THE WIRE IS snake_case AND THE CLIENT IS camelCase, converted HERE and
+    // nowhere else, so a screen never sees `closed_through`. The three routes
+    // answer the SAME body shape on purpose — a client must not have to
+    // reconcile two spellings of one fact — so one mapper serves all three.
+    booksClosure(companyID) {
+      return http
+        .get<BooksClosureWire>(`${company(companyID)}/books-closure`)
+        .then(fromClosureWire);
+    },
+    closeBooks(companyID, closedThrough) {
+      return http
+        .post<BooksClosureWire>(`${company(companyID)}/books-closure`, {
+          closed_through: closedThrough,
+        })
+        .then(fromClosureWire);
+    },
+    reopenBooks(companyID) {
+      return http
+        .del<BooksClosureWire>(`${company(companyID)}/books-closure`)
+        .then(fromClosureWire);
     },
 
     // ---- Bank reconciliation (T4).
@@ -238,6 +434,38 @@ export function createRestClient(
         // Omitted rather than sent empty; the server reads a missing period as
         // "everything imported".
         from || to ? { from: from ?? "", to: to ?? "" } : undefined,
+      );
+    },
+    // ---- Bank statement MATCHING (T4 slice 2b).
+    //
+    // ⭐ NOTE WHAT IS NOT HERE: there is no `resolveBankMatch`. Accepting a
+    // proposal is `setBankDate` above with a statement_line_id in the body,
+    // which is the whole point — matching borrows the tick's authority, its
+    // back-dated cutoff and its step-up rather than minting its own.
+    bankStatementMatches(companyID, ledgerID, opts) {
+      const q: Record<string, string> = {};
+      if (opts?.from) q.from = opts.from;
+      if (opts?.to) q.to = opts.to;
+      // Sent only when the caller chose one. An omitted window means "use the
+      // build's search width", and the response states which was used.
+      if (opts?.windowDays) q.window_days = String(opts.windowDays);
+      return http.get<BankMatchesResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/matches`,
+        Object.keys(q).length > 0 ? q : undefined,
+      );
+    },
+    setAsideStatementLine(companyID, ledgerID, lineID, req: SetAsideRequest) {
+      return http.post<SetAsideResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/lines/${lineID}/set-aside`,
+        req,
+      );
+    },
+    restoreStatementLine(companyID, ledgerID, lineID) {
+      // A POST, not a DELETE: routeAction maps no DELETE on the /bank-statement/
+      // prefix, and widening it would give the prefix an authority nobody chose.
+      return http.post<SetAsideResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/lines/${lineID}/restore`,
+        {},
       );
     },
     // ---- TDS deductor status (Item Zero step 2).
@@ -318,7 +546,9 @@ export function createRestClient(
       // and two companies on one deployment get the same answer. A company id in
       // the path only because every route on this seam is company-scoped by the
       // middleware that authorises it.
-      return http.get<TaxSectionsResponse>(`${company(companyID)}/tds-sections`);
+      return http.get<TaxSectionsResponse>(
+        `${company(companyID)}/tds-sections`,
+      );
     },
 
     // ---- The TDS deductor return profile (T6, migration 0070).
@@ -402,6 +632,128 @@ export function createRestClient(
         { cost_category_id: costCategoryID, from, to },
       );
     },
+    // ---- T11: budgets and budget vs actual (migrations 0085/0086).
+    listBudgets(companyID) {
+      return http.get<BudgetListResponse>(`${company(companyID)}/budgets`);
+    },
+    createBudget(companyID, req: CreateBudgetRequest) {
+      return http.post<CreateBudgetResponse>(
+        `${company(companyID)}/budgets`,
+        req,
+      );
+    },
+    alterBudget(companyID, budgetID: string, req: CreateBudgetRequest) {
+      // The server nests the read-back under `budget` and may return it null when
+      // the read-back failed AFTER a successful write. Handed over AS THE ENVELOPE
+      // rather than unwrapped here, because unwrapping would have to invent
+      // something for the null case — and the caller is the only one who can decide
+      // what to say about "it saved, but we could not read it back".
+      return http.put<AlterBudgetResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}`,
+        req,
+      );
+    },
+    deleteBudget(companyID, budgetID: string, deletedBy: string) {
+      // ⚠️ THE ACTOR RIDES IN THE QUERY STRING, not a body: a DELETE carries no body
+      // by convention and the server refuses an absent actor rather than defaulting
+      // it — a plan deleted by nobody in particular is a plan nobody can be asked
+      // about.
+      return http.del<DeleteBudgetResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}`,
+        { deleted_by: deletedBy },
+      );
+    },
+    listBudgetLines(companyID, budgetID: string) {
+      return http.get<BudgetLineListResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines`,
+      );
+    },
+    addBudgetLine(companyID, budgetID: string, req: CreateBudgetLineRequest) {
+      return http.post<CreateBudgetLineResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines`,
+        req,
+      );
+    },
+    alterBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      req: CreateBudgetLineRequest,
+    ) {
+      return http.put<{ id: string; altered: boolean }>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines/${encodeURIComponent(lineID)}`,
+        req,
+      );
+    },
+    deleteBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      deletedBy: string,
+    ) {
+      return http.del<{ id: string; deleted: boolean }>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines/${encodeURIComponent(lineID)}`,
+        { deleted_by: deletedBy },
+      );
+    },
+    budgetVariance(
+      companyID,
+      budgetID: string,
+      dimension: BudgetDimension,
+      costCategoryID?: string,
+    ) {
+      // A FLAT LITERAL PATH with every selector as a query param, not
+      // /budgets/{id}/variance — a report's route must spell its own name so
+      // routeAction can map it to `report:budget-variance`, exactly as
+      // cost-centre-summary takes cost_category_id this way.
+      //
+      // ⛔ THE PLAN AND THE GRAIN ARE ALWAYS SENT. The server has no default for
+      // either, deliberately: defaulting the grain would render a real, correct
+      // ledger-level report under a heading the operator chose for groups.
+      //
+      // The axis is OMITTED rather than sent empty when absent — the server reads a
+      // present-but-blank id as a 400 about a malformed uuid rather than the
+      // "which axis did you mean" refusal that names the alternatives.
+      return http.get<BudgetVarianceResponse>(
+        `${company(companyID)}/budget-variance`,
+        costCategoryID
+          ? { budget_id: budgetID, dimension, cost_category_id: costCategoryID }
+          : { budget_id: budgetID, dimension },
+      );
+    },
+
+    gstr9(
+      companyID,
+      from: string,
+      to: string,
+      ledgers: GSTR9TaxLedgers,
+      gstin?: string,
+    ) {
+      // A FLAT LITERAL PATH beside /gstr1 and /gstr3b, with the year and the six
+      // ledgers as query params. A report's route must spell its own name so
+      // routeAction can map it to `report:gstr9` — the same reason
+      // /budget-variance is not /budgets/{id}/variance.
+      //
+      // ⛔ ALL SIX LEDGER IDS ARE ALWAYS SENT, and the caller cannot omit one:
+      // the type requires all six. The server refuses a missing one with a 400
+      // naming it, and this client does not paper over that by sending a blank —
+      // a present-but-empty id reads as a malformed uuid rather than as the
+      // "there is nothing to reconcile against" refusal, and the operator would
+      // be told the wrong thing.
+      const query: Record<string, string> = {
+        from,
+        to,
+        cgst_ledger_id: ledgers.cgst,
+        sgst_ledger_id: ledgers.sgst,
+        igst_ledger_id: ledgers.igst,
+        input_cgst_ledger_id: ledgers.inputCGST,
+        input_sgst_ledger_id: ledgers.inputSGST,
+        input_igst_ledger_id: ledgers.inputIGST,
+      };
+      if (gstin) query.gstin = gstin;
+      return http.get<GSTR9Envelope>(`${company(companyID)}/gstr9`, query);
+    },
+
     costCategorySummary(companyID, from: string, to: string) {
       // No axis: this report IS the list of axes.
       return http.get<CostCategorySummaryResponse>(
@@ -511,10 +863,7 @@ export function createRestClient(
       // /companies/{c}/vouchers/{v}/e-invoice) and that is fine: it has no
       // routeAction, no PDP and no voucher classes. The two paths differ on
       // purpose, and this is cored's.
-      return http.post<EInvoiceRaised>(
-        `${company(companyID)}/e-invoices`,
-        req,
-      );
+      return http.post<EInvoiceRaised>(`${company(companyID)}/e-invoices`, req);
     },
     getEInvoice(companyID, voucherID: string) {
       return http.get<EInvoicePinned>(
@@ -574,7 +923,6 @@ export function createRestClient(
       );
     },
 
-
     // ---- s.394(2) declarations (Item Zero step 3).
     listTCSDeclarations(companyID) {
       return http.get<TCSDeclarationListResponse>(
@@ -612,6 +960,58 @@ export function createRestClient(
     listStockItems(companyID) {
       return http.get<ListStockItemsResponse>(
         `${company(companyID)}/stock-items`,
+      );
+    },
+    listUnits(companyID) {
+      return http.get<ListUnitsResponse>(`${company(companyID)}/units`);
+    },
+    listStockGroups(companyID) {
+      return http.get<ListStockGroupsResponse>(`${company(companyID)}/stock-groups`);
+    },
+    createStockGroup(companyID, req: CreateStockGroupRequest) {
+      return http.post<CreateStockGroupResponse>(
+        `${company(companyID)}/stock-groups`,
+        req,
+      );
+    },
+    listCurrencies(companyID) {
+      return http.get<ListCurrenciesResponse>(`${company(companyID)}/currencies`);
+    },
+    createCurrency(companyID, req: CreateCurrencyRequest) {
+      return http.post<CreateCurrencyResponse>(
+        `${company(companyID)}/currencies`,
+        req,
+      );
+    },
+    async setCurrencyRate(companyID, req: SetCurrencyRateRequest) {
+      await http.post(`${company(companyID)}/currencies/rates`, req);
+    },
+    forexSettings(companyID) {
+      return http.get<ForexSettingsResponse>(
+        `${company(companyID)}/forex-settings`,
+      );
+    },
+    async setForexSettings(companyID, req: SetForexSettingsRequest) {
+      // PUT with no key in the path: company_forex_settings.company_id is the
+      // whole primary key, so the company in the prefix IS the key. 204, no body.
+      await http.put(`${company(companyID)}/forex-settings`, req);
+    },
+    inventoryVocabulary(companyID) {
+      return http.get<InventoryVocabularyResponse>(
+        `${company(companyID)}/inventory-vocabulary`,
+      );
+    },
+    setStockItemValuationMethod(
+      companyID,
+      stockItemID,
+      req: SetValuationMethodRequest,
+    ) {
+      // A PUT, and a narrow one: it is an ALTER of a master (the server maps it
+      // to `alter master`), so it inherits the back-dated cutoff and the
+      // passkey step-up like every other write. It answers with the STORED row.
+      return http.put<SetValuationMethodResponse>(
+        `${company(companyID)}/stock-items/${encodeURIComponent(stockItemID)}/valuation-method`,
+        req,
       );
     },
     listGodowns(companyID) {
@@ -823,6 +1223,15 @@ export function createRestClient(
         query,
       );
     },
+    getUnadjustedForex(companyID, query?: { as_on?: string }) {
+      // ⭐ A FLAT LITERAL EQUAL TO THE PDP RESOURCE NAME, like every report route
+      // here. The date rides the query and carries no authority: it chooses which
+      // bills are in AND which rate prices them, and neither is a resource.
+      return http.get<UnadjustedForexResponse>(
+        `${company(companyID)}/unadjusted-forex`,
+        query,
+      );
+    },
     getBillsPayable(companyID, query?: { as_on?: string }) {
       // ⛔ THE FLAT PATH IS THE POINT (D94) — see the interface. No `kind` is sent
       // and none would be honoured: this route IS the payables book.
@@ -933,5 +1342,398 @@ export function createRestClient(
         query,
       );
     },
+
+    // ---- PER-COMPANY PRINT TEMPLATES (track C). Three verbs, ONE path.
+    //
+    // The GET and the two writes share the path deliberately, and routeAction
+    // maps them onto the SAME `company` resource token — a Display for the read
+    // and an Alter for both writes. One resource, one token, so no ACL rule can
+    // govern the read and miss the write, which is the rule the company
+    // master's own read/write pair is built on.
+    getPrintTemplate(companyID, docKind: string) {
+      return http.get<PrintTemplateResponse>(printTemplate(companyID, docKind));
+    },
+    savePrintTemplate(companyID, docKind: string, req: PrintTemplateRequest) {
+      return http.put<PrintTemplateResponse>(
+        printTemplate(companyID, docKind),
+        req,
+      );
+    },
+    clearPrintTemplate(companyID, docKind: string) {
+      // DELETE and not "PUT everything blank": the row must GO, so the company
+      // reports `customised: false` and is genuinely back on the built-in
+      // layout. See the CoredClient interface for why the two are not the same.
+      return http.del<PrintTemplateResponse>(printTemplate(companyID, docKind));
+    },
+
+    // ---- PAYROLL (Track 3). Eight routes; see the CoredClient interface for
+    // why they are eight methods and not one facade.
+    listEmployees(companyID, includeInactive?: boolean) {
+      // The flag is sent ONLY when true. The server reads
+      // `include_inactive == "true"` literally, and sending "false" would be a
+      // client asserting a default it does not own.
+      return http.get<ListEmployeesResponse>(
+        `${company(companyID)}/employees`,
+        includeInactive ? { include_inactive: "true" } : undefined,
+      );
+    },
+    createEmployee(companyID, req: CreateEmployeeRequest) {
+      // NOTHING IS DEFAULTED HERE, and `is_active` least of all: the server's
+      // field is a *bool whose absence means TRUE, so a client that helpfully
+      // sent `false` for an unticked box would create employees who are silently
+      // left out of the pay run. The form omits the key unless it was chosen.
+      return http.post<CreateEmployeeResponse>(
+        `${company(companyID)}/employees`,
+        req,
+      );
+    },
+    runPayroll(companyID, req: PayRunRequest) {
+      // It rides the ordinary /vouchers/{class} shape on purpose — that is what
+      // puts the pay run under the SAME PDP mapping, back-dated cutoff and
+      // WebAuthn step-up as an invoice, through the same code.
+      return http.post<PayRunResponse>(
+        `${company(companyID)}/vouchers/payroll`,
+        req,
+      );
+    },
+    payrollRegister(companyID, month: string) {
+      return http.get<PayrollRegisterResponse>(
+        `${company(companyID)}/payroll-register`,
+        { month },
+      );
+    },
+    payslip(companyID, month: string, employeeID: string) {
+      return http.get<PayslipResponse>(
+        `${company(companyID)}/payroll-payslip`,
+        { month, employee_id: employeeID },
+      );
+    },
+
+    // ---- The three statutory FILES. `application/zip`, so getBlob and never the
+    // JSON path — which reads every response as text and would hand back a lossy
+    // string instead of an archive.
+    payrollPFECR(companyID, month: string) {
+      return statutory(
+        http.getBlob(`${company(companyID)}/payroll-pf-ecr`, { month }),
+      );
+    },
+    payrollESIReturn(
+      companyID,
+      month: string,
+      leavingReasons?: Readonly<Record<string, string>>,
+    ) {
+      // `leaving_reason` is a REPEATABLE param of the form CODE=Reason, which is
+      // why the query is assembled here rather than passed as an object:
+      // buildQuery takes flat pairs, and one key repeated is the server's own
+      // contract. URLSearchParams encodes the whole `CODE=Reason` pair as ONE
+      // value, which is what keeps a reason containing '&' or '=' — "Left &
+      // settled", "Retired = superannuation" — from splitting into a second
+      // param or a second key. The server cuts on the FIRST '=' after decoding,
+      // so the code may not contain one and a reason may.
+      const q = new URLSearchParams({ month });
+      for (const [code, reason] of Object.entries(leavingReasons ?? {})) {
+        q.append("leaving_reason", `${code}=${reason}`);
+      }
+      return statutory(
+        http.getBlob(
+          `${company(companyID)}/payroll-esi-return?${q.toString()}`,
+        ),
+      );
+    },
+    payrollForm138(companyID, req: Form138Request) {
+      // Every particular is a QUERY PARAM because the route is a GET that
+      // produces a file, and not one of them is in the database — see
+      // Form138Request. `challan` repeats, in the server's own positional form.
+      const q = new URLSearchParams();
+      q.set("tax_year", req.tax_year);
+      q.set("quarter", req.quarter);
+      q.set("tan", req.tan);
+      q.set("deductor_pan", req.deductor_pan);
+      q.set("deductor_name", req.deductor_name);
+      q.set("form_number", req.form_number);
+      q.set("file_creation_date", req.file_creation_date);
+      if (req.file_sequence !== undefined) {
+        q.set("file_sequence", String(req.file_sequence));
+      }
+      for (const ch of req.challans) {
+        // MONTH,BSR,DEPOSIT_DATE,SERIAL[,AMOUNT[,book]] — positional, and the
+        // AMOUNT is omitted when the operator did not state one so the server
+        // DERIVES it from the month's payslips. Sending an empty field instead
+        // would be a stated amount of nothing, which the reconciliation refuses.
+        const parts = [
+          ch.month,
+          ch.bsr_code,
+          ch.date_of_deposit,
+          String(ch.challan_serial_number),
+        ];
+        if (ch.total_tds_deposited && ch.total_tds_deposited.trim() !== "") {
+          parts.push(ch.total_tds_deposited.trim());
+          if (ch.book_entry) parts.push("book");
+        } else if (ch.book_entry) {
+          // The `book` flag is the SIXTH field, so it needs the fifth present.
+          // An empty amount here is the one shape the parser reads as "derive".
+          parts.push("");
+          parts.push("book");
+        }
+        q.append("challan", parts.join(","));
+      }
+      return statutory(
+        http.getBlob(`${company(companyID)}/payroll-form-138?${q.toString()}`),
+      );
+    },
+
+    // ---- The employee master's two effective-dated children. The employee id
+    // goes in the PATH and never in a body: it is not the operator's to type —
+    // it comes from the master they are looking at — and a body that could
+    // disagree with the URL is a question about which one wins.
+    listSalaryComponents(companyID, employeeID: string) {
+      return http.get<ListSalaryComponentsResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/salary-components`,
+      );
+    },
+    setSalaryComponent(
+      companyID,
+      employeeID: string,
+      req: SetSalaryComponentRequest,
+    ) {
+      return http.post<SetSalaryComponentResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/salary-components`,
+        req,
+      );
+    },
+    listStatutoryElections(companyID, employeeID: string) {
+      return http.get<ListStatutoryElectionsResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/statutory-elections`,
+      );
+    },
+    setStatutoryElection(
+      companyID,
+      employeeID: string,
+      req: SetStatutoryElectionRequest,
+    ) {
+      return http.post<SetStatutoryElectionResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/statutory-elections`,
+        req,
+      );
+    },
+    payrollVocabulary(companyID) {
+      return http.get<PayrollVocabularyResponse>(
+        `${company(companyID)}/payroll-vocabulary`,
+      );
+    },
+
+    // ---- OFFLINE SYNC + THE RECONCILIATION QUEUE (track D).
+    //
+    // Four routes, three of which were mounted long before anything called them.
+    // The commit path has existed since Task C; the queue listing since the
+    // freeze rule shipped; only the payload read and the resolve are new.
+    syncCommit(companyID, intents) {
+      // ONE call for the whole outbox. See CoredClient.syncCommit: the cutoff
+      // judges the batch as a unit and a step-up is charged once per write, so
+      // draining row by row is not a smaller version of this — it is a different
+      // and worse behaviour.
+      //
+      // ⛔⛔ `wireVoucher` ON EVERY PAYLOAD, AND ITS ABSENCE HERE WAS A REAL DEFECT
+      // FOUND IN A BROWSER. `SyncIntent.payload` IS a `VoucherRequest` — the same
+      // type the online path posts, deliberately, so the server can decode both
+      // with the single `buildVoucherInput` translator. That equivalence cuts both
+      // ways: it also needs the SAME transformation on the way out. Every
+      // `post*Voucher` above sends `wireVoucher(req)`, which maps the frontend's
+      // legible `dr_cr` ("DR"/"CR") to the backend's canonical "D"/"C"; this route
+      // sent the intents untouched.
+      //
+      // ⛔ AND IT FAILED IN THE WORST AVAILABLE WAY: not at queue time, when an
+      // operator could react, but at COMMIT time. `ledger.Debit` is "D", so a "DR"
+      // posting matched NEITHER side, was summed as a credit, and the batch was
+      // refused 422 "debit total must equal credit total". An operator could key
+      // ten invoices offline, see each one safely queued, and then find that NONE
+      // of them can ever be committed — with the outbox correctly refusing to
+      // clear, so the queue would simply never drain.
+      //
+      // ⚠️ NO UNIT TEST COULD HAVE SEEN IT. The mock client is not an HTTP client,
+      // so it never runs this adapter, and it accepts either spelling; the vitest
+      // suite proved the whole queue-and-commit flow against it and passed. The
+      // 422 appeared on the first real commit from a browser. Verifying that the
+      // pieces exist is not verifying that they compose.
+      return http.post<SyncCommitResponse>(`${company(companyID)}/sync/commit`, {
+        intents: intents.map((i) => ({ ...i, payload: wireVoucher(i.payload) })),
+      });
+    },
+    reconciliationQueue(companyID) {
+      return http.get<ReconciliationQueueResponse>(`${company(companyID)}/reconciliation-queue`);
+    },
+    reconciliationPayload(companyID, reconID) {
+      return http.get<ReconciliationPayloadResponse>(
+        `${company(companyID)}/reconciliation-queue/${encodeURIComponent(reconID)}/payload`,
+      );
+    },
+    resolveReconciliation(companyID, reconID) {
+      // No body: the route asserts nothing but "a human dealt with this", and
+      // resolved_at is stamped server-side with now() so there is no date a
+      // caller could supply.
+      return http.post<ResolveReconciliationResponse>(
+        `${company(companyID)}/reconciliation-queue/${encodeURIComponent(reconID)}/resolve`,
+      );
+    },
+
+    // ---- THE AGENT PLANE (W2, D121 §8) --------------------------------
+    // Eight routes, one per method, so the UI-command census can join each to
+    // its ActionSpec by (verb, path) — see uiCommandManifest.ts. Every id is a
+    // path SEGMENT and is encoded, for the reason printTemplate() gives.
+    startAgentRun(companyID, req: StartAgentRunRequest) {
+      return http.post<AgentRunResponse>(`${company(companyID)}/agent/runs`, {
+        channel: "panel",
+        ...req,
+      });
+    },
+    listAgentRuns(companyID, limit?: number) {
+      return http.get<AgentRunsResponse>(`${company(companyID)}/agent/runs`, {
+        limit,
+      });
+    },
+    getAgentRun(companyID, runID) {
+      return http.get<AgentRunResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}`,
+      );
+    },
+    agentRunEvents(companyID, runID, after?: number) {
+      return http.get<AgentEventsResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}/events`,
+        { after },
+      );
+    },
+    cancelAgentRun(companyID, runID) {
+      return http.post<AgentRunResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}/cancel`,
+      );
+    },
+    listAgentApprovals(companyID, query?: { state?: "pending" | "all"; run_id?: string }) {
+      return http.get<AgentApprovalsResponse>(
+        `${company(companyID)}/agent/approvals`,
+        query ? { state: query.state, run_id: query.run_id } : undefined,
+      );
+    },
+    getAgentApproval(companyID, approvalID) {
+      return http.get<AgentApprovalResponse>(
+        `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}`,
+      );
+    },
+    decideAgentApproval(companyID, approvalID, req: AgentDecisionRequest) {
+      // ⛔ AN EDITED BODY IS A VOUCHER BODY, SO IT CROSSES THE SAME dr_cr
+      // BOUNDARY EVERY VOUCHER POST DOES. The native voucher screen builds it in
+      // the domain's "DR"/"CR"; the server's validators accept only "D"/"C", and
+      // an edit refused for its spelling would surface as a `commit_refused`
+      // event hours later rather than as an error here.
+      const body: AgentDecisionRequest = req.edited_body
+        ? {
+            ...req,
+            edited_body: wireVoucher(req.edited_body as VoucherRequest) as Record<
+              string,
+              unknown
+            >,
+          }
+        : req;
+      return http.post<AgentApprovalResponse>(
+        `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}/decision`,
+        body,
+      );
+    },
+    // ---- W2 BREADTH: six routes, one per method (see the census note above).
+    previewAgentEdit(companyID, approvalID, editedBody: Record<string, unknown>) {
+      // The same dr_cr boundary the decision's edited body crosses.
+      return http.post<AgentEditPreviewResponse>(
+        `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}/preview`,
+        { edited_body: wireVoucher(editedBody as VoucherRequest) as Record<string, unknown> },
+      );
+    },
+    listAgentAutonomy(companyID) {
+      return http.get<AgentAutonomyResponse>(`${company(companyID)}/agent/autonomy`);
+    },
+    setAgentAutonomy(companyID, req: SetAgentAutonomyRequest) {
+      return http.put<AgentAutonomyResponse>(`${company(companyID)}/agent/autonomy`, req);
+    },
+    verifyAgentRun(companyID, runID) {
+      return http.get<AgentVerifyRunResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}/verify`,
+      );
+    },
+    verifyAgentAnchors(companyID) {
+      return http.get<AgentVerifyAnchorsResponse>(`${company(companyID)}/agent/anchors/verify`);
+    },
+    unblockLedger(companyID, ledgerID) {
+      return http.post<UnblockLedgerResponse>(
+        `${company(companyID)}/ledgers/${encodeURIComponent(ledgerID)}/unblock`,
+      );
+    },
+
+    // ---- THE INSIGHT ENGINE (W4, d125) ---------------------------------
+    // One method per route, so the UI-command census joins each to its
+    // ActionSpec by (verb, path). Ids are encoded path segments.
+    listInsights(companyID, query?: { state?: InsightState; type?: string }) {
+      return http.get<InsightsListResponse>(
+        `${company(companyID)}/insights`,
+        query ? { state: query.state, type: query.type } : undefined,
+      );
+    },
+    getInsight(companyID, insightID) {
+      return http.get<Insight>(`${company(companyID)}/insights/${encodeURIComponent(insightID)}`);
+    },
+    verifyInsight(companyID, insightID) {
+      return http.get<InsightEvidenceResponse>(
+        `${company(companyID)}/insights/${encodeURIComponent(insightID)}/evidence`,
+      );
+    },
+    insightFeedback(companyID, insightID, verdict: InsightVerdict, note?: string) {
+      return http.post<Insight>(
+        `${company(companyID)}/insights/${encodeURIComponent(insightID)}/feedback`,
+        { verdict, note: note ?? "" },
+      );
+    },
+    getInsightDigest(companyID, date?: string) {
+      return http.get<InsightDigest>(`${company(companyID)}/insights/digest`, date ? { date } : undefined);
+    },
+    composeInsightDigest(companyID, date?: string) {
+      return http.post<InsightDigest>(
+        `${company(companyID)}/insights/digest${date ? `?date=${encodeURIComponent(date)}` : ""}`,
+      );
+    },
+    listInsightSuppressions(companyID) {
+      return http.get<{ suppressions: InsightSuppression[] }>(`${company(companyID)}/insights/suppressions`);
+    },
+    suppressInsight(companyID, req: SuppressInsightRequest) {
+      return http.post<{ suppression_id: string }>(`${company(companyID)}/insights/suppressions`, req);
+    },
+    async unsuppressInsight(companyID, suppressionID) {
+      await http.del<unknown>(
+        `${company(companyID)}/insights/suppressions/${encodeURIComponent(suppressionID)}`,
+      );
+    },
+    runInsightsNow(companyID) {
+      return http.post<InsightRunResponse>(`${company(companyID)}/insights/run`);
+    },
   };
+}
+
+/**
+ * Attach the two statutory headers to a blob download.
+ *
+ * ⛔ THE DISCLOSURE IS READ OFF THE RESPONSE AND NEVER WRITTEN HERE. The server
+ * sets `X-Statutory-Disclosure` because no emitted file in this product has been
+ * through the FVU, the EPFO portal or the ESIC portal — none of which can run in
+ * this environment — and a client that composed that sentence itself would be one
+ * refactor away from composing a friendlier one.
+ */
+function statutory(
+  pending: Promise<{
+    blob: Blob;
+    filename: string | null;
+    header(name: string): string | null;
+  }>,
+): Promise<StatutoryFileDownload> {
+  return pending.then((res) => ({
+    blob: res.blob,
+    filename: res.filename,
+    statutoryFile: res.header("X-Statutory-File"),
+    disclosure: res.header("X-Statutory-Disclosure"),
+  }));
 }

@@ -108,7 +108,7 @@
         {
           "id": "L-PARTY-1",
           "name": "Acme Components Pvt Ltd",
-          "gstin_masked": "27ABC…1Z5",
+          "gstin_masked": "27ABC\u20261Z0",
           "state_code": "27",
           "kind": "party"
         },

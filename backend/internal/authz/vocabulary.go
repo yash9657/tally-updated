@@ -101,6 +101,29 @@ var KnownResources = append([]Resource{
 	"sync",     // offline sync commit
 	"query",    // conversational query
 	"security", // users, memberships and security levels (this admin surface)
+
+	// WHOLE-COMPANY BACKUP (T14): GET /v1/companies/{id}/backup, one archive of
+	// every table the tenant census covers.
+	//
+	// WHY IT IS ITS OWN TOKEN AND NOT `report`, WHICH IS THE MISTAKE THIS LINE
+	// EXISTS TO PREVENT. Migration 0011 grants the seeded Data Entry level a
+	// coarse `allow display report`, so a whole-company export modelled as
+	// report:NAME would be granted to every operator in every tenant on the day
+	// it shipped, by inheritance, without anybody deciding to — and unlike a
+	// single report this one answers with the entire book: every ledger balance,
+	// every party's PAN and address, every employee's payslip and bank details.
+	//
+	// WHY NOT `company` EITHER. Migration 0022 seeds Data Entry `allow display
+	// company` so the client can hydrate the home state code for the GST split.
+	// Reusing that token would make "an operator may read which state we are in"
+	// and "an operator may download the whole company" the same permission, with
+	// no narrowing form in which to separate them again afterwards.
+	//
+	// It needs no ACL migration: Data Entry's default_access is 'none' and no
+	// seeded rule names `backup`, so it is DENIED for every seeded non-Owner
+	// level for free — the same treatment tds-challan, cost-centre, sales-order,
+	// purchase-order and bom all shipped with.
+	"backup",
 	// Price lists (INV-L, migration 0030): named rates for stock items over a
 	// date window, optionally narrowed to a party group.
 	//
@@ -302,6 +325,31 @@ var KnownResources = append([]Resource{
 	// current answers.
 	"tds-profile",
 
+	// WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080): the one
+	// ledger a settlement's realised gain is credited to and its realised loss
+	// debited from, chosen by the operator and never auto-created.
+	//
+	// ⛔ NOT A REPORT NAME, for the same reason as `tds-profile` and `tds-challan`
+	// above: `report:forex-settings` is reached by migration 0011's coarse
+	// `allow display report` at specificity 1 (defect D95), so it would be GRANTED
+	// to every seeded Data Entry level by a rule written years ago for another
+	// purpose, and taking it back needs a 0068-style counterweight migration. A
+	// bare token is default-DENIED for Data Entry WITH NO ACL MIGRATION AT ALL,
+	// which is the authority a Profit & Loss routing decision should have.
+	//
+	// ONE TOKEN FOR THE READ AND THE WRITE. A level that may not CHOOSE where a
+	// company's realised gains land has no use for knowing which ledger is chosen,
+	// and two tokens would let a rule grant the read and then be read as though it
+	// granted the write.
+	//
+	// NAMED `forex-settings` AND NOT `currency`, deliberately: the currency masters
+	// and their rates are clerical upkeep that a Data Entry level may legitimately
+	// be granted, while this decides which account a company's exchange gains and
+	// losses land in. Two tokens one word apart governing different authorities is
+	// how an administrator grants the wrong one. TestForexSettingsAuthMatrix pins
+	// the current answers.
+	"forex-settings",
+
 	// THE COST MASTERS (T2, migration 0040): the AXES of cost analysis (Department,
 	// Branch, Project) and the POSITIONS on them. Tally keeps them at Gateway >
 	// Accounts Info > Cost Categories / Cost Centres and ships one axis, "Primary Cost
@@ -424,6 +472,68 @@ var KnownResources = append([]Resource{
 	// note says the same thing at the other end of the stack.
 	"e-way-bill",
 
+	// THE AGENT PLANE (W2, D121): runs, and the approval inbox.
+	//
+	// TWO BARE TOKENS, AND WHY THERE ARE TWO. `agent-run` is starting and
+	// reading the agent's work; `agent-approval` is DECIDING it — the checker's
+	// seat. An owner must be able to let an operator ask the agent for things
+	// without letting that operator approve the agent's money-moving commits,
+	// and one token could not say that.
+	//
+	// ⛔ BARE, NOT report:NAME, and they need no ACL migration for the reason
+	// the block above records: Data Entry's default_access is 'none' and no
+	// seeded rule names either, so both are DENIED for every seeded non-Owner
+	// level on the day they ship. Only an Owner (or a level an owner grants)
+	// can start runs or decide approvals.
+	//
+	// ⛔ AND BOTH ARE STRUCTURALLY FORBIDDEN TO AN AGENT (internal/actions
+	// risk.go classes them governance; internal/policy's AgentRules disallow
+	// them): an agent that could read its approval inbox could phrase its next
+	// step at the approver, and one that could write it would be the checker.
+	"agent-run",
+	"agent-approval",
+
+	// THE AGENT'S AUTONOMY TABLE (W2 breadth, migration 0093's rows, D121
+	// "Wave 2 breadth"): reading and setting the L0-L3 level per (user, action,
+	// amount band). A THIRD bare token, not `agent-approval`: deciding one
+	// approval is the checker's seat; deciding that a class of commit needs
+	// NO checker at all is the owner's, and the route refuses every non-Owner
+	// level in the handler as well. Bare for the reason above (zero acl_rule
+	// rows, Data Entry refused by default); governance, so an agent can
+	// neither read nor raise its own autonomy.
+	"agent-autonomy",
+
+	// RELEASING AN AGENT-CREATED LEDGER FOR POSTING (W2 breadth, migration
+	// 0095): POST /ledgers/{id}/unblock. Not `master`, because `alter master`
+	// is what CREATES a ledger, and the point of "born blocked" is that the
+	// person who lets the agent make a party and the person who lets it be
+	// paid can be different people. Bare (zero acl_rule rows, Data Entry
+	// refused by default); governance, so no agent can unblock anything.
+	"master-unblock",
+
+	// THE INSIGHT ENGINE (W4, d125): the inbox, its evidence, verdicts,
+	// suppressions and the morning digest. BARE, per the 0091 row of
+	// PLAN-TALLY-PARITY §2.5 and for the same reason as the agent tokens: it is
+	// DENIED for every seeded non-Owner level with zero acl_rule rows, where a
+	// report:NAME would have been granted to every operator by 0011's coarse
+	// `allow display report` — and the inbox names debtors, suppliers, TDS
+	// arrears and which user back-dated what.
+	"insights",
+
+	// THE MCP SERVER (W6, D126): the delegations a human grants an outside
+	// MCP client, and the transport that client speaks through.
+	//
+	// ⛔ A THIRD BARE TOKEN, NOT A REUSE OF `agent-run`. Letting an operator
+	// ask the in-app agent for things is not the same authority as letting a
+	// program on somebody's laptop do so for days under a standing grant; an
+	// owner must be able to allow the first and not the second. Bare for the
+	// block above's reason: no seeded rule names it and Data Entry's
+	// default_access is 'none', so it ships refused for every seeded non-Owner
+	// level with zero acl_rule rows. Governance-class (risk.go) and disallowed
+	// in policy.AgentRules: an agent that could mint its own MCP grant could
+	// widen its own delegation.
+	"agent-mcp",
+
 	// THE e-INVOICE / IRN: the Invoice Reference Number the NIC portal issues
 	// against a B2B tax invoice, statutorily mandatory in India above a turnover
 	// threshold.
@@ -447,6 +557,84 @@ var KnownResources = append([]Resource{
 	// invoice was wrong, to require a credit note rather than an edit. Weigh it
 	// like `delete`, not like `create`.
 	"e-invoice",
+
+	// CLEARING A RECONCILIATION-QUEUE ROW, and reading back the intent parked on
+	// one (track D: GET .../reconciliation-queue/{reconID}/payload and
+	// POST .../reconciliation-queue/{reconID}/resolve).
+	//
+	// WHY THE QUEUE'S OWN LIST KEEPS report:reconciliation-queue AND THESE TWO DO
+	// NOT. The list is a position statement and is reached today by migration
+	// 0011's coarse `allow display report`, which every seeded Data Entry level
+	// has. These two are different questions:
+	//
+	//	the PAYLOAD read is the voucher body ANOTHER node's operator keyed while
+	//	  disconnected — the losing side of a conflict, preserved verbatim. Seeing
+	//	  that a clash happened is clerical; reading what a colleague typed into
+	//	  the books on their own machine is not the same authority, and folding it
+	//	  into the coarse report grant would hand it to every operator in every
+	//	  tenant on the day it shipped, by inheritance, with no report:NAME form
+	//	  left in which to narrow it back.
+	//	the RESOLVE is the WRITE, and it is the one that loses information: an
+	//	  entry is how an operator finds out their offline work was refused, so
+	//	  clearing one makes a refused voucher stop being anybody's problem. The
+	//	  clerk who reads the queue is not automatically the person who decides an
+	//	  item needs no further action.
+	//
+	// ONE TOKEN FOR BOTH, unlike bank-reconciliation's read/write split, because
+	// both halves answer the same question — "does this level own the
+	// reconciliation workflow?" — and neither is a position statement. The
+	// `display`/`alter` ACTIONS already separate them for any administrator who
+	// wants the reader without the clearer.
+	//
+	// IT CONSUMES NO MIGRATION NUMBER: Data Entry's default_access is 'none' and
+	// no seeded rule names this token, so it is denied for every seeded non-Owner
+	// level for free — the treatment backup, tds-challan, e-way-bill and
+	// e-invoice all shipped with.
+	//
+	// ⛔ AND IT MUST NEVER BE ADDED TO KnownReportNames BELOW: server.go loops
+	// over that list and auto-mounts GET /print/reports/<name>, and a name with no
+	// reportName() case is default-DENY for every level including the Owner. That
+	// bug already shipped once for reconciliation-queue itself.
+	"reconciliation",
+
+	// THE BUDGET MASTER (T11, migration 0085): a named plan over a period, and the
+	// lines on it. Tally keeps it at Gateway > Accounts Info > Budgets.
+	//
+	// ONE TOKEN FOR THE HEAD AND ITS LINES, on the `cost-centre` and `bom`
+	// reasoning rather than the sales-order/purchase-order reasoning: a line's
+	// budget_id is NOT NULL and a budget with no lines budgets nothing, so the two
+	// are one object in practice. Two tokens would always have to be granted
+	// together, which is a rule an administrator can only get wrong. The test is
+	// not "are these two things similar" but "would an administrator ever grant one
+	// without the other", and here they would not.
+	//
+	// A BARE TOKEN AND NOT A REPORT NAME, which is the decision this entry records.
+	// internal/authz matches a bare `report` rule against ANY `report:NAME`, so
+	// `report:budget` would be GRANTED to every seeded Data Entry level by
+	// migration 0011's `allow display report` and taking it back would need a
+	// counterweight migration. As a bare token, Data Entry's default_access 'none'
+	// refuses every budget-master route and every rule it carries names a specific
+	// token, so a token never mentioned stays denied.
+	//
+	// NO ACL ROWS ACCOMPANY IT, and that is the point rather than an omission.
+	// Stated plainly: DATA ENTRY CAN NEITHER SEE NOR SET A BUDGET with no rule
+	// written. A budget states what the owner INTENDS — it is the one figure in
+	// this product no voucher contains — and setting one is not clerical work.
+	// An administrator who wants a clerk maintaining budget lines writes an
+	// explicit `allow create budget` through the admin API, which is what the
+	// separate token makes POSSIBLE, not automatic. Migration 0086 therefore writes
+	// rows for the REPORT name only.
+	//
+	// ⛔ AND IT MUST NEVER BE ADDED TO KnownReportNames BELOW. server.go loops over
+	// that list and auto-mounts GET /print/reports/<name>; a name with no
+	// reportName() case is a route routeAction cannot map, i.e. default-DENY for
+	// every level including the Owner. That bug already shipped once for
+	// reconciliation-queue. The VARIANCE REPORT (report:budget-variance) is a
+	// report name and is registered as such; this is the MASTER token and is not
+	// it. Sitting in a rule list, `budget` and `report:budget-variance` are named
+	// as differently as the objects allow, because a token one word from another is
+	// how an administrator grants the wrong one.
+	"budget",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
@@ -645,6 +833,133 @@ var KnownReportNames = []string{
 	// these routes mount.
 	"payroll-register", "payroll-payslip", "payroll-form-138",
 	"payroll-pf-ecr", "payroll-esi-return",
+
+	// THE BUDGET VARIANCE REPORT (T11, migrations 0085/0086). A report NAME, so
+	// migration 0086 can write `disallow display report:budget-variance` and
+	// `disallow print report:budget-variance` — without which migration 0011's
+	// coarse `allow display report` reaches it and every seeded Data Entry operator
+	// can read it. Exactly the bank-statement, tds-register, cost-summary and
+	// order-book problem, one table over.
+	//
+	// ⛔ AND IT IS A SHARPER DISCLOSURE THAN ANY OF THOSE, which is why 0086 is not
+	// optional. Every other report here derives from vouchers the clerk can already
+	// see in some form. This one carries a figure NO VOUCHER CONTAINS — what the
+	// owner PLANNED — and sets it beside the actual, so one read yields the
+	// strategy, every line the business is failing against, and (via a budget on a
+	// payroll group) the payroll total that migration 0035 refuses at five separate
+	// names. A refusal that can be walked around through a second report is not a
+	// refusal.
+	//
+	// ONE NAME AND NOT THREE, WHICH IS THE OPPOSITE CALL FROM THE COST REPORTS AND
+	// THE ORDER BOOKS ABOVE — worth stating, because those entries argue at length
+	// that anything deserving a separate authority needs a separate name.
+	//
+	// The dimension (group / ledger / cost centre) rides in ?dimension= rather than
+	// in the name, because the three are not different DISCLOSURES: they are the
+	// same plan and the same actuals at three grains, and every one of them reveals
+	// the budget. "A clerk may see the variance by department but not by ledger" is
+	// not a rule a business wants, because the department figure IS the ledger
+	// figures added up — granting one hands over the other. Contrast the two order
+	// books, where "may see our sales pipeline but not what we owe suppliers" is an
+	// ordinary rule because the two lists belong to two different jobs. The test is
+	// whether the split is an authority a business would actually write, not
+	// whether the data can be sliced.
+	//
+	// ⚠️ THE CONSEQUENCE IS THAT ?dimension= IS INVISIBLE TO THE PDP and must stay
+	// that way: it is a rendering grain, not an authority. If a later slice ever
+	// makes one grain genuinely more sensitive than another, that grain needs its
+	// OWN report name — a query parameter can never carry a permission.
+	//
+	// ⛔ THE MASTER IS THE BARE TOKEN `budget` in KnownResources above and is NOT
+	// this name. Only the `report:NAME` form arrives pre-granted and needs taking
+	// back.
+	//
+	// PRINTING IT ANSWERS 501: no printed layout has been specified for a variance
+	// statement, and a blank page that looks like a filed budget is worse than a
+	// refusal — the same call bank-statement, tds-register, the cost statements and
+	// the order books all record above.
+	"budget-variance",
+
+	// THE GSTR-9 ANNUAL RETURN (T12, migration 0087): the reconciliation of a
+	// financial year's twelve GSTR-1s and twelve GSTR-3Bs against the books.
+	//
+	// ⚠️ SPELLED `gstr9`, NOT `gstr-9`, AND THAT IS A DELIBERATE DEPARTURE FROM
+	// PLAN-TALLY-PARITY.md §2.5, WHICH RESERVED THE HYPHENATED NAME. The two
+	// siblings this sits beside are `gstr1` and `gstr3b`, served at /gstr1 and
+	// /gstr3b. An administrator writing rules reads this vocabulary as a list, and
+	// `report:gstr1`, `report:gstr3b`, `report:gstr-9` is a list with one member
+	// spelled differently from the others for no reason the reader can see — which
+	// is how a rule gets written for a resource that does not exist and silently
+	// governs nothing. The statutory document is "GSTR-9"; the TOKEN follows the
+	// two tokens already here. §2.5 has been updated in place to record the name
+	// actually taken.
+	//
+	// ⛔ THE REFUSAL IS THE THING THAT HAD TO BE WRITTEN, NOT THE GRANT. Migration
+	// 0011 line 249 seeds Data Entry a coarse `allow display report` against a BARE
+	// resource, and this package matches that against ANY `report:NAME` — so adding
+	// the name below GRANTS the annual return to every seeded data-entry clerk the
+	// day it ships. Migration 0087 writes `disallow display` and `disallow print`
+	// for it. That is registered defect D95, and 0087 is the TWELFTH migration to
+	// write this refusal.
+	//
+	// WHAT IT DISCLOSES, since that is the justification: a whole year of outward
+	// supplies and input credit in one document, the month-by-month divergence
+	// between what was filed and what the books say, and — through the divergence
+	// list — precisely which months would not survive a departmental look. It is
+	// the company's tax exposure on one page.
+	//
+	// PRINTING IT ANSWERS 501: no printed layout has been specified, and a blank
+	// page that looks like a filed annual return is worse than a refusal — the same
+	// call bank-statement, tds-register, the cost statements, the order books and
+	// the budget variance all record above. ⚠️ It is a sharper call here than for
+	// any of them: those are internal statements, and this one carries the shape of
+	// a filed statutory return.
+	"gstr9",
+	// ⭐⭐ THE UNADJUSTED-FOREX REPORT (T8 step 7, migration 0090). What every open
+	// FOREIGN bill is worth at the rate as on a date, as against the figure the books
+	// carry it at — the UNREALISED gain or loss. Q4 of
+	// docs/design/t8-multi-currency-model.md makes it a REPORT and not a posting in
+	// v1, per the repo owner's answer, and the screen and F11 say so in those words.
+	//
+	// ⛔ A REPORT NAME BECAUSE THE REFUSAL HAD TO BE WRITABLE, which is the same
+	// sentence every entry below `reconciliation-queue` carries and is D95: migration
+	// 0011 line 249 seeds Data Entry a coarse `allow display report` against a BARE
+	// resource, and this package matches that against ANY `report:NAME` at
+	// specificity 1 — so the name GRANTS the report to every seeded clerk the day it
+	// ships. Migration 0090 writes `disallow display` AND `disallow print` at
+	// specificity 2. It is the THIRTEENTH migration to write this refusal.
+	//
+	// WHAT IT DISCLOSES, since that is the justification: every foreign customer and
+	// supplier, what each still owes or is owed in its own currency, the rate each
+	// document was raised at, and the company's whole unhedged currency exposure as
+	// one signed total. A clerk keying receipts needs none of it.
+	//
+	// ⛔⛔ AND IT IS **ONE** NAME COVERING BOTH SIDES, WHICH IS THE OPPOSITE CALL
+	// FROM `bills-payable` ABOVE AND IS ARGUED RATHER THAN INHERITED. That split
+	// exists because *"this level may see what customers owe us but not what we owe
+	// suppliers"* is a real authority a business writes. It does not reach here:
+	//
+	//   * THE SUBJECT IS THE **NET** EXPOSURE TO A CURRENCY, which is not separable
+	//     by side. A $1,000 receivable and a $1,000 payable at one rate are an
+	//     exposure of NOTHING; two reports would show two numbers neither of which is
+	//     the company's position, so splitting would not restrict information — it
+	//     would destroy the only figure the report exists to produce.
+	//   * AND NOTHING KEYS OFF IT. `bills-payable` ships with no counterweight
+	//     precisely because a clerk keying a Payment NEEDS the payable ageing for the
+	//     bill-wise picker. This report posts nothing and feeds no form.
+	//
+	// So it is denied OUTRIGHT to the seeded Data Entry level, and a tenant that
+	// grants it grants both sides — which the screen states rather than leaving to be
+	// discovered.
+	//
+	// ⚠️ IT **DOES** PRINT, unlike gstr9, the order books, the cost statements and
+	// the budget variance. That is not inconsistency: those refuse because no layout
+	// has been specified and a blank page that looks like a filed return is worse
+	// than a refusal. Here the layout is the ageing report's, one column different,
+	// and a period-end exposure statement exists to be reviewed on paper. ⛔ The
+	// `disallow print` rule is written ANYWAY and is not optional — a report that
+	// cannot be displayed but CAN be printed is a leak with a paper trail.
+	"unadjusted-forex",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

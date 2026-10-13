@@ -28,7 +28,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
-	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/reporting"
 )
 
@@ -107,6 +106,13 @@ type ledgerListItem struct {
 	// docs/design/t4-model.md §3.1 on the sign trap. This flag says "a statement
 	// can be drawn", not "this is an asset".
 	IsBank bool `json:"is_bank"`
+	// Blocked is migration 0095's born-blocked state: a ledger the AGENT
+	// created, which no voucher may post to until a person unblocks it
+	// (POST /ledgers/{id}/unblock). BlockedReason says why, in words a picker
+	// can show beside the name. A client that offers a blocked ledger in a
+	// voucher's picker will have the voucher refused; it should say so first.
+	Blocked       bool   `json:"blocked"`
+	BlockedReason string `json:"blocked_reason,omitempty"`
 }
 
 type ledgerListResp struct {
@@ -145,7 +151,8 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			        COALESCE(l.address, ''), COALESCE(l.city, ''), COALESCE(l.pincode, ''),
 			        COALESCE(l.bank_account_number, ''), COALESCE(l.bank_ifsc, ''),
 			        l.is_system,
-			        `+reporting.BankLedgerPredicate+`
+			        `+reporting.BankLedgerPredicate+`,
+			        l.blocked_at IS NOT NULL, COALESCE(l.blocked_reason, '')
 			   FROM ledger l
 			   JOIN account_group g ON g.id = l.group_id
 			  ORDER BY g.name, l.name`)
@@ -164,7 +171,7 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 				&it.PAN, &it.CreditDays,
 				&it.Address, &it.City, &it.Pincode,
 				&it.BankAccountNumber, &it.BankIFSC, &it.IsSystem,
-				&it.IsBank); err != nil {
+				&it.IsBank, &it.Blocked, &it.BlockedReason); err != nil {
 				return err
 			}
 			it.OpeningBalance = opening.StringFixed(4)
@@ -214,17 +221,9 @@ func (s *Server) handleSetLedgerOpening(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid opening_balance")
 		return
 	}
-	bills := make([]masters.OpeningBill, 0, len(req.OpeningBills))
-	for _, b := range req.OpeningBills {
-		amt, derr := optionalDecimal(b.Amount)
-		if derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
-			return
-		}
-		bills = append(bills, masters.OpeningBill{
-			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
-			Amount: amt, DueDate: b.DueDate,
-		})
+	bills, ok := openingBillsFromReq(w, req.OpeningBills)
+	if !ok {
+		return
 	}
 
 	if err := s.masters.SetLedgerOpening(ctx, ledgerID, opening, req.OpeningDC, bills, req.CreatedBy); err != nil {

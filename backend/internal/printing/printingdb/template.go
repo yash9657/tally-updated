@@ -88,10 +88,30 @@ const loadColumns = `title, declaration, terms, signature_label,
 //
 // The transaction is READ-ONLY and tenant-scoped. Printing is not a write.
 func (s *Store) LoadOverrides(ctx context.Context, companyID uuid.UUID, kind printing.DocKind) (printing.TemplateOverrides, error) {
+	o, _, err := s.LoadOverridesRow(ctx, companyID, kind)
+	return o, err
+}
+
+// LoadOverridesRow is LoadOverrides plus the ONE BIT LoadOverrides throws away:
+// whether a row exists at all.
+//
+// ⛔ WHY AN EDITING SCREEN CANNOT USE LoadOverrides. The zero value is returned
+// both for "this company has never customised this document" and for "this
+// company customised it to blank on purpose", and those are the same PDF but not
+// the same sentence. A form that cannot tell them apart shows empty boxes to a
+// company that has never been asked anything and reads as "you have no
+// declaration" — and, worse, it cannot offer to CLEAR an override, because it
+// does not know there is one to clear.
+//
+// The printing path deliberately keeps using LoadOverrides: a renderer that
+// branched on presence would print two different documents from one row state.
+// Presence is a fact about the CONFIGURATION, not about the paper.
+func (s *Store) LoadOverridesRow(ctx context.Context, companyID uuid.UUID, kind printing.DocKind) (printing.TemplateOverrides, bool, error) {
 	var o printing.TemplateOverrides
 	if err := checkKind(kind); err != nil {
-		return o, err
+		return o, false, err
 	}
+	found := false
 	err := s.inTenantTx(ctx, companyID, true, func(ctx context.Context, tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
 			`SELECT `+loadColumns+`
@@ -100,6 +120,7 @@ func (s *Store) LoadOverrides(ctx context.Context, companyID uuid.UUID, kind pri
 			companyID, string(kind))
 		switch err := scanOverrides(row, &o); {
 		case err == nil:
+			found = true
 			return nil
 		case errors.Is(err, pgx.ErrNoRows):
 			// The ordinary case. Leave o at its zero value: the renderer falls
@@ -111,9 +132,46 @@ func (s *Store) LoadOverrides(ctx context.Context, companyID uuid.UUID, kind pri
 		}
 	})
 	if err != nil {
-		return printing.TemplateOverrides{}, err
+		return printing.TemplateOverrides{}, false, err
 	}
-	return o, nil
+	return o, found, nil
+}
+
+// DeleteOverrides removes the company's override row for kind, returning whether
+// there was one to remove.
+//
+// ⛔ WHY A DELETE AND NOT A SAVE OF BLANKS. Both make the same document come out
+// of the printer, so the temptation is to let "clear" be an upsert of empty
+// strings and save a method. That loses the only two facts the table exists to
+// carry. First, an all-blank row still says "this company HAS a customisation",
+// so the screen can never again tell the operator they are on the built-in
+// layout. Second, print_template.updated_at answers "when did our invoice layout
+// last change?", and a blank row answers it with the date somebody reverted —
+// while the honest answer is that there is no customisation to date.
+//
+// IDEMPOTENT ON PURPOSE: clearing an override that is not there is not an error,
+// it is a company already on the built-in layout. The bool is for a caller that
+// wants to SAY which happened, not for one that wants to fail.
+func (s *Store) DeleteOverrides(ctx context.Context, companyID uuid.UUID, kind printing.DocKind) (bool, error) {
+	if err := checkKind(kind); err != nil {
+		return false, err
+	}
+	removed := false
+	err := s.inTenantTx(ctx, companyID, false, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM print_template
+			  WHERE company_id = $1 AND doc_kind = $2`,
+			companyID, string(kind))
+		if err != nil {
+			return fmt.Errorf("printingdb: delete overrides for %s: %w", kind, err)
+		}
+		removed = tag.RowsAffected() > 0
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return removed, nil
 }
 
 // scanOverrides reads one row into o.

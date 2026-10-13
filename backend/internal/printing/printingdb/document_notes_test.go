@@ -51,8 +51,16 @@ func (e *docEnv) newSupplier(t *testing.T) uuid.UUID {
 	id, err := masters.NewService(e.pool).CreateLedger(e.ctx, masters.Ledger{
 		Name: docNameSupplier, GroupName: "Sundry Creditors",
 		GSTIN: docAwayGSTIN, StateCode: docStateAway,
-		RegistrationType: masters.GSTRegular, MaintainBillByBill: true,
-		Address: docAddrSupplier, City: "Kolhapur", PIN: "416122",
+		RegistrationType: masters.GSTRegular,
+		// ⚠️ NOT bill-by-bill, and that is now a DELIBERATE fixture fact (D106).
+		// It used to be true while every invoice these tests post names no bill
+		// reference at all — an internally inconsistent book that `ledger` now
+		// refuses, because on a bill-by-bill ledger the references must account for
+		// the whole posting. Nothing in `printing` reads this flag; the documents
+		// under test are unchanged. Setting it false states what the fixture
+		// actually is instead of claiming a tracking mode it never honoured.
+		MaintainBillByBill: false,
+		Address:            docAddrSupplier, City: "Kolhapur", PIN: "416122",
 	}, "fixture")
 	if err != nil {
 		t.Fatalf("create the supplier a debit note is raised on: %v", err)

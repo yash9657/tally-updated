@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/compliance"
@@ -133,6 +134,53 @@ func gstBearing(c Class) bool {
 // create a phantom voucher; the HTTP layer maps it to a 404.
 var ErrVoucherNotFound = errors.New("ledger: voucher not found")
 
+// DraftAlreadyAcceptedError is returned by PostVoucher when the SourceDraftID on
+// the input names an insightd draft that has already produced a voucher in this
+// company (migration 0077's ux_voucher_head_source_draft_id).
+//
+// ⛔ NOTHING WAS WRITTEN. The whole point of enforcing this inside the post
+// transaction is that the loser's voucher, its numbering advance, its postings,
+// its bill references and its tax rows are all rolled back together. The HTTP
+// layer maps it to 409 and the message must not read like a partial success.
+//
+// ⚠️ VoucherNo AND VoucherID NAME THE WINNER, and they are read AFTER the
+// rollback, in a separate transaction, so they can legitimately be empty/Nil if
+// that read fails. A caller must treat them as an aid to the operator, never as
+// the fact that the refusal rests on — the refusal rests on the index.
+type DraftAlreadyAcceptedError struct {
+	DraftID   string
+	VoucherID uuid.UUID
+	VoucherNo string
+}
+
+func (e *DraftAlreadyAcceptedError) Error() string {
+	switch {
+	case e.VoucherNo != "":
+		return fmt.Sprintf(
+			"ledger: draft %s was already accepted as voucher %s; nothing was posted",
+			e.DraftID, e.VoucherNo)
+	case e.VoucherID != uuid.Nil:
+		return fmt.Sprintf(
+			"ledger: draft %s was already accepted as voucher %s; nothing was posted",
+			e.DraftID, e.VoucherID)
+	default:
+		return fmt.Sprintf(
+			"ledger: draft %s was already accepted; nothing was posted", e.DraftID)
+	}
+}
+
+// errDraftAlreadyAccepted is the in-transaction marker post() raises the moment
+// the unique index refuses the head upsert. It never leaves the package: post()
+// swaps it for a *DraftAlreadyAcceptedError once the rollback has happened and
+// the winner can be read.
+var errDraftAlreadyAccepted = errors.New("ledger: source draft already accepted")
+
+// draftAcceptanceIndex is migration 0077's partial unique index. Matched BY NAME
+// rather than by "any 23505 on voucher_head": the head also carries 0008's
+// ux_voucher_head_source_guid and its own primary key, and reporting a re-imported
+// Tally voucher as a duplicated AI bill would send the operator to the wrong door.
+const draftAcceptanceIndex = "ux_voucher_head_source_draft_id"
+
 // RefType is a bill-wise allocation reference type (RESEARCH sec 5).
 type RefType string
 
@@ -156,6 +204,111 @@ type PostingInput struct {
 	LedgerID uuid.UUID
 	DrCr     DrCr
 	Amount   decimal.Decimal
+	// CurrencyID, ForeignAmount and Rate are T8's THREE STORED VALUES, and they
+	// are ALL-OR-NONE (migration 0080's posting_forex_all_or_none).
+	//
+	// ⛔ Amount ABOVE STAYS THE BASE AMOUNT AND IS AUTHORITATIVE. It is what
+	// check_double_entry sums, what ledger_balance accumulates and what every
+	// report reads; the foreign figures go BESIDE it and never instead of it.
+	// There is a second, independent reason base cannot be derived from the
+	// other two: a multi-currency journal balances in BASE and need not balance
+	// in any foreign currency, so base is the only column in which the
+	// double-entry identity is even meaningful.
+	//
+	// ⛔ THE CURRENCY IS PER-POSTING, NOT PER-VOUCHER, and that is load-bearing
+	// rather than general-purpose. The ordinary foreign purchase is MIXED: the
+	// creditor leg is $1,000 and the expense leg is ₹83,651.23, because what
+	// the company owes is dollars and what the purchase cost the business is
+	// rupees. A voucher-level currency would retag that expense line.
+	//
+	// ⚠️ ZERO MEANS ABSENT, for all three together. uuid.Nil / decimal.Zero is
+	// how a base posting arrives, and it is the ONLY encoding of one — the same
+	// single-encoding rule the currency master's base-currency trigger exists
+	// to protect. A rate of zero is not a rate (0080 CHECKs rate > 0), so
+	// nothing legal is lost by spelling absence that way.
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	// Rate is BASE UNITS PER ONE FOREIGN UNIT (1 USD = 83.65 INR), stored
+	// NUMERIC(19,10).
+	//
+	// ⛔ A RATE IS NOT MONEY. Money is fixed-4 end to end in this product; a
+	// rate needs ten decimals because base-per-foreign for a weak currency is
+	// 0.0033333333, where four decimals carry a relative error around 1.5e-4 —
+	// thousands of rupees on a fifty-lakh invoice. Every layer that carries
+	// this value must resist the pull to reuse the money formatter.
+	Rate decimal.Decimal
+}
+
+// forexTriple is the all-or-none triple, named once so posting and bill
+// allocation cannot drift into two different readings of "is this foreign?".
+type forexTriple struct {
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
+}
+
+func (f forexTriple) isBase() bool {
+	return f.CurrencyID == uuid.Nil && f.ForeignAmount.IsZero() && f.Rate.IsZero()
+}
+
+// validate turns migration 0080's CHECK into a sentence.
+//
+// ⛔ THE DATABASE REMAINS THE AUTHORITY — posting_forex_all_or_none fires
+// whatever this function concluded, exactly as check_double_entry does for the
+// balance. What this adds is the only thing the constraint cannot: a message
+// naming WHICH of the three values is missing. `violates check constraint
+// "posting_forex_all_or_none"` is true and tells the operator nothing they can
+// act on, and the whole reason the triple is all-or-none is that a
+// two-of-three row lets a report compute a plausible wrong number.
+func (f forexTriple) validate(where string) error {
+	if f.isBase() {
+		return nil
+	}
+	switch {
+	case f.CurrencyID == uuid.Nil:
+		return fmt.Errorf("ledger: %s names a foreign amount or a rate but no currency; "+
+			"a foreign figure needs all three of currency, foreign amount and rate, "+
+			"or none of them (a posting with no currency IS the base currency)", where)
+	case f.ForeignAmount.IsZero():
+		return fmt.Errorf("ledger: %s names a currency but no foreign amount; "+
+			"a foreign figure needs all three of currency, foreign amount and rate", where)
+	case f.ForeignAmount.IsNegative():
+		return fmt.Errorf("ledger: %s has a negative foreign amount (%s); direction is "+
+			"carried by dr_cr, so every amount on a posting is unsigned",
+			where, f.ForeignAmount.StringFixed(4))
+	case f.Rate.IsZero():
+		return fmt.Errorf("ledger: %s names a currency but no exchange rate; "+
+			"a foreign figure needs all three of currency, foreign amount and rate", where)
+	case f.Rate.IsNegative():
+		return fmt.Errorf("ledger: %s has a negative exchange rate (%s); a rate is "+
+			"base units per one foreign unit and is always above zero",
+			where, f.Rate.String())
+	}
+	return nil
+}
+
+// forex reads the triple off a posting.
+func (p PostingInput) forex() forexTriple {
+	return forexTriple{p.CurrencyID, p.ForeignAmount, p.Rate}
+}
+
+// forex reads the triple off a bill allocation.
+func (b BillAllocationInput) forex() forexTriple {
+	return forexTriple{b.CurrencyID, b.ForeignAmount, b.Rate}
+}
+
+// nullForex maps a triple to the three query arguments, so that "zero means
+// absent" is spelled ONCE rather than at every insert site.
+//
+// ⛔ nil, NEVER THE ZERO VALUE. uuid.Nil is a legal-looking uuid and 0 is a
+// legal-looking numeric; either would satisfy the all-or-none CHECK as a
+// PRESENT value and quietly mark a rupee posting as foreign against a currency
+// that does not exist.
+func nullForex(f forexTriple) (any, any, any) {
+	if f.isBase() {
+		return nil, nil, nil
+	}
+	return f.CurrencyID, f.ForeignAmount, f.Rate
 }
 
 // BillAllocationInput is a single bill-wise allocation against a party ledger
@@ -169,6 +322,22 @@ type BillAllocationInput struct {
 	DrCr     DrCr
 	Amount   decimal.Decimal
 	DueDate  string // ISO date (YYYY-MM-DD) or empty
+	// The same all-or-none triple PostingInput carries, and it is on this type
+	// as well for a reason the design memo's §0.2 measured rather than assumed:
+	// OUTSTANDINGS DOES NOT READ `posting`. It nets a UNION of bill_allocation
+	// and ledger_opening_bill, so a foreign bill whose currency lived only on
+	// the posting would show a correct figure in the ledger and a base-only
+	// bill on the ageing report — two presentations of one voucher that
+	// disagree, with nothing on either page revealing it.
+	//
+	// ⚠️ AND THE RATE HERE IS THE BILL'S HISTORICAL RATE, which is what makes
+	// realised gain/loss computable at all: the NEW ref carries the rate the
+	// bill was raised at and the AGAINST ref carries the settlement-date rate,
+	// and the difference between them is the gain. Step 5 reads exactly these
+	// two rows.
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
 }
 
 // GSTParams carries the inputs needed to auto-derive GST on a Sales/Purchase
@@ -345,6 +514,32 @@ type VoucherInput struct {
 	// from, recorded on voucher_head for idempotent re-import. Empty for natively
 	// created vouchers (those never participate in the (company, guid) dedupe).
 	SourceGUID string
+	// SourceDraftID is the insightd PurchaseVoucherDraft this voucher is being
+	// ACCEPTED from (migration 0077), recorded on voucher_head under a PARTIAL
+	// UNIQUE INDEX over (company_id, source_draft_id). Empty for every voucher
+	// nobody accepted from a draft, which is the overwhelming majority and which
+	// the partial index therefore never constrains.
+	//
+	// ⛔⛔ IT IS THE ONLY THING THAT MAKES "ACCEPT THIS AI BILL ONCE" A GUARANTEE
+	// RATHER THAN A CLAIM, AND THE REASON IS THAT IT COMMITS WITH THE VOUCHER.
+	// Accepting a draft is two writes to two services — cored posts the purchase,
+	// the browser then tells insightd the draft is `accepted`. When the second one
+	// is lost, insightd keeps offering the bill as `ready`, and every guard that
+	// READS a status (the browser's memo, its retry queue, a day-book lookup, a
+	// claim lease) is a check-then-act that a second machine can walk straight
+	// through. Naming the draft HERE moves the decision into the same transaction
+	// as the money: the loser trips the unique index, the transaction rolls back,
+	// and it has written no voucher, no numbering advance and no tax row.
+	//
+	// A conflict is reported as *DraftAlreadyAcceptedError, which names the
+	// voucher the draft DID produce — see post().
+	SourceDraftID string
+	// IdempotencyKey is the CLIENT's name for this request (W5, migration
+	// 0100). A second request under the same key and the same content is
+	// answered with the first one's result instead of posting; the same key
+	// with different content is refused. Empty = no idempotency, which is every
+	// caller written before W5. Honoured on CREATE only — see idempotency.go.
+	IdempotencyKey string
 }
 
 // SalesVoucherInput describes an F8 Sales voucher to post. Retained for
@@ -383,6 +578,10 @@ type PostResult struct {
 	// did — NONE, EXEMPT or INVALID_NO_PAN — which is the fact a zero amount
 	// alone cannot express.
 	TCS compliance.TCSResult
+	// Replayed is true when this result was NOT written by this call: the
+	// request's idempotency key had already created the voucher, and this is
+	// that first request's stored result (idempotency.go). Nothing was posted.
+	Replayed bool `json:"-"`
 }
 
 // Service is the ledger application service.
@@ -600,6 +799,26 @@ type PostingView struct {
 	LedgerName string
 	DrCr       string
 	Amount     decimal.Decimal
+	// T8's three values, projected for the SAME reason CostAllocations,
+	// Fulfilments and GSTLines are projected on VoucherView below — and this is
+	// the SEVENTH occurrence of that defect, one field further along.
+	//
+	// ⛔ AN ALTER RE-STATES. `posting` is rewritten from the request body on
+	// every version, so a GET that did not carry the currency would give a form
+	// nothing to send back, and the ordinary round trip — open a foreign
+	// invoice, fix a typo in the narration, save — would rewrite a $1,000 bill
+	// as a ₹83,651.23 rupee bill. NOTHING REFUSES IT: three NULLs is a legal
+	// state, the voucher still balances in base, the Balance Sheet does not
+	// move, and the only trace is a foreign bill that quietly stops being
+	// foreign — which then disappears from the unadjusted-forex report and
+	// realises no gain when it is settled.
+	//
+	// Zero means base here exactly as it does on PostingInput, so a view fed
+	// straight back into an input is the identity.
+	CurrencyID    uuid.UUID
+	CurrencyCode  string // the master's code ("USD"), for display; never sent back
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
 }
 
 // BillAllocationView is one bill-wise allocation of a fetched voucher.
@@ -610,6 +829,15 @@ type BillAllocationView struct {
 	DrCr     string
 	Amount   decimal.Decimal
 	DueDate  string // YYYY-MM-DD or empty
+	// The same three, for the same round-trip reason as PostingView above —
+	// and bill_allocation is the table where losing them costs the most, since
+	// the bill's historical rate is the figure step 5 differences a settlement
+	// rate against. An alter that dropped it would not corrupt the gain; it
+	// would make the gain uncomputable.
+	CurrencyID    uuid.UUID
+	CurrencyCode  string
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
 }
 
 // VoucherView is the CURRENT (head) version of one logical voucher, projected
@@ -921,10 +1149,20 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		// column and `uuid.NewV7` is not monotonic within a millisecond, so p.id
 		// is a STABLE tie-break and nothing more — it does not recover the
 		// sequence the payload stated, and nothing here should pretend it does.
+		//
+		// ⛔ THE FOREX JOIN IS LEFT, AND THE CODE IS COALESCE'd, for the reason
+		// every other projection here gives: the POSTING is the fact, and a
+		// currency master that has been renamed or removed must not make a
+		// foreign posting vanish from the round trip. currency_id is read from
+		// the posting itself and is what gets sent back; the code is display.
 		prows, err := tx.Query(ctx,
-			`SELECT p.id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
+			`SELECT p.id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount,
+			        p.currency_id, COALESCE(c.code, ''),
+			        COALESCE(p.foreign_amount, 0), COALESCE(p.rate, 0)
 			   FROM posting p
 			   LEFT JOIN ledger l ON l.id = p.ledger_id
+			   LEFT JOIN currency c
+			     ON c.company_id = p.company_id AND c.id = p.currency_id
 			  WHERE p.company_id = $1 AND p.voucher_version_id = $2
 			  ORDER BY p.dr_cr DESC, p.amount DESC, p.id`,
 			companyID, versionID)
@@ -935,8 +1173,13 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		for prows.Next() {
 			var p PostingView
 			var pid uuid.UUID
-			if err := prows.Scan(&pid, &p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount); err != nil {
+			var cur *uuid.UUID
+			if err := prows.Scan(&pid, &p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount,
+				&cur, &p.CurrencyCode, &p.ForeignAmount, &p.Rate); err != nil {
 				return fmt.Errorf("ledger: scan posting: %w", err)
+			}
+			if cur != nil {
+				p.CurrencyID = *cur
 			}
 			postingSeqByID[pid] = len(v.Postings)
 			v.Postings = append(v.Postings, p)
@@ -1045,11 +1288,15 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 
 		// Bill allocations of the current version (keyed by voucher_version_id).
 		brows, err := tx.Query(ctx,
-			`SELECT ledger_id, ref_name, ref_type::text, dr_cr::text, amount,
-			        COALESCE(to_char(due_date, 'YYYY-MM-DD'), '')
-			   FROM bill_allocation
-			  WHERE company_id = $1 AND voucher_version_id = $2
-			  ORDER BY created_at`,
+			`SELECT b.ledger_id, b.ref_name, b.ref_type::text, b.dr_cr::text, b.amount,
+			        COALESCE(to_char(b.due_date, 'YYYY-MM-DD'), ''),
+			        b.currency_id, COALESCE(c.code, ''),
+			        COALESCE(b.foreign_amount, 0), COALESCE(b.rate, 0)
+			   FROM bill_allocation b
+			   LEFT JOIN currency c
+			     ON c.company_id = b.company_id AND c.id = b.currency_id
+			  WHERE b.company_id = $1 AND b.voucher_version_id = $2
+			  ORDER BY b.created_at`,
 			companyID, versionID)
 		if err != nil {
 			return fmt.Errorf("ledger: query bill allocations: %w", err)
@@ -1057,8 +1304,13 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		defer brows.Close()
 		for brows.Next() {
 			var b BillAllocationView
-			if err := brows.Scan(&b.LedgerID, &b.RefName, &b.RefType, &b.DrCr, &b.Amount, &b.DueDate); err != nil {
+			var cur *uuid.UUID
+			if err := brows.Scan(&b.LedgerID, &b.RefName, &b.RefType, &b.DrCr, &b.Amount,
+				&b.DueDate, &cur, &b.CurrencyCode, &b.ForeignAmount, &b.Rate); err != nil {
 				return fmt.Errorf("ledger: scan bill allocation: %w", err)
+			}
+			if cur != nil {
+				b.CurrencyID = *cur
 			}
 			v.BillAllocations = append(v.BillAllocations, b)
 		}
@@ -1194,6 +1446,31 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	if !validClasses[in.Class] {
 		return PostResult{}, fmt.Errorf("ledger: invalid voucher class %q", in.Class)
 	}
+
+	// ⛔ IDEMPOTENCY FIRST, AND THE FINGERPRINT BEFORE ANYTHING IS NORMALISED
+	// (idempotency.go, migration 0100). A known key answers here with the first
+	// request's result and does no work at all — no numbering read, no GST
+	// derivation, no ledger lookups. The concurrent case (two requests racing
+	// past this read) is caught by the key row INSIDE the transaction below.
+	var fingerprint string
+	if op != OpCreate {
+		in.IdempotencyKey = ""
+	}
+	in.IdempotencyKey = normaliseIdempotencyKey(in.IdempotencyKey)
+	if in.IdempotencyKey != "" {
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return PostResult{}, err
+		}
+		fp, err := requestFingerprint(in)
+		if err != nil {
+			return PostResult{}, err
+		}
+		fingerprint = fp
+		if res, done, err := s.replayKnownKey(ctx, in.IdempotencyKey, fingerprint); done {
+			return res, err
+		}
+	}
+
 	// THE ACCOUNTING DECISION, MADE IN EXACTLY ONE PLACE. It reads a
 	// compile-time closed set and NEVER voucher_type.is_accounting: flipping one
 	// row in the database must not be able to turn a Sales invoice into a
@@ -1377,6 +1654,17 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// voucher always derives and always records.
 	var tcsRes compliance.TCSResult
 	var tcsTaxYear int
+
+	// ⛔ PROVENANCE IS STATED ONCE, AT CREATION. An ALTER or a DELETE that carried
+	// a draft id would REPOINT an existing voucher at a fresh draft (EXCLUDED wins
+	// over COALESCE when it is non-null), which would consume that draft — marking
+	// the bill posted — without a single line of it reaching the books. The client
+	// never sends one on those paths; this makes it impossible rather than merely
+	// unused, and it is why the COALESCE in the head upsert below is what preserves
+	// the id across later versions.
+	if op != OpCreate {
+		in.SourceDraftID = ""
+	}
 
 	var result PostResult
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -1873,7 +2161,30 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// Checked HERE, not beside validateBillAllocations, because this is the
 		// first point at which in.Postings is FINAL — an item invoice's postings
 		// were generated above from the stock masters. See the function's comment.
-		if err := validateBillAllocationsSumToPosting(in.Postings, billAllocations); err != nil {
+		if err := validateBillAllocationsSumToPosting(ctx, tx, companyID, in.Postings, billAllocations); err != nil {
+			return err
+		}
+
+		// T8 STEP 5 — THE REALISED EXCHANGE DIFFERENCE. Derived from the books and
+		// VERIFIED against what the caller posted; never generated. See
+		// forex_settlement.go's header for the three measured reasons that choice is
+		// the GST/TDS one rather than the item-invoice one.
+		//
+		// ⭐ HERE, and here for the same two reasons the line above is here: this is
+		// the first point at which in.Postings is FINAL (an item invoice's were
+		// generated from the stock masters), and the first at which the bill
+		// references have been STAMPED AND RESOLVED — a settlement whose AGAINST
+		// reference had not yet been named could not be looked up.
+		//
+		// ⛔ AND IT IS IN post(), WHICH IS THE SHARED PATH, SO AN ALTER IS CHECKED
+		// EXACTLY AS A CREATE IS. That is not tidiness: the realised leg is a third
+		// posting on a voucher an operator can later open and edit, which is the
+		// shape that has cost this repository seven defects ("an alter re-states").
+		// Placed in PostVoucher instead, every test in forex_settlement_test.go
+		// would still pass and an alter that dropped the leg would silently destroy
+		// the gain.
+		if err := deriveAndVerifyRealisedForex(
+			ctx, tx, companyID, voucherID, in.Postings, billAllocations); err != nil {
 			return err
 		}
 
@@ -1951,21 +2262,40 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			Party:         in.Party,
 		}
 		for _, p := range in.Postings {
-			payload.Postings = append(payload.Postings, CanonicalPosting{
+			cp := CanonicalPosting{
 				LedgerID: p.LedgerID.String(),
 				DrCr:     string(p.DrCr),
 				Amount:   p.Amount.StringFixed(4),
-			})
+			}
+			// ⛔ THE THREE FOREX KEYS APPEAR ONLY ON A FOREIGN POSTING. A base
+			// posting leaves all three at "" and, being omitempty, marshals to
+			// the exact bytes it did before these fields existed — which is
+			// what keeps every hash already written in the field valid.
+			//
+			// ⚠️ AND THE RATE IS canonicalRate, NOT StringFixed(4). Money is
+			// fixed-4 and a rate is not money; see canonicalRate.
+			if f := p.forex(); !f.isBase() {
+				cp.CurrencyID = f.CurrencyID.String()
+				cp.ForeignAmount = f.ForeignAmount.StringFixed(4)
+				cp.Rate = canonicalRate(f.Rate)
+			}
+			payload.Postings = append(payload.Postings, cp)
 		}
 		for _, b := range billAllocations {
-			payload.BillAllocations = append(payload.BillAllocations, CanonicalBillAllocation{
+			cb := CanonicalBillAllocation{
 				LedgerID: b.LedgerID.String(),
 				RefName:  b.RefName,
 				RefType:  string(b.RefType),
 				DrCr:     string(b.DrCr),
 				Amount:   b.Amount.StringFixed(4),
 				DueDate:  b.DueDate,
-			})
+			}
+			if f := b.forex(); !f.isBase() {
+				cb.CurrencyID = f.CurrencyID.String()
+				cb.ForeignAmount = f.ForeignAmount.StringFixed(4)
+				cb.Rate = canonicalRate(f.Rate)
+			}
+			payload.BillAllocations = append(payload.BillAllocations, cb)
 		}
 
 		// Inventory rides in the hashed payload for the same reason postings do:
@@ -2231,6 +2561,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// rows can be indistinguishable in SQL and distinguishable in the request.
 		// A re-query that guessed would attribute one department's cost to another
 		// with nothing anywhere to detect it.
+		// A tombstone names nothing new: a voucher whose party was blocked
+		// after it was posted may still be deleted.
+		party, bills := in.PartyLedgerID, in.BillAllocations
+		if op == OpDelete {
+			party, bills = uuid.Nil, nil
+		}
+		if err := refuseBlockedLedgers(ctx, tx, companyID, postings, party, bills); err != nil {
+			return err
+		}
 		postingIDs := make([]uuid.UUID, 0, len(postings))
 		for _, p := range postings {
 			postingID, err := uuid.NewV7()
@@ -2238,11 +2577,19 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return fmt.Errorf("ledger: new posting id: %w", err)
 			}
 			postingIDs = append(postingIDs, postingID)
+			// ⛔ THE THREE FOREX VALUES RIDE THIS STATEMENT, and nullForex is
+			// what keeps "zero means absent" spelled once. A base posting
+			// writes three NULLs — the one and only encoding of a rupee
+			// figure — and 0080's posting_forex_all_or_none refuses anything
+			// in between whatever this layer concluded.
+			pcur, pforeign, prate := nullForex(p.forex())
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO posting
-				   (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
-				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				   (id, company_id, voucher_version_id, ledger_id, dr_cr, amount,
+				    currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 				postingID, companyID, versionID, p.LedgerID, string(p.DrCr), p.Amount,
+				pcur, pforeign, prate,
 			); err != nil {
 				return fmt.Errorf("ledger: insert posting: %w", err)
 			}
@@ -2293,13 +2640,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			if err != nil {
 				return fmt.Errorf("ledger: new bill allocation id: %w", err)
 			}
+			bcur, bforeign, brate := nullForex(b.forex())
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO bill_allocation
 				   (id, company_id, voucher_version_id, ledger_id, ref_name, ref_type,
-				    dr_cr, amount, due_date)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				    dr_cr, amount, due_date, currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 				allocID, companyID, versionID, b.LedgerID, b.RefName, string(b.RefType),
 				string(b.DrCr), b.Amount, nullIfEmpty(b.DueDate),
+				bcur, bforeign, brate,
 			); err != nil {
 				return fmt.Errorf("ledger: insert bill_allocation: %w", err)
 			}
@@ -2307,10 +2656,19 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 
 		// Move the mutable head pointer to this new version. ledger_balance now
 		// reflects exactly the current version of every voucher.
+		//
+		// ⛔ source_draft_id RIDES THIS STATEMENT ON PURPOSE — see 0077. It is the
+		// ONLY line in this transaction that can refuse a duplicated AI bill accept,
+		// and it can only do so from inside the transaction: the loser must not have
+		// posted a voucher, advanced the numbering counter or written a tax row.
+		// COALESCE, exactly like source_guid, so an ALTER that does not restate the
+		// draft id does not erase which draft the voucher came from — and so an ALTER
+		// that DOES restate it writes the row's own value back and cannot collide
+		// with itself.
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO voucher_head
-			   (company_id, voucher_id, current_version_id, version_no, op, is_deleted, voucher_date, source_guid)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			   (company_id, voucher_id, current_version_id, version_no, op, is_deleted, voucher_date, source_guid, source_draft_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			 ON CONFLICT (company_id, voucher_id) DO UPDATE
 			   SET current_version_id = EXCLUDED.current_version_id,
 			       version_no         = EXCLUDED.version_no,
@@ -2318,10 +2676,16 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			       is_deleted         = EXCLUDED.is_deleted,
 			       voucher_date       = EXCLUDED.voucher_date,
 			       source_guid        = COALESCE(EXCLUDED.source_guid, voucher_head.source_guid),
+			       source_draft_id    = COALESCE(EXCLUDED.source_draft_id, voucher_head.source_draft_id),
 			       updated_at         = now()`,
 			companyID, voucherID, versionID, versionNo, string(op), op == OpDelete, vDate,
-			nullIfEmpty(in.SourceGUID),
+			nullIfEmpty(in.SourceGUID), nullIfEmpty(in.SourceDraftID),
 		); err != nil {
+			if isDraftAcceptanceConflict(err) {
+				// Raised as a bare marker: the winner cannot be READ from this
+				// transaction (it is about to roll back), so post() reads it after.
+				return errDraftAlreadyAccepted
+			}
 			return fmt.Errorf("ledger: upsert voucher_head: %w", err)
 		}
 
@@ -2360,12 +2724,108 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			TDS:              tdsRes,
 			TCS:              tcsRes,
 		}
+		// THE KEY ROW IS THE LAST WRITE, so it records the result that is about
+		// to commit. A concurrent request under the same key blocks HERE on
+		// 0100's primary key until this transaction ends; if this one commits,
+		// that one trips the key, rolls back everything above, and replays.
+		if fingerprint != "" {
+			if err := recordIdempotencyKey(ctx, tx, companyID, in.IdempotencyKey, fingerprint, result); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
+		// A CONCURRENT REQUEST UNDER THE SAME KEY WON. This transaction has
+		// rolled back, so the winner's committed row is read and replayed (or
+		// refused as a reuse, if its content differed).
+		if errors.Is(err, errIdempotentConflict) {
+			res, _, rerr := s.replayKnownKey(ctx, in.IdempotencyKey, fingerprint)
+			return res, rerr
+		}
+		// THE DUPLICATED AI BILL. The transaction has rolled back by the time we
+		// get here, so the winner is read in its own transaction and folded into
+		// the error the operator sees. A failure to read it degrades the MESSAGE
+		// and never the REFUSAL — see DraftAlreadyAcceptedError.
+		if errors.Is(err, errDraftAlreadyAccepted) {
+			// ⛔ THE DRAFT INDEX FIRES BEFORE THE KEY ROW IS REACHED, so two
+			// concurrent deliveries of ONE draft accept under ONE key would
+			// otherwise answer the loser "already accepted" — a refusal for a
+			// request that succeeded, which is row 30's ambiguous-timeout window
+			// again. If the winner holds THIS key and THIS content, it is a
+			// replay; only a DIFFERENT request on the same draft is the conflict.
+			if fingerprint != "" {
+				if res, done, rerr := s.replayKnownKey(ctx, in.IdempotencyKey, fingerprint); done {
+					return res, rerr
+				}
+			}
+			return PostResult{}, s.draftConflictError(ctx, in.SourceDraftID)
+		}
 		return PostResult{}, err
 	}
 	return result, nil
+}
+
+// isDraftAcceptanceConflict reports whether err is the unique violation raised by
+// migration 0077's partial index — and NOT any other 23505 the head can raise.
+// See draftAcceptanceIndex for why the name is matched rather than the code alone.
+func isDraftAcceptanceConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23505" && pgErr.ConstraintName == draftAcceptanceIndex
+}
+
+// draftConflictError names the voucher a draft already produced, for the refusal
+// message. It NEVER returns nil: the refusal is owed to the caller whether or not
+// the winner could be read.
+func (s *Service) draftConflictError(ctx context.Context, draftID string) error {
+	e := &DraftAlreadyAcceptedError{DraftID: draftID}
+	id, no, found, lookupErr := s.VoucherBySourceDraftID(ctx, draftID)
+	if lookupErr == nil && found {
+		e.VoucherID, e.VoucherNo = id, no
+	}
+	return e
+}
+
+// VoucherBySourceDraftID returns the logical voucher a given insightd draft was
+// accepted into: (id, voucherNo, true, nil) when one exists, (uuid.Nil, "", false,
+// nil) when none does. The display number comes from the head's CURRENT version,
+// so an altered voucher reports the number it carries now.
+//
+// ⚠️ A TOMBSTONED VOUCHER STILL ANSWERS TRUE. Acceptance is terminal (0077): the
+// draft is spent even if the voucher it produced was later deleted, and a caller
+// asking "was this draft accepted" must not be told no because the answer would
+// invite the inbox to offer the bill again.
+func (s *Service) VoucherBySourceDraftID(ctx context.Context, draftID string) (uuid.UUID, string, bool, error) {
+	if draftID == "" {
+		return uuid.Nil, "", false, nil
+	}
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return uuid.Nil, "", false, db.ErrNoCompany
+	}
+	var (
+		voucherID uuid.UUID
+		voucherNo string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT h.voucher_id, COALESCE(v.voucher_no, '')
+			   FROM voucher_head h
+			   LEFT JOIN voucher_version v
+			     ON v.company_id = h.company_id AND v.id = h.current_version_id
+			  WHERE h.company_id = $1 AND h.source_draft_id = $2`,
+			companyID, draftID).Scan(&voucherID, &voucherNo)
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return uuid.Nil, "", false, nil
+	case err != nil:
+		return uuid.Nil, "", false, fmt.Errorf("ledger: lookup source_draft_id: %w", err)
+	}
+	return voucherID, voucherNo, true, nil
 }
 
 // deriveGST runs the PURE compliance engine over the params, defaulting the
@@ -2473,7 +2933,7 @@ func validatePostings(ps []PostingInput) error {
 		return errors.New("ledger: a voucher needs at least two postings")
 	}
 	debit, credit := decimal.Zero, decimal.Zero
-	for _, p := range ps {
+	for i, p := range ps {
 		if p.LedgerID == uuid.Nil {
 			return errors.New("ledger: posting ledger id is required")
 		}
@@ -2487,6 +2947,14 @@ func validatePostings(ps []PostingInput) error {
 			credit = credit.Add(p.Amount)
 		default:
 			return fmt.Errorf("ledger: invalid dr_cr %q", p.DrCr)
+		}
+		// ⚠️ THE FOREIGN FIGURES ARE NOT SUMMED, AND THAT IS THE DESIGN, NOT AN
+		// OMISSION. Only the BASE column is one in which the double-entry
+		// identity is meaningful: a sale of $1,000 settled partly in EUR does
+		// not sum to zero in dollars or in euros. A balance check over
+		// foreign_amount would refuse correct multi-currency vouchers.
+		if err := p.forex().validate(fmt.Sprintf("posting %d", i+1)); err != nil {
+			return err
 		}
 	}
 	if !debit.Equal(credit) {
@@ -2638,7 +3106,7 @@ func classPurpose(c Class) string {
 // outstanding and a negative row beside it. Both figures would be wrong and the
 // report would still foot. A settlement must say what it settles.
 func validateBillAllocations(bs []BillAllocationInput) error {
-	for _, b := range bs {
+	for i, b := range bs {
 		if b.LedgerID == uuid.Nil {
 			return errors.New("ledger: bill allocation ledger id is required")
 		}
@@ -2654,6 +3122,9 @@ func validateBillAllocations(bs []BillAllocationInput) error {
 		if b.Amount.IsNegative() {
 			return errors.New("ledger: bill allocation amount must be non-negative")
 		}
+		if err := b.forex().validate(fmt.Sprintf("bill allocation %d", i+1)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2667,7 +3138,18 @@ func validateBillAllocations(bs []BillAllocationInput) error {
 // nothing will ever settle. Every on-account amount on a party therefore nets
 // into this single bucket, which is exactly how the operator reads it: "money
 // from this customer that is not applied to anything".
-const onAccountRefName = "On Account"
+//
+// ⛔ IT IS EXPORTED BECAUSE reporting.Outstandings MUST FILE ITS DERIVED RESIDUE
+// UNDER THE SAME NAME (D106). That report groups by (ledger_id, ref_name), so an
+// explicit ON_ACCOUNT reference written here and the unreferenced remainder it
+// computes there have to land in ONE bucket or a party shows two "On Account"
+// lines that do not add up. Two string literals in two packages would agree
+// until somebody edited one of them; this is one fact with one home.
+const OnAccountRefName = "On Account"
+
+// onAccountRefName is the package-internal spelling, kept so the existing call
+// sites read unchanged.
+const onAccountRefName = OnAccountRefName
 
 // stampBillRefNames names every reference that arrived WITHOUT a name, and it is
 // the whole of the fix for two defects that were driven in a browser.
@@ -3181,10 +3663,35 @@ func billRefNamesTakenElsewhere(
 // carrying both a settlement and an on-account remainder nets naturally instead
 // of needing a special case. It is exact to the paisa: a tolerance here is how a
 // real error hides for a year.
-func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAllocationInput) error {
-	if len(bs) == 0 {
-		return nil
-	}
+//
+// =============================================================================
+// ⛔⛔ D106 — "NO REFERENCES AT ALL" USED TO BE EXEMPT, AND THAT WAS THE HOLE.
+// =============================================================================
+// This function began with `if len(bs) == 0 { return nil }`, so it policed a
+// PARTIAL allocation and waved through a voucher that referenced nothing. A
+// Receipt for 7,000 on a bill-by-bill debtor, entered with an empty bill-wise
+// panel, was therefore legal — and produced exactly the disagreement the comment
+// above says must never happen: driven in a browser 2026-08-30, Outstandings
+// 318584.0000 against Sundry Debtors 311584.0000.
+//
+// ⭐ THE RULE IS NOW TALLY'S OWN, AND IT IS A LEDGER-MASTER RULE, NOT A VOUCHER
+// ONE: on a ledger flagged `maintain_bill_by_bill` ("Maintain balances
+// bill-by-bill"), the references MUST account for the whole posting. Tally states
+// it as "the total net amount of all references must be equal to the net amount
+// of debit / credit in the respective ledger account of the party". A ledger
+// WITHOUT the flag is untouched — it never had bills and is not being given any.
+//
+// ⚠️ AND THE ESCAPE HATCH IS A REAL ANSWER, NOT A BYPASS. An operator who does
+// not know which invoice a payment settles picks ON_ACCOUNT, which is one of the
+// four Tally reference types this package already models. That records "money
+// from this customer, not applied to anything" as a FACT the report can show,
+// instead of leaving a silent hole the report cannot see. The refusal below names
+// it, because a refusal that does not say what to do instead just teaches the
+// operator to find another door.
+func validateBillAllocationsSumToPosting(
+	ctx context.Context, tx pgx.Tx, companyID uuid.UUID,
+	postings []PostingInput, bs []BillAllocationInput,
+) error {
 	signed := func(dc DrCr, amt decimal.Decimal) decimal.Decimal {
 		if dc == Credit {
 			return amt.Neg()
@@ -3200,9 +3707,32 @@ func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAlloc
 		allocByLedger[b.LedgerID] = allocByLedger[b.LedgerID].Add(signed(b.DrCr, b.Amount))
 	}
 	postByLedger := make(map[uuid.UUID]decimal.Decimal)
+	postOrder := make([]uuid.UUID, 0, len(postings))
 	for _, p := range postings {
+		if _, seen := postByLedger[p.LedgerID]; !seen {
+			postOrder = append(postOrder, p.LedgerID)
+		}
 		postByLedger[p.LedgerID] = postByLedger[p.LedgerID].Add(signed(p.DrCr, p.Amount))
 	}
+
+	// ⛔ THE LEDGERS TO CHECK ARE THE UNION OF TWO SETS, AND THE SECOND IS THE NEW
+	// HALF. (1) every ledger this voucher wrote a reference for — a reference on a
+	// ledger the voucher does not post to is nonsense whatever the master says;
+	// (2) every ledger it POSTS to that is flagged bill-by-bill, which is what
+	// catches the voucher that referenced nothing at all.
+	required, err := billWiseLedgers(ctx, tx, companyID, postOrder)
+	if err != nil {
+		return err
+	}
+	for _, lid := range postOrder {
+		if _, already := allocByLedger[lid]; already {
+			continue
+		}
+		if required[lid] {
+			order = append(order, lid)
+		}
+	}
+
 	for _, lid := range order {
 		got, want := allocByLedger[lid], postByLedger[lid]
 		if got.Equal(want) {
@@ -3214,6 +3744,13 @@ func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAlloc
 					"a bill cannot be raised or settled on a line that is not in the entry",
 				got.StringFixed(4))
 		}
+		if got.IsZero() {
+			return fmt.Errorf(
+				"ledger: this ledger is maintained bill-by-bill and posts %s, but the "+
+					"voucher names no bill reference for it — record which bill it is "+
+					"against, or record it as %s if you do not yet know",
+				want.StringFixed(4), RefOnAccount)
+		}
 		return fmt.Errorf(
 			"ledger: bill references on this ledger total %s but it posts %s — "+
 				"the difference is %s, and leaving it would make the Outstandings report "+
@@ -3221,4 +3758,39 @@ func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAlloc
 			got.StringFixed(4), want.StringFixed(4), want.Sub(got).StringFixed(4))
 	}
 	return nil
+}
+
+// billWiseLedgers returns which of `ids` are flagged `maintain_bill_by_bill`.
+//
+// ⚠️ IT ASKS THE DATABASE RATHER THAN TRUSTING THE REQUEST, for the same reason
+// validateBillAllocationsSumToPosting runs inside the transaction: the flag is a
+// MASTER fact, the caller does not send it, and a client that decided for itself
+// which ledgers need references would be re-implementing the rule it is being
+// checked against.
+func billWiseLedgers(
+	ctx context.Context, tx pgx.Tx, companyID uuid.UUID, ids []uuid.UUID,
+) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM ledger
+		  WHERE company_id = $1 AND id = ANY($2::uuid[]) AND maintain_bill_by_bill`,
+		companyID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("ledger: read bill-by-bill flags: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("ledger: scan bill-by-bill flag: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ledger: iterate bill-by-bill flags: %w", err)
+	}
+	return out, nil
 }

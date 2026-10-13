@@ -28,11 +28,16 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/khata/cored/internal/inventory"
 	"github.com/khata/cored/internal/masters"
 )
 
@@ -227,9 +232,87 @@ type stockItemListItem struct {
 	// GSTRatePct is a fixed-4 decimal STRING, like every other rate on the wire.
 	GSTRatePct string `json:"gst_rate_pct"`
 	// ValuationMethod names the valuer that replays this item's movements
-	// ('WEIGHTED_AVG' today), so a client can state a report's basis.
+	// (WEIGHTED_AVG, FIFO or LIFO — T9), so a client can state a report's basis.
 	ValuationMethod string `json:"valuation_method"`
 	IsSystem        bool   `json:"is_system"`
+	// StockGroup is the item's group (T10), or "" for an UNGROUPED item — which
+	// is a real state and not a missing value: every item created before T10 is
+	// ungrouped, and a picker that hid them would hide most of a company's stock.
+	StockGroup string `json:"stock_group"`
+}
+
+// --------------------------------------------------------------------------
+// STOCK GROUPS (T10, migration 0079)
+// --------------------------------------------------------------------------
+
+// stockGroupReq is the POST /stock-groups body. parent_name is optional and
+// names an EXISTING group; a group is created under nothing by default, which is
+// what Tally calls being under "Primary".
+type stockGroupReq struct {
+	Name       string `json:"name"`
+	ParentName string `json:"parent_name"`
+	CreatedBy  string `json:"created_by"`
+}
+
+func (s *Server) handleCreateStockGroup(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	var req stockGroupReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	id, err := s.masters.CreateStockGroup(ctx, masters.StockGroup{
+		Name:       strings.TrimSpace(req.Name),
+		ParentName: strings.TrimSpace(req.ParentName),
+	}, req.CreatedBy)
+	if err != nil {
+		writeMastersError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"stock_group_id": id.String()})
+}
+
+// stockGroupListItem is one node of the item hierarchy.
+//
+// `depth` is served rather than left to the client to derive: it is the number
+// of labels in the ltree path minus one, and a client that computed it by
+// counting dots would be parsing a database detail it has no business knowing.
+type stockGroupListItem struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ParentName string `json:"parent_name"`
+	Depth      int    `json:"depth"`
+	// ItemCount is how many items sit DIRECTLY in this group — the one thing a
+	// picker needs before it can offer to delete one.
+	ItemCount int `json:"item_count"`
+}
+
+func (s *Server) handleListStockGroups(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	groups, err := s.masters.ListStockGroups(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list stock groups: "+err.Error())
+		return
+	}
+	out := make([]stockGroupListItem, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, stockGroupListItem{
+			ID:         g.ID.String(),
+			Name:       g.Name,
+			ParentName: g.ParentName,
+			Depth:      strings.Count(g.Path, "."),
+			ItemCount:  g.ItemCount,
+		})
+	}
+	// ⚠️ IN TREE ORDER (a parent always precedes its children), because that is
+	// the order masters.ListStockGroups returns and re-sorting it here by name
+	// would break the indentation a client renders from `depth`.
+	writeJSON(w, http.StatusOK, map[string]any{"stock_groups": out})
 }
 
 func (s *Server) handleListStockItems(w http.ResponseWriter, r *http.Request) {
@@ -245,9 +328,11 @@ func (s *Server) handleListStockItems(w http.ResponseWriter, r *http.Request) {
 		// for the writer and not for the reader.
 		rows, err := tx.Query(ctx,
 			`SELECT si.id, si.name, COALESCE(u.symbol, ''), COALESCE(si.hsn, ''),
-			        si.gst_rate_pct, si.valuation_method, si.is_system
+			        si.gst_rate_pct, si.valuation_method, si.is_system,
+			        COALESCE(sg.name, '')
 			   FROM stock_item si
-			   LEFT JOIN unit u ON u.id = si.unit_id
+			   LEFT JOIN unit u         ON u.id  = si.unit_id
+			   LEFT JOIN stock_group sg ON sg.id = si.stock_group_id
 			  ORDER BY si.name`)
 		if err != nil {
 			return err
@@ -259,7 +344,7 @@ func (s *Server) handleListStockItems(w http.ResponseWriter, r *http.Request) {
 				rate decimal.Decimal
 			)
 			if err := rows.Scan(&it.ID, &it.Name, &it.UnitSymbol, &it.HSN,
-				&rate, &it.ValuationMethod, &it.IsSystem); err != nil {
+				&rate, &it.ValuationMethod, &it.IsSystem, &it.StockGroup); err != nil {
 				return err
 			}
 			it.GSTRatePct = rate.StringFixed(4)
@@ -283,6 +368,16 @@ type unitListItem struct {
 	FormalName    string `json:"formal_name"`
 	DecimalPlaces int    `json:"decimal_places"`
 	IsSystem      bool   `json:"is_system"`
+	// A COMPOUND unit (T10) is defined in terms of another: 1 BOX = 12 NOS. Both
+	// are empty for a simple unit, and a client must render nothing rather than
+	// "0.0000" in that case.
+	//
+	// ⚠️ REPORTED BUT NEVER APPLIED HERE. Quantities are stored in the item's own
+	// unit and restated at REPORT time (the Stock Summary does it); a client that
+	// multiplied a quantity by this factor itself would be doing the conversion
+	// twice on any figure that had already been restated.
+	BaseUnitSymbol   string `json:"base_unit_symbol"`
+	ConversionFactor string `json:"conversion_factor"`
 }
 
 func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
@@ -293,18 +388,28 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 	out := []unitListItem{}
 	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, symbol, formal_name, decimal_places, is_system
-			   FROM unit
-			  ORDER BY symbol`)
+			`SELECT u.id, u.symbol, u.formal_name, u.decimal_places, u.is_system,
+			        COALESCE(b.symbol, ''), u.conversion_factor
+			   FROM unit u
+			   LEFT JOIN unit b ON b.id = u.base_unit_id
+			  ORDER BY u.symbol`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var it unitListItem
+			var (
+				it     unitListItem
+				factor *decimal.Decimal
+			)
 			if err := rows.Scan(&it.ID, &it.Symbol, &it.FormalName,
-				&it.DecimalPlaces, &it.IsSystem); err != nil {
+				&it.DecimalPlaces, &it.IsSystem, &it.BaseUnitSymbol, &factor); err != nil {
 				return err
+			}
+			// NULL stays "" rather than becoming "0.0000": a simple unit has NO
+			// factor, and a zero one would read as "one BOX holds no pieces".
+			if factor != nil {
+				it.ConversionFactor = factor.StringFixed(4)
 			}
 			out = append(out, it)
 		}
@@ -315,4 +420,118 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"units": out})
+}
+
+// --------------------------------------------------------------------------
+// THE COSTING METHOD OF A STOCK ITEM (feature T9)
+// --------------------------------------------------------------------------
+
+// valuationMethodReq is the PUT /stock-items/{stockItemID}/valuation-method
+// body. One field, and it is REQUIRED rather than a pointer — unlike the
+// company settings PUT, where an absent field means "leave it alone". This
+// route exists to change exactly one thing, so a body that names nothing is a
+// caller mistake and not an instruction to do nothing.
+type valuationMethodReq struct {
+	ValuationMethod string `json:"valuation_method"`
+	CreatedBy       string `json:"created_by"`
+}
+
+// handleSetStockItemValuationMethod switches one item's costing method.
+//
+// PUT /v1/companies/{companyID}/stock-items/{stockItemID}/valuation-method
+//
+// ⛔ THIS IS A RESTATEMENT AND THE ROUTE IS SHAPED LIKE ONE. Stock value is
+// never stored, so changing the method changes NO data and every figure: the
+// item's closing stock, its cost of goods sold, and therefore the Balance Sheet
+// and the Profit & Loss for EVERY period the item has ever traded in — not just
+// the ones after today, because the replay starts at the opening. So it is:
+//
+//   - its own narrow route rather than a field on a general master editor;
+//   - an (Alter, "master") action, so it inherits the back-dated-entry cutoff
+//     and the WebAuthn step-up like any other write (a change that restates a
+//     closed period through the FRONT door should not walk past the lock that
+//     stops a voucher doing it through the back one);
+//   - refused when it names the method the item already has, so the audit trail
+//     of restatements contains only real ones;
+//   - answered WITH THE STORED ROW, never with the request body. That is
+//     register row D43's lesson, and it is exactly the shape of failure this
+//     route could have: a caller told the method changed while the column did
+//     not move has no way to tell the two outcomes apart, and the next report
+//     they read is on the old basis and looks perfectly plausible.
+func (s *Server) handleSetStockItemValuationMethod(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "stockItemID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "stockItemID is not a uuid")
+		return
+	}
+	var req valuationMethodReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ValuationMethod) == "" {
+		writeError(w, http.StatusBadRequest,
+			"valuation_method is required; GET ../inventory-vocabulary lists the methods this build values stock with")
+		return
+	}
+	stored, err := s.masters.SetStockItemValuationMethod(ctx, itemID,
+		strings.TrimSpace(req.ValuationMethod), attributedTo(r, req.CreatedBy))
+	if err != nil {
+		if errors.Is(err, masters.ErrValuationMethodUnchanged) {
+			// 409, not 422: nothing about the request is unprocessable — the
+			// world is already in the state it asks for.
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeMastersError(w, err)
+		return
+	}
+	// The read-back, and the disclosure that goes with it. A client that shows
+	// "saved" and nothing else would let an operator walk away not knowing that
+	// last quarter's closing stock has just changed.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stock_item_id":    stored.StockItemID.String(),
+		"name":             stored.Name,
+		"valuation_method": stored.ValuationMethod,
+		"restates": "Stock value is derived at report time, so this item's WHOLE history is " +
+			"now valued on the new basis — including periods that have already been reported. " +
+			"Switching back reproduces the earlier figures exactly.",
+	})
+}
+
+// handleInventoryVocabulary serves the closed set of costing methods a stock
+// item form must choose from, with Tally's own name for each and one line on
+// what the closing stock ends up carried at.
+//
+// GET /v1/companies/{companyID}/inventory-vocabulary
+//
+// ⛔ SERVED RATHER THAN HARDCODED IN THE CLIENT, for the reason the payroll
+// vocabulary is: a form built from a list the server does not own can compose a
+// value the server refuses, and the operator meets that refusal after keying the
+// whole master. The list is DERIVED from the implemented valuers
+// (inventory.KnownValuationMethods), so a build that ships a method the reports
+// cannot serve cannot offer it either.
+//
+// NO PARAMETERS, and nothing about this company in the answer: the vocabulary is
+// this build's, not the tenant's. The company id is in the path only because
+// every route on this seam is company-scoped by the middleware that authorises it.
+func (s *Server) handleInventoryVocabulary(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.scopeCtx(w, r); !ok {
+		return
+	}
+	methods := make([]map[string]any, 0, 3)
+	for _, m := range inventory.MethodCatalogue() {
+		methods = append(methods, map[string]any{
+			"method": m.Method,
+			"label":  m.Label,
+			"basis":  m.Basis,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valuation_methods": methods,
+		"default":           inventory.MethodWeightedAverage,
+	})
 }

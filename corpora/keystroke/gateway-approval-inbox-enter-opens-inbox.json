@@ -1,0 +1,16 @@
+{
+  "id": "gateway-approval-inbox-enter-opens-inbox",
+  "description": "W2: selecting 'Approval Inbox' on the Gateway and pressing Enter opens the approval-inbox ScreenKind (not a report frame named 'Approval Inbox'), one level above the Gateway",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Approval Inbox" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "approval-inbox",
+    "parentScreen": "gateway",
+    "screenStackDepth": 2,
+    "buttonBarContains": ["Ctrl+A Approve", "Alt+X Reject", "Alt+B Ask back", "Enter Open to edit"]
+  }
+}

@@ -131,6 +131,40 @@ type Movement struct {
 	Rate decimal.Decimal
 	// DiscountPct is stock_movement.discount_pct, 0..100 inclusive.
 	DiscountPct decimal.Decimal
+
+	// --- the document's own arithmetic obligation ----------------------------
+
+	// VoucherConserves says that the VOUCHER this movement belongs to may
+	// neither create nor destroy stock value: whatever its inward legs are
+	// carried at must be exactly what its outward legs CONSUMED.
+	//
+	// ⭐ IT IS A PROPERTY OF THE DOCUMENT, NOT OF THE LINE, and every movement of
+	// one voucher carries the same answer. Today exactly one class sets it — the
+	// Stock Journal, which moves goods between our OWN shelves (a transfer) or
+	// turns some of our own goods into others (a manufacture) and posts ZERO
+	// accounting lines either way. A voucher with no money side that changed the
+	// total value of stock would move the Balance Sheet with nothing on the other
+	// side of it, and nothing in the product could name the document that did it.
+	//
+	// ⛔ IT IS DELIBERATELY NOT "every voucher with both directions". A Receipt
+	// Note brings goods in from OUTSIDE and MUST be able to add value; a Physical
+	// Stock surplus is an inward the server invented and MUST be able to add
+	// value. Conservation is right only where both sides of the document are our
+	// own stock. See D103 in the parity audit for what the missing rule cost.
+	VoucherConserves bool
+
+	// carriedValue / hasCarried are the value an INWARD leg is folded in at when
+	// the replay engine has DERIVED it — the conserving-voucher case above.
+	//
+	// ⛔ THEY ARE UNEXPORTED ON PURPOSE. Movement deliberately does not carry
+	// stock_movement.amount (see the type doc): a valuer that could prefer a
+	// STORED value over the one it derives is how a materialised value creeps
+	// back in. These fields are not a stored value — they are set by
+	// ReplayCompany, inside this package, from the consumption cost it has just
+	// computed — and being unexported is the proof that no caller outside this
+	// leaf can smuggle a number past the valuer.
+	carriedValue decimal.Decimal
+	hasCarried   bool
 }
 
 // Value is the movement's own money value: quantity times rate, net of the line
@@ -142,6 +176,14 @@ type Movement struct {
 // stored amount and a valuer that recomputed it would disagree by a paisa on
 // every discounted line and nobody would be able to say which was right.
 func (m Movement) Value() decimal.Decimal {
+	// A DERIVED CARRIED VALUE WINS, and it is the only thing that ever does.
+	// ReplayCompany sets it on the inward leg of a conserving voucher so the leg
+	// lands at exactly what the paired outward leg consumed — see
+	// conserving.go. Nothing outside this package can set it (the fields are
+	// unexported), so qty x rate remains THE definition for every other line.
+	if m.hasCarried {
+		return m.carriedValue
+	}
 	gross := m.Qty.Mul(m.Rate)
 	if m.DiscountPct.IsZero() {
 		return round(gross)

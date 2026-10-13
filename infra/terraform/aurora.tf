@@ -29,13 +29,18 @@ resource "aws_security_group_rule" "aurora_ingress_from_eks" {
   source_security_group_id = module.eks.node_security_group_id
 }
 
-resource "aws_security_group_rule" "aurora_egress_all" {
+# Egress is confined to the VPC. Security groups are STATEFUL, so replies to the
+# EKS nodes' connections never needed an egress rule; the former 0.0.0.0/0 rule
+# ("return traffic / DNS") granted nothing the database uses and would have let
+# a compromised instance reach the internet. In-VPC egress keeps logical
+# replication to CDC consumers, which run in this VPC, working.
+resource "aws_security_group_rule" "aurora_egress_vpc" {
   type              = "egress"
-  description       = "Allow all egress (return traffic / DNS)"
+  description       = "Egress within the VPC only (CDC consumers)"
   from_port         = 0
   to_port           = 0
   protocol          = "-1"
-  cidr_blocks       = ["0.0.0.0/0"]
+  cidr_blocks       = [var.vpc_cidr]
   security_group_id = aws_security_group.aurora.id
 }
 

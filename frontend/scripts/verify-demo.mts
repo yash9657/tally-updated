@@ -343,6 +343,134 @@ async function main(): Promise<void> {
     `disclosures: ${(g3b.disclosures ?? []).join(", ") || "(none)"}`,
   );
 
+  // --- 8b. EVERY MONTH SEPARATELY, AND THE ANNUAL RETURN -------------------
+  //
+  // ⛔ THIS IS THE HOLE D113 CAME THROUGH, AND IT IS WORTH UNDERSTANDING.
+  // Every check above asks for ONE 3B over the WHOLE FINANCIAL YEAR
+  // (`from=${FY.from}&to=${FY.to}`). Over a year the demo book's July sales
+  // return nets against April's invoice and every figure is positive, so a
+  // full-year window CANNOT observe a month that fails on its own — and this
+  // gate reported 34/34 while the book it asserts against could not produce a
+  // single one of its twelve monthly returns for July, nor its annual return
+  // at all. A filer files TWELVE 3Bs and ONE GSTR-9; nobody ever files the
+  // window this script was asking for.
+  //
+  // ⚠️ The lesson generalises past GST: an aggregate query is not a sample of
+  // the queries a user makes, and a gate built from one asserts what its author
+  // already believed.
+  const monthWindows: { fp: string; from: string; to: string }[] = [];
+  for (let i = 0; i < 12; i++) {
+    const y = 2026 + (i >= 9 ? 1 : 0);
+    const m = ((3 + i) % 12) + 1;
+    const mm = String(m).padStart(2, "0");
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    monthWindows.push({ fp: `${mm}${y}`, from: `${y}-${mm}-01`, to: `${y}-${mm}-${last}` });
+  }
+  const monthFailures: string[] = [];
+  let carriedNote = "";
+  for (const w of monthWindows) {
+    try {
+      const m3b = await getJSON<{
+        sup_details: { osup_det: { txval: string; iamt: string; camt: string; samt: string } };
+        carried_forward?: { table: string; txval: string; iamt: string }[];
+      }>(`/v1/companies/${co}/gstr3b?from=${w.from}&to=${w.to}`, headers);
+      // No table 3.1 value may be negative: GSTR-3B admits no negative entry
+      // (Circular 26/26/2017-GST para 4), so a negative here is a return the
+      // portal would refuse.
+      const o = m3b.sup_details.osup_det;
+      for (const [k, v] of Object.entries(o)) {
+        if (money4(v) < 0n) monthFailures.push(`${w.fp}: 3.1(a) ${k} is ${v}`);
+      }
+      for (const c of m3b.carried_forward ?? []) {
+        carriedNote += ` ${w.fp} carried ${c.table} txval=${c.txval} iamt=${c.iamt};`;
+      }
+    } catch (e) {
+      monthFailures.push(`${w.fp}: ${(e as Error).message}`);
+    }
+  }
+  check(
+    "GSTR-3B generates for EACH of the twelve periods a filer actually files",
+    monthFailures.length === 0,
+    monthFailures.length === 0
+      ? `12/12 periods generated, none with a negative 3.1(a).` +
+        (carriedNote ? ` Carried forward:${carriedNote}` : " Nothing carried forward.")
+      : monthFailures.join("; "),
+  );
+
+  const ledgersForGST = (await client.listLedgers(co)).ledgers;
+  const taxLedgerId = (name: string): string =>
+    ledgersForGST.find((l) => l.name.toLowerCase() === name.toLowerCase())?.id ?? "";
+  const g9q = ([
+    ["cgst_ledger_id", "Output CGST"],
+    ["sgst_ledger_id", "Output SGST"],
+    ["igst_ledger_id", "Output IGST"],
+    ["input_cgst_ledger_id", "Input CGST"],
+    ["input_sgst_ledger_id", "Input SGST"],
+    ["input_igst_ledger_id", "Input IGST"],
+  ] as const)
+    .map(([p, n]) => `${p}=${taxLedgerId(n)}`)
+    .join("&");
+  let g9Detail = "";
+  let g9Ok = false;
+  try {
+    const g9 = await getJSON<{
+      gstr9: { months: { fp: string }[] };
+      reconciled: boolean;
+    }>(`/v1/companies/${co}/gstr9?from=${FY.from}&to=${FY.to}&${g9q}`, headers);
+    g9Ok = g9.gstr9.months.length === 12;
+    g9Detail = `${g9.gstr9.months.length}/12 periods in the grid, reconciled=${g9.reconciled}`;
+  } catch (e) {
+    g9Detail = (e as Error).message;
+  }
+  check(
+    "the demo book can produce its own ANNUAL return (GSTR-9), all twelve periods",
+    g9Ok,
+    g9Detail,
+  );
+
+  // --- 8c. A REFUSAL IS SOMETHING THE OPERATOR CAN READ ---------------------
+  //
+  // ⛔ THIS IS CHECKED ON THE WIRE BECAUSE THAT IS WHERE IT WAS WRONG.
+  // `GSTR9Screen.tsx` renders the server's message VERBATIM
+  // (`setError(e instanceof Error ? e.message : String(e))`), so whatever the
+  // body says is what the filer reads. Every one of this package's sentinels
+  // used to open with `gstr: ` — a Go package name, first thing on the screen,
+  // telling them nothing about what they may do.
+  //
+  // ⚠️ AND THE MOCK HAD IT RIGHT ALL ALONG. `src/api/mock.ts` raises these same
+  // refusals — deliberately, so a screen's error handling cannot pass against
+  // the mock and fail against the real server — and it always spelled them
+  // WITHOUT the prefix. Nothing compared the two, so the divergence survived.
+  // The Go side pins the same rule in errors_operator_facing_test.go; this pins
+  // it where the operator actually meets it.
+  const refusals: { label: string; query: string }[] = [
+    { label: "a window that is not a financial year", query: `from=2025-01-01&to=2025-12-31` },
+    { label: "missing tax ledger ids", query: `from=${FY.from}&to=${FY.to}` },
+  ];
+  const refusalBreaks: string[] = [];
+  const refusalSeen: string[] = [];
+  for (const r of refusals) {
+    const res = await fetch(`${baseUrl}/v1/companies/${co}/gstr9?${r.query}`, { headers });
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    const msg = body.error ?? "";
+    if (res.status !== 400) {
+      refusalBreaks.push(`${r.label}: expected 400, got ${res.status}`);
+      continue;
+    }
+    // A leading lowercase identifier followed by ": " is a Go package prefix.
+    const leak = /^[a-z][a-z0-9]*: /.exec(msg);
+    if (leak) {
+      refusalBreaks.push(`${r.label}: message opens with the package prefix "${leak[0]}" — ${msg}`);
+    } else {
+      refusalSeen.push(`${r.label} -> "${msg.slice(0, 60)}…"`);
+    }
+  }
+  check(
+    "a GSTR-9 refusal reaches the operator without a Go package name in front of it",
+    refusalBreaks.length === 0,
+    refusalBreaks.length === 0 ? refusalSeen.join(" | ") : refusalBreaks.join("; "),
+  );
+
   // --- 9. An ALTERED sales voucher stays in the GST returns ---------------
   // The Step-0 regression, re-proved against the LIVE demo data: INV-003 was
   // altered 24,000 -> 26,500, so the return's taxable total must include the
@@ -909,12 +1037,19 @@ async function main(): Promise<void> {
 
   if (demoBank) {
     // The imported-statement report answers for a bank account with nothing
-    // imported yet, and SAYS that matching is not built. An empty list plus
+    // imported yet, and SAYS that it shows no match status. An empty list plus
     // silence would read as "none of your bank rows matched", which is a
     // different and false statement.
+    //
+    // ⛔ THIS CHECK PINNED A SENTENCE THAT WENT STALE. Until 2026-08-28 it looked
+    // for "MATCHING IS NOT BUILT YET", and slice 2b made that FALSE while this
+    // gate went on passing — because a gate that pins the PRESENCE of a
+    // disclosure does not pin its TRUTH. It was caught only because the sentence
+    // it names is quoted here in full. Keep it that way: name the words, so the
+    // next feature that falsifies them has to come and look.
     const stmt = await client.importedStatement(co, demoBank.id);
     const saysMatchingIsMissing = stmt.disclosures.some((d) =>
-      d.includes("MATCHING IS NOT BUILT YET"),
+      d.includes("THIS REPORT SHOWS NO MATCH STATUS"),
     );
     // ⚠️ ASSERT THE DISCLOSURE ONLY, NOT THE LINE COUNT. This check first read
     // `&& stmt.lines.length === 0`, which passed on a fresh seed and then FAILED
@@ -926,10 +1061,10 @@ async function main(): Promise<void> {
     // The invariant is that the report ALWAYS says matching is not built,
     // whether it is showing zero rows or four hundred.
     check(
-      "the imported-statement report discloses that matching is not built",
+      "the imported-statement report discloses that it shows no match status",
       saysMatchingIsMissing,
       `${stmt.lines.length} imported line(s), ${stmt.disclosures.length} disclosure(s)` +
-        (saysMatchingIsMissing ? "" : " — the matching disclosure is MISSING"),
+        (saysMatchingIsMissing ? "" : " — the match-status disclosure is MISSING"),
     );
   }
 

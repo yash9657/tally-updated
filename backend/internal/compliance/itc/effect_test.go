@@ -573,6 +573,25 @@ func TestDisclosureVocabularyMatchesGSTR(t *testing.T) {
 	// Declared in this package only, awaiting its gstr edit. Empty today.
 	itcLocalPending := []string{}
 
+	// DECLARED IN gstr ONLY, AND STRUCTURALLY UNREACHABLE FROM HERE.
+	//
+	// Every token above is about the INWARD side — a statement, an eligibility
+	// decision, a reversal — which is what this package reconciles, so the two
+	// vocabularies were identical and the guard below could demand that. The
+	// first OUTWARD-side token breaks that assumption rather than the gate:
+	// `negative-values-carried-forward` is raised by gstr's clampNegatives from
+	// tables 3.1 and 3.2, and this package never sees an outward supply. Adding
+	// it to `mirrored` would mean declaring a constant here that nothing here
+	// can ever emit — a dead constant, which is exactly what the non-vacuity
+	// check below exists to prevent.
+	//
+	// ⛔ THE GATE IS NOT WEAKENED BY THIS LIST: a new gstr token still fails
+	// this test until somebody classifies it. What it stops being is a claim
+	// that the two packages disclose the same things.
+	gstrOnly := map[string]bool{
+		gstr.DiscNegativeValuesCarriedForward: true,
+	}
+
 	theirs := map[string]bool{}
 	for _, s := range gstr.KnownDisclosures {
 		theirs[s] = true
@@ -590,10 +609,23 @@ func TestDisclosureVocabularyMatchesGSTR(t *testing.T) {
 		mine[o] = true
 	}
 	for _, k := range gstr.KnownDisclosures {
-		if !mine[k] {
+		if !mine[k] && !gstrOnly[k] {
 			t.Fatalf("gstr knows the disclosure %q and this package cannot emit it. The "+
 				"vocabularies have drifted; a reason the return is not filing-ready has "+
-				"no way to reach the field that says so", k)
+				"no way to reach the field that says so. If the token is OUTWARD-side and "+
+				"this package structurally cannot raise it, put it in gstrOnly and say why", k)
+		}
+	}
+	// gstrOnly must name tokens that REALLY EXIST over there. A stale or
+	// misspelled entry would silently excuse a genuine drift.
+	for k := range gstrOnly {
+		if !theirs[k] {
+			t.Fatalf("gstrOnly names %q, which is not in gstr.KnownDisclosures — the exemption "+
+				"is stale and is now hiding whatever token replaced it", k)
+		}
+		if mine[k] {
+			t.Fatalf("%q is in BOTH mirrored and gstrOnly; it cannot be unreachable here and "+
+				"emitted here at the same time", k)
 		}
 	}
 

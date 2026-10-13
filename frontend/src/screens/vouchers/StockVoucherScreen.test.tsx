@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 
 import { AppShell } from "../../app/AppShell";
 import { CompanyProvider } from "../../app/CompanyContext";
@@ -283,5 +283,83 @@ describe("a back-dated-cutoff refusal is not rendered as an ACL refusal", () => 
     const text = denied.textContent ?? "";
     expect(text).toMatch(/allow "create delivery-note"/);
     expect(text).not.toMatch(/CLOSED PERIOD/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. ⛔⛔ D108 — A SECOND Ctrl+A ON A SAVED STOCK VOUCHER MOVED THE GOODS AGAIN
+// ---------------------------------------------------------------------------
+
+/** Drain the accept chain — see the note in VoucherScreen.gstAlter.test.tsx. */
+async function settle() {
+  for (let i = 0; i < 3; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+}
+
+describe("⛔ D108: one keyed stock voucher is one stock voucher", () => {
+  it("an UNCHANGED second Ctrl+A posts NOTHING, and the grid is ready for the next", async () => {
+    // Driven in a browser 2026-08-31: Alt+F9, Steel Suppliers, MS Angle 100 @
+    // 45, and a THIRD press on a screen already reading `Saved  No: 7` -> RN
+    // No. 8, voucher count 24 -> 25. The mechanism is the accounting screen's:
+    // `navMachine`'s accept reducer replaces the create frame with a fresh one,
+    // but `lines` / `party` / `narration` / `voucherNo` are five separate
+    // useStates inside this component and replacing the frame never remounted
+    // it.
+    //
+    // ⚠️ THIS SCREEN ALREADY PROVED THE ASYMMETRY WAS AN OVERSIGHT: usePrintAction
+    // reads `loadedVoucherID ?? savedID` while the accept handler reads only
+    // `ctxRef.current.voucherID`, which is `loadedVoucherID` and therefore always
+    // null on a create. The same fact was consulted for PRINTING and ignored for
+    // SAVING.
+    const base = createMockClient({ seed: false });
+    await seedStock(base);
+    const postReceiptNoteVoucher = vi.fn((...a: unknown[]) =>
+      (base.postReceiptNoteVoucher as unknown as (...x: unknown[]) => unknown)(...a),
+    );
+    const client = { ...base, postReceiptNoteVoucher } as unknown as CoredClient;
+
+    await openStock(client, "receipt-note");
+    await keyAndSave(base);
+    await waitFor(() => expect(postReceiptNoteVoucher).toHaveBeenCalledTimes(1));
+    // The receipt is on screen — the server's number, which is what must survive.
+    expect(screen.getByTestId("voucher-no").textContent).toMatch(/No: \S+/);
+
+    // ⛔⛔ THE PRESS. Nothing re-keyed.
+    fireEvent.keyDown(app(), { key: "a", ctrlKey: true });
+    await settle();
+    expect(postReceiptNoteVoucher).toHaveBeenCalledTimes(1);
+
+    // ---- AND HERE IS WHY: the grid is empty and the party is gone.
+    expect((screen.getByTestId("stock-item:0") as HTMLSelectElement).value).toBe("");
+    expect((screen.getByTestId("stock-qty:0") as HTMLInputElement).value).toBe("");
+    expect((screen.getByTestId("stock-rate:0") as HTMLInputElement).value).toBe("");
+    expect((screen.getByTestId("stock-party") as HTMLInputElement).value).toBe("");
+    // ⚠️ THE "No." FIELD IS AN EDITABLE INPUT HERE, and it read
+    // `savedNo ?? voucherNo` — so over a cleared form it would have shown the
+    // operator the number of the voucher they had just saved while they keyed
+    // the next, and (being controlled on `savedNo`) would have IGNORED anything
+    // they typed into it.
+    expect((screen.getByTestId("stock-voucher-no") as HTMLInputElement).value).toBe("");
+  });
+
+  it("⛔ CONTROL: a re-keyed second voucher still posts — bulk entry is not broken", async () => {
+    // The fix must not become "never accept the same frame twice". Alt+F9 is
+    // key-goods-Ctrl+A-key-the-next, exactly as F8 is.
+    const base = createMockClient({ seed: false });
+    await seedStock(base);
+    const postReceiptNoteVoucher = vi.fn((...a: unknown[]) =>
+      (base.postReceiptNoteVoucher as unknown as (...x: unknown[]) => unknown)(...a),
+    );
+    const client = { ...base, postReceiptNoteVoucher } as unknown as CoredClient;
+
+    await openStock(client, "receipt-note");
+    await keyAndSave(base);
+    await waitFor(() => expect(postReceiptNoteVoucher).toHaveBeenCalledTimes(1));
+    await keyAndSave(base);
+    await waitFor(() => expect(postReceiptNoteVoucher).toHaveBeenCalledTimes(2));
   });
 });

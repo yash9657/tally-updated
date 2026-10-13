@@ -24,6 +24,7 @@ import type {
   CoredClient,
   DayBookResponse,
   OutstandingsResponse,
+  UnadjustedForexResponse,
   ProfitLossResponse,
   StatementNode,
   TrialBalanceResponse,
@@ -264,6 +265,12 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
     // Ledger-wise rows drill into that ledger's vouchers; group-wise rows drill
     // into the group's ledgers first (Tally's group > ledger > voucher path).
     rowKey: `${ledgerWise ? LEDGER_ROW_PREFIX : GROUP_ROW_PREFIX}${r.label}`,
+    // ⚠️ D118 — THE LEVEL FOLLOWS F5, exactly as the column header does. This
+    // report is FLAT either way (one row per ledger, or one per group, never
+    // both), so the level's job here is not nesting — it is to make the Total
+    // row below distinguishable, which it was not: summing the Debit column
+    // returned 1,708,730.2400 against the file's own Total of 854,365.1200.
+    level: ledgerWise ? "Ledger" : "Group",
     values: [r.label, formatMoney(r.debit), formatMoney(r.credit)],
     exportCells: [textCell(r.label), moneyCell(r.debit), moneyCell(r.credit)],
     cells: (
@@ -276,6 +283,7 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
   }));
   rows.push({
     rowKey: "__total__",
+    level: "Total",
     drillable: false,
     values: ["Total", formatMoney(data?.total_debit), formatMoney(data?.total_credit)],
     exportCells: [
@@ -301,6 +309,11 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
     title: "Trial Balance",
     headers: [ledgerWise ? "Ledger" : "Group", "Debit", "Credit"],
     availability,
+    // D118 — flat, but it carries a TOTAL row, and an unmarked total is the same
+    // doubling one row smaller. ⚠️ `Parent` is empty on every row here and that
+    // is correct: nothing on a Trial Balance is anybody's child, and naming the
+    // group would make the sum double-count the day a group row appeared.
+    levels: true,
   });
   return (
     <ReportFrame
@@ -346,10 +359,21 @@ function groupWise(
 // Balance Sheet + Profit & Loss (statement trees).
 // ---------------------------------------------------------------------------
 
+/**
+ * D118 — a statement node's kind, in the words the export uses. `COMPUTED` is
+ * neither a group nor a ledger (Closing Stock, the cumulative P&L balance): it
+ * is a figure the server derived, and calling it either of the other two would
+ * put it in a sum it does not belong to.
+ */
+function levelOfNode(kind: StatementNode["kind"]): string {
+  return kind === "GROUP" ? "Group" : kind === "LEDGER" ? "Ledger" : "Computed";
+}
+
 function flattenNodes(nodes: readonly StatementNode[], depth = 0): DrillRow[] {
   const out: DrillRow[] = [];
   for (const n of nodes) {
     out.push({
+      level: levelOfNode(n.kind),
       // The row key carries the row's KIND (group vs ledger), which is how the
       // machine knows a group drills one more level than a ledger. Names — not
       // uuids — because the drill screen resolves against the Trial Balance and
@@ -414,9 +438,15 @@ export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   }
 
   const visible = useReportView(rows, snapshot, {
-    title: "Balance Sheet",
+    title: statementTitle("Balance Sheet", snapshot),
     headers: ["Particulars", "Amount"],
     availability,
+    // D118 — this file is a three-deep tree and every parent carries its
+    // subtree's money. Without the two columns, summing the Amount column
+    // returned 4.2× the section total on the demo book.
+    levels: true,
+    // The refusal sentence names the report, not the file.
+    label: "Balance Sheet",
   });
 
   return (
@@ -442,15 +472,54 @@ export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   );
 }
 
-/** A non-drillable section heading row carrying the section total. */
+/**
+ * ⛔⛔ D118 — THE FILE SAYS WHICH VIEW PRODUCED IT, IN ITS OWN NAME.
+ *
+ * `Balance-Sheet-condensed.csv` / `Balance-Sheet-detailed.csv`, because the two
+ * are genuinely different documents and a reader cannot tell them apart from the
+ * inside. **In the CONDENSED view a group's children may be only PARTLY in the
+ * file** — `condense` drops drillable rows deeper than level 1 but keeps every
+ * non-drillable row AND its chain of ancestors, so `Current Assets` appears with
+ * `Stock-in-Hand` under it (kept only because `Closing Stock` must never be
+ * dropped) and without its three siblings. Measured on the demo book: the rows
+ * under `Current Assets` sum to **75,094.9091** against its own
+ * **746,314.9091**.
+ *
+ * ⭐ THE TOP LEVEL IS COMPLETE IN BOTH VIEWS — `condense` never drops a depth-1
+ * row — so `SUMIF(Parent, "<section>")` foots either way. The suffix is about
+ * the DEEPER sums, which only the `Parent` column made possible in the first
+ * place: this hazard arrived with the fix, so it ships with the fix.
+ *
+ * ⚠️ ON BOTH VIEWS AND NOT ONLY THE DANGEROUS ONE. "No suffix" is exactly the
+ * silence that makes a condensed file look complete.
+ *
+ * ⛔ AND ON THESE TWO SCREENS ONLY. They are the only reports in the product
+ * that nest past depth 1; anywhere else the word would describe nothing.
+ * Precedent: the Stock Summary already puts its scope in its title, for the same
+ * reason and with the same consequence for the file name.
+ */
+function statementTitle(name: string, snapshot: NavSnapshot): string {
+  return `${name} (${snapshot.config?.detailed ? "detailed" : "condensed"})`;
+}
+
+/**
+ * A non-drillable section heading row carrying the section total.
+ *
+ * ⛔ `level` IS A PARAMETER AND NOT A CONSTANT `"Section"` (D118). The P&L's
+ * `Net Profit` is built by this helper and is NOT a section: it is Income minus
+ * Expenses, and no row in the file rolls up into it. Labelling it `Section`
+ * would invite exactly the sum that is wrong.
+ */
 function sectionHeaderRow(
   key: string,
   title: string,
   total: string,
   testId: string,
+  level: string = "Section",
 ): DrillRow {
   return {
     rowKey: key,
+    level,
     drillable: false,
     values: [title, formatMoney(total)],
     exportCells: [textCell(title), moneyCell(total)],
@@ -502,14 +571,19 @@ export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
         "Net Profit",
         data.net_profit,
         "pl-net-profit",
+        // NOT a section: nothing in this file rolls up into it. See the helper.
+        "Computed",
       ),
     );
   }
 
   const visible = useReportView(rows, snapshot, {
-    title: "Profit and Loss",
+    title: statementTitle("Profit and Loss", snapshot),
     headers: ["Particulars", "Amount"],
     availability,
+    // D118 — same shape as the Balance Sheet: section headers over groups that
+    // roll up into them, and a `Net Profit` row that is neither.
+    levels: true,
     // The FILE is "Profit-and-Loss.csv"; the SCREEN is headed "Profit & Loss
     // A/c". A refusal names the screen, because that is what the operator is
     // looking at when they read the status line.
@@ -576,6 +650,25 @@ export function outstandingsScopeLine(asOn: string, agedAsOn: string): string {
 }
 
 /**
+ * The on-account disclosure (D106). Exported for the same reason
+ * `outstandingsScopeLine` is: it is a sentence with a rule in it, and a test can
+ * hold a sentence to a rule far more cheaply than it can hold a rendered screen.
+ */
+export function onAccountLine(onAccountTotal: string): string {
+  const n = Number(onAccountTotal);
+  const held = n < 0;
+  return (
+    `INCLUDES ${formatMoney(onAccountTotal)} ON ACCOUNT — money that names no bill, ` +
+    (held
+      ? "so it is money received and not yet applied to any invoice. "
+      : "so it is an amount owed that no invoice has been raised for. ") +
+    "It is NOT in any ageing slab (it has no due date to be overdue against), so " +
+    "the slab totals are short of the grand total by exactly this much. " +
+    "To apply it, alter the voucher that carried it and name the bill."
+  );
+}
+
+/**
  * ⛔⛔ ONE SCREEN BODY, TWO REPORT NAMES (D94) — the client mirror of cored's
  * `writeOutstandings`, which is the single writer behind both doors.
  *
@@ -612,7 +705,12 @@ function OutstandingsLikeScreen({
     }, [client, companyID, asOn, fetchIt]),
   );
 
-  const columns = "grid-cols-[1fr_8rem_8rem]";
+  // ⭐⭐ T8 STEP 6 — A FOURTH COLUMN, AND IT IS A SEPARATE ONE (Q5). The base figure
+  // and the foreign figure are two different facts about one bill; a column that
+  // showed whichever applied would change currency from row to row and foot to a
+  // total in none. It is BLANK on a base bill, which is every bill in the field
+  // today, so the sheet reads exactly as it does now until a foreign bill exists.
+  const columns = "grid-cols-[1fr_8rem_8rem_8rem]";
   // ⛔ THE BILLS ARE THE REPORT. This screen rendered ONE ROW PER PARTY and
   // dropped `p.bills` on the floor, which made it an ageing report with no
   // ageing in it: a party's total is the one figure a Balance Sheet already
@@ -630,14 +728,31 @@ function OutstandingsLikeScreen({
   // Enter handler would otherwise open whatever the party prefix resolved to.
   const rows: DrillRow[] = [];
   for (const p of data?.parties ?? []) {
+    // ⚠️ THE PARTY ROW LEAVES THE FOREIGN CELL EMPTY RATHER THAN TOTALLING IT, which
+    // is Q5's explicit design decision: a party may hold bills in more than one
+    // currency and summing them produces a figure in none of them.
     rows.push({
       rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}`,
-      values: [p.ledger, p.group, formatMoney(p.pending)],
-      exportCells: [textCell(p.ledger), textCell(p.group), moneyCell(p.pending)],
+      // ⛔⛔ D109's Level, NOW DECLARED RATHER THAN HAND-WRITTEN INTO THE CELLS
+      // (D118). It used to be a literal `textCell("Party")` spliced into
+      // `exportCells` here, with a matching literal in the headers below — three
+      // places to keep in step. The shared layer writes both the header and the
+      // cell from this one word now, and the same edit gave this file a `Parent`
+      // column it did not have: a bill's parent is its party, so one party's
+      // bills can be summed on their own.
+      level: "Party",
+      values: [p.ledger, p.group, "", formatMoney(p.pending)],
+      exportCells: [
+        textCell(p.ledger),
+        textCell(p.group),
+        textCell(""),
+        moneyCell(p.pending),
+      ],
       cells: (
         <>
           <span>{p.ledger}</span>
           <span>{p.group}</span>
+          <span />
           <span className="text-right">{formatMoney(p.pending)}</span>
         </>
       ),
@@ -647,44 +762,99 @@ function OutstandingsLikeScreen({
       // beats a bare slab label, because the slab is a bucket and the days are
       // the fact — and a bill with no due date says so rather than reading as
       // "not overdue", which is what an empty cell would imply.
-      const age =
-        b.overdue_days > 0
+      // ⛔⛔ THE ON-ACCOUNT ROW IS NOT A BILL AND MUST NOT READ LIKE ONE (D106).
+      // It falls through the branch below as "no due date recorded" / "no due
+      // date", which invites an operator to go and record one — there is nothing
+      // to record: the money names no bill, which is the whole fact being
+      // reported. It is also in NO ageing slab, so it says that too rather than
+      // showing a blank where every other row has a bucket.
+      const age = b.on_account
+        ? "not aged — in no slab"
+        : b.overdue_days > 0
           ? `${b.overdue_days} days overdue`
           : b.due_date
             ? "not yet due"
             : "no due date";
-      const when = b.due_date ? `due ${b.due_date}` : "no due date recorded";
+      const when = b.on_account
+        ? "received, not applied to any bill"
+        : b.due_date
+          ? `due ${b.due_date}`
+          : "no due date recorded";
+      // ⭐⭐ T8 STEP 6 — THE FOREIGN CELL. It reads the CODE, never the amount: a
+      // foreign bill whose foreign column has netted to zero while its base column
+      // has not is exactly the data error this report exists to disclose, and it
+      // arrives with a code and a zero. `""` is the one encoding of base.
+      const foreign =
+        b.currency_code === ""
+          ? ""
+          : `${b.currency_code} ${formatMoney(b.foreign_pending)}`;
+      // ⛔⛔ THE CONFLICT IS MARKED ON THE ROW ITSELF. A reference open under two
+      // currencies comes back as TWO rows bearing ONE bill number, because the
+      // server never sums them (Q5: a data error, not a sum) — and two unmarked
+      // rows labelled "EXP-1" read as a customer who numbered two invoices alike,
+      // which is harmless, rather than as one invoice with an allocation against it
+      // in the wrong currency, which is not.
+      const refLabel = b.currency_conflict
+        ? `${b.ref_name} ⚠ two currencies`
+        : b.ref_name;
       rows.push({
-        rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}`,
+        // ⚠️ THE CURRENCY IS IN THE ROW KEY BECAUSE TWO ROWS NOW LEGITIMATELY SHARE
+        // A ref_name — and the claim that this PREVENTS A DROPPED ROW WAS MEASURED
+        // AND IS FALSE, so it is not made here. `DrillRows` renders with
+        // `key={rowKey}:{drillIndex}` and these bill rows are `drillable: false`,
+        // so a duplicate rowKey neither collides as a React key nor confuses
+        // selection: reverting this line leaves all 24 screen tests green.
+        //
+        // ⭐ WHAT IT ACTUALLY BUYS is a unique `data-rowkey`, which is what a
+        // browser probe or the audit harness selects on — two rows answering one
+        // selector is how a drive asserts the wrong row and passes. NO TEST ASSERTS
+        // IT, and that is stated rather than implied.
+        rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}/${b.currency_code}`,
         depth: 1,
+        level: "Bill",
         drillable: false,
-        values: [`${b.ref_name} — ${when}`, age, formatMoney(b.pending)],
+        values: [`${refLabel} — ${when}`, age, foreign, formatMoney(b.pending)],
         exportCells: [
-          textCell(b.ref_name),
+          textCell(refLabel),
           textCell(b.due_date),
+          textCell(foreign),
           moneyCell(b.pending),
         ],
         cells: (
           <>
             <span className="pl-4">
-              {b.ref_name}
+              {refLabel}
               <span className="text-tally-field"> — {when}</span>
             </span>
             <span className="text-tally-field">{age}</span>
+            <span className="text-right text-tally-field">{foreign}</span>
             <span className="text-right">{formatMoney(b.pending)}</span>
           </>
         ),
       });
     }
   }
+  // ⚠️ THE GRAND TOTAL IS BASE-ONLY AND ITS FOREIGN CELL IS EMPTY. Q5, stated as a
+  // design decision rather than parity: summing mixed currencies is meaningless,
+  // and a total that silently did it would still foot.
   rows.push({
     rowKey: "__total__",
+    // ⚠️ THE TOTAL ROW DECLARES ITS LEVEL TOO, so a spreadsheet filtering on the
+    // Level column can EXCLUDE it: a total swept into a sum of party rows is the
+    // same doubling one row smaller.
+    level: "Total",
     drillable: false,
-    values: ["Total", "", formatMoney(data?.total)],
-    exportCells: [textCell("Total"), textCell(""), moneyCell(data?.total)],
+    values: ["Total", "", "", formatMoney(data?.total)],
+    exportCells: [
+      textCell("Total"),
+      textCell(""),
+      textCell(""),
+      moneyCell(data?.total),
+    ],
     cells: (
       <>
         <span>Total</span>
+        <span />
         <span />
         <span className="text-right" data-testid="os-total">
           {formatMoney(data?.total)}
@@ -699,7 +869,28 @@ function OutstandingsLikeScreen({
     // header reading "Group" over a column that holds a due date on every second
     // row is the Stock Summary export's defect (a quantity under a header the
     // next column's money contradicts) — declared here instead.
-    headers: ["Party / Bill ref", "Group / Due date", "Pending"],
+    // ⛔⛔ D109 — `Level` NAMES WHAT EACH ROW IS, AND WITHOUT IT THIS FILE
+    // CANNOT BE SUMMED. This report is two levels deep: a party total followed
+    // by that party's open bills, which hold the same money a second time. On
+    // screen the two are told apart by CSS (the bill's label cell is `pl-4`,
+    // its figures are `text-tally-field`) and by nothing else, and CSS does not
+    // survive Alt+E — measured 2026-08-31, party rows plus bill rows summing to
+    // 555,040 against the file's own Total of 277,520, a ratio of exactly
+    // 2.000000. With that column a spreadsheet sums `Level = "Bill"` (or
+    // `= "Party"`) and gets the stated total to the paisa.
+    //
+    // ⚠️ IT REPLACES A DISCRIMINATOR THAT WAS NEVER DECLARED AND WHICH FAILED
+    // OUTRIGHT: "a group name on a party row against a due date on a bill row"
+    // is nothing a SUM respects, it is not in the money column, and A BILL WITH
+    // NO DUE DATE HAS BOTH CELLS EMPTY — two invoices exported as
+    // `Sales/2026-27/4`, empty cell, `11800`, indistinguishable from a party
+    // that happens to be in no group.
+    //
+    // ⭐ `Level` AND `Parent` ARE WRITTEN BY THE SHARED LAYER SINCE D118, from
+    // the `level` on each row and from its depth — so this header list no longer
+    // names them and cannot fall out of step with the cells.
+    headers: ["Party / Bill ref", "Group / Due date", "Foreign", "Pending"],
+    levels: true,
     availability,
   });
 
@@ -714,6 +905,7 @@ function OutstandingsLikeScreen({
         labels={[
           { text: "Party" },
           { text: "Group" },
+          { text: "Foreign", numeric: true },
           { text: "Pending", numeric: true },
         ]}
       />
@@ -726,6 +918,24 @@ function OutstandingsLikeScreen({
       {data ? (
         <p className="mt-2 text-xs" data-testid="os-as-on">
           {outstandingsScopeLine(data.as_on, data.aged_as_on)}
+        </p>
+      ) : null}
+      {/*
+        ⛔⛔ THE SLABS DO NOT ADD UP TO THE TOTAL WHEN THERE IS ON-ACCOUNT MONEY,
+        AND THE READER IS TOLD SO RATHER THAN LEFT TO FIND IT (D106).
+        An amount that names no bill has no due date, so it is in no ageing
+        bucket — Tally excludes it from its Age Analysis for the same reason, and
+        leaves the discrepancy silent. A column of buckets printed beside a larger
+        total is exactly the shape somebody checks by adding up, so the line below
+        states the identity instead of letting the gap look like an error.
+
+        ⚠️ IT IS RENDERED ONLY WHEN THERE IS SOME, because a permanent caption
+        about a case that does not apply is noise, and noise is how a real
+        disclosure stops being read.
+      */}
+      {data && data.on_account_total && Number(data.on_account_total) !== 0 ? (
+        <p className="mt-1 text-xs" data-testid="os-on-account">
+          {onAccountLine(data.on_account_total)}
         </p>
       ) : null}
     </ReportFrame>
@@ -781,4 +991,243 @@ function billsPayableFetch(client: CoredClient, companyID: string, asOn?: string
   const query: { as_on?: string } = {};
   if (asOn) query.as_on = asOn;
   return client.getBillsPayable(companyID, query);
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ T8 STEP 7 — THE UNADJUSTED-FOREX REPORT. A REPORT THAT POSTS NOTHING.
+// ---------------------------------------------------------------------------
+
+/**
+ * The sentence that makes this screen honest, and it is exported for the reason
+ * `outstandingsScopeLine` is: it is a sentence with rules in it, and a test can hold
+ * a sentence to a rule far more cheaply than it can hold a rendered screen.
+ *
+ * ⛔ IT SAYS THREE THINGS AND NONE IS OPTIONAL:
+ *
+ *  1. THAT THE DIFFERENCE IS REPORTED AND NOT POSTED, in those words. Q4 of the
+ *     design memo requires the product to say so on the screen and in F11. ⚠️ This
+ *     is the row most at risk of the FeaturesScreen failure mode with a number
+ *     attached: a table of gains and losses reads as posted unless it says otherwise.
+ *  2. WHAT THE DATE DID — and on this report it did TWO jobs. It limited which bills
+ *     are listed AND it chose the rate they were priced at, and a caption that
+ *     conflated them is D86 with an exchange rate in it.
+ *  3. THAT IT COVERS BOTH SIDES. A reader who assumed receivables only would read a
+ *     NETTED total as a receivable figure — and netting is the whole point.
+ */
+export function unadjustedForexScopeLine(
+  asOn: string,
+  pricedAsOn: string,
+): string {
+  const bound = (asOn ?? "").trim();
+  const priced = (pricedAsOn ?? "").trim();
+  const rows =
+    bound !== ""
+      ? `Open foreign bills as on ${bound}`
+      : "NO DATE LIMIT — every open foreign bill on these books, including any " +
+        "dated AFTER today. Press F2 and set a To date to read it as at a day";
+  return (
+    `${rows}, receivable AND payable, priced at the rate as on ${priced}. ` +
+    "THIS DIFFERENCE IS REPORTED AND NOT POSTED: no voucher is created and no " +
+    "ledger balance changes. It is what settling the whole remaining balance at " +
+    "that rate would realise."
+  );
+}
+
+/**
+ * The disclosure that the total is SHORT (Decision 3 of the server's report).
+ *
+ * ⛔ A BILL WHOSE CURRENCY HAS NO RATE ON FILE IS LISTED AND NOT PRICED, because an
+ * exposure with an unknown rate is still an exposure and dropping it is how a reader
+ * takes a short report for a small one. But then the total omits it, and a column of
+ * figures beside a total is exactly the shape somebody checks by adding up — so the
+ * gap is STATED, the way `onAccountLine` states the ageing report's.
+ */
+export function unratedForexLine(count: number): string {
+  return (
+    `${String(count)} bill(s) above could NOT be priced — no exchange rate is on ` +
+    "file for their currency on or before this date — so they are listed with no " +
+    "difference and are NOT in the total. Enter a rate (Alt+G > Create Currency) " +
+    "to price them. ⛔ They are not exposures of zero; they are exposures nobody " +
+    "can value."
+  );
+}
+
+/**
+ * The unadjusted-forex (unrealised gain/loss) screen.
+ *
+ * ⚠️ IT IS ITS OWN COMPONENT AND NOT AN `OutstandingsLikeScreen`, unlike the two
+ * ageings above. That pair shares one body because they are the same report on
+ * opposite sides of the ledger; this one has different columns (two RATES, which are
+ * not money), a different row set (foreign references only, no On Account, no ageing
+ * slabs) and a caption making a different promise. Sharing a body would have meant a
+ * body with two modes, which is how the shared thing stops being the same thing.
+ */
+export function UnadjustedForexScreen({ snapshot, onSelect }: ReportProps) {
+  const client = useClient();
+  const companyID = useCompanyID();
+  // As-at, so the period's To date is what it honours — and here that date also
+  // chooses the rate. FrameOverlays classifies this name `as-at` for both reasons.
+  const asOn = snapshot.config?.periodTo;
+
+  const { data, availability } = useReportFetch<UnadjustedForexResponse>(
+    useCallback(
+      () => unadjustedForexFetch(client, companyID, asOn),
+      [client, companyID, asOn],
+    ),
+  );
+
+  const columns = "grid-cols-[1fr_7rem_9rem_9rem_8rem_8rem]";
+  const rows: DrillRow[] = [];
+  for (const b of data?.bills ?? []) {
+    // ⛔⛔ THE RATES GO THROUGH `formatRate`-SHAPED RENDERING AND NEVER THROUGH
+    // `formatMoney`. This is the one place on this screen where a wrong choice is
+    // invisible: `formatMoney` on 0.0033333333 prints "0.00" and on 83.6512345678
+    // prints "83.65" — both sit happily in a column headed "Rate", both round-trip
+    // through their own type, and both are wrong for ever. The server sends ten
+    // decimals; the screen shows them.
+    //
+    // ⚠️ AND AN UNPRICED ROW SHOWS A SENTENCE WHERE ITS RATE WOULD BE, NOT A BLANK
+    // AND NOT A ZERO. A blank reads as "the rate is 1"; a zero reads as a rate that
+    // was entered and is zero. Either would make the empty difference beside it look
+    // like a position that has not moved, which is the opposite of the truth.
+    const rateAsOn = b.has_rate_as_on ? b.rate_as_on : "no rate on file";
+    const difference = b.has_rate_as_on ? formatMoney(b.difference) : "—";
+    const label =
+      b.ref_type === "ADVANCE" ? `${b.ref_name} (advance)` : b.ref_name;
+    rows.push({
+      rowKey: `${LEDGER_ROW_PREFIX}${b.ledger}/${b.ref_name}/${b.currency_code}`,
+      // D118 — flat, but it carries a total row below, and an unmarked total is
+      // a row a spreadsheet sums twice. Same vocabulary as Outstandings, which
+      // reports the same bills in their base currency.
+      level: "Bill",
+      drillable: false,
+      values: [
+        `${b.ledger} — ${label}`,
+        `${b.currency_code} ${formatMoney(b.foreign_pending)}`,
+        b.bill_rate,
+        rateAsOn,
+        formatMoney(b.book_value),
+        difference,
+      ],
+      exportCells: [
+        textCell(`${b.ledger} — ${label}`),
+        textCell(`${b.currency_code} ${formatMoney(b.foreign_pending)}`),
+        // ⛔ `textCell`, NOT `moneyCell`. A rate in a spreadsheet's money column is
+        // a rate rounded to two places by the spreadsheet, which is the same bug in
+        // somebody else's software.
+        textCell(b.bill_rate),
+        textCell(rateAsOn),
+        moneyCell(b.book_value),
+        b.has_rate_as_on ? moneyCell(b.difference) : textCell("—"),
+      ],
+      cells: (
+        <>
+          <span>
+            {b.ledger}
+            <span className="text-tally-field"> — {label}</span>
+          </span>
+          <span className="text-right">
+            {b.currency_code} {formatMoney(b.foreign_pending)}
+          </span>
+          <span className="text-right text-tally-field">{b.bill_rate}</span>
+          <span className="text-right text-tally-field">{rateAsOn}</span>
+          <span className="text-right">{formatMoney(b.book_value)}</span>
+          <span className="text-right">{difference}</span>
+        </>
+      ),
+    });
+  }
+  rows.push({
+    rowKey: "__total__",
+    level: "Total",
+    drillable: false,
+    values: ["Net unrealised difference", "", "", "", "", formatMoney(data?.total_difference)],
+    exportCells: [
+      textCell("Net unrealised difference"),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      moneyCell(data?.total_difference),
+    ],
+    cells: (
+      <>
+        <span>Net unrealised difference</span>
+        <span />
+        <span />
+        <span />
+        <span />
+        <span className="text-right" data-testid="uf-total">
+          {formatMoney(data?.total_difference)}
+        </span>
+      </>
+    ),
+  });
+
+  const visible = useReportView(rows, snapshot, {
+    title: "Unadjusted Forex Gain/Loss",
+    headers: [
+      "Party / Bill ref",
+      "Foreign pending",
+      "Bill rate",
+      "Rate as on",
+      "Book value",
+      "Difference",
+    ],
+    availability,
+    // D118 — the Total row was indistinguishable from a bill row, so summing
+    // `Difference` returned twice the stated net.
+    levels: true,
+  });
+
+  return (
+    <ReportFrame
+      title="Unadjusted Forex Gain/Loss"
+      snapshot={snapshot}
+      availability={availability}
+    >
+      <ColumnHeader
+        columnsClassName={columns}
+        labels={[
+          { text: "Party / Bill ref" },
+          { text: "Foreign pending", numeric: true },
+          { text: "Bill rate", numeric: true },
+          { text: "Rate as on", numeric: true },
+          { text: "Book value", numeric: true },
+          { text: "Difference", numeric: true },
+        ]}
+      />
+      <DrillRows
+        rows={visible}
+        onSelect={onSelect}
+        ariaLabel="Unadjusted Forex rows"
+        columnsClassName={columns}
+      />
+      {data ? (
+        <p className="mt-2 text-xs" data-testid="uf-scope">
+          {unadjustedForexScopeLine(data.as_on, data.priced_as_on)}
+        </p>
+      ) : null}
+      {/*
+        ⚠️ RENDERED ONLY WHEN THERE IS SOME, exactly as the on-account line is: a
+        permanent caption about a case that does not apply is noise, and noise is how
+        a real disclosure stops being read.
+      */}
+      {data && data.unrated_count > 0 ? (
+        <p className="mt-1 text-xs" data-testid="uf-unrated">
+          {unratedForexLine(data.unrated_count)}
+        </p>
+      ) : null}
+    </ReportFrame>
+  );
+}
+
+function unadjustedForexFetch(
+  client: CoredClient,
+  companyID: string,
+  asOn?: string,
+) {
+  const query: { as_on?: string } = {};
+  if (asOn) query.as_on = asOn;
+  return client.getUnadjustedForex(companyID, query);
 }

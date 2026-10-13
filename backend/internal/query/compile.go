@@ -351,6 +351,23 @@ func checkValueType(v string, vt valueType, col string) error {
 			return nil
 		}
 		return compileErrf("invalid value %q for %q (expected D|C)", v, col)
+	case valueDirection:
+		if v == "IN" || v == "OUT" {
+			return nil
+		}
+		return compileErrf("invalid value %q for %q (expected IN|OUT)", v, col)
+	case valueMatchStatus:
+		switch v {
+		case "matched", "set-aside", "unresolved":
+			return nil
+		}
+		return compileErrf("invalid value %q for %q (expected matched|set-aside|unresolved)", v, col)
+	case valueEntityKind:
+		switch v {
+		case "party", "item", "tenant", "stream":
+			return nil
+		}
+		return compileErrf("invalid value %q for %q (expected party|item|tenant|stream)", v, col)
 	case valueDate:
 		if !isISODate(v) {
 			return compileErrf("invalid date %q for %q (expected YYYY-MM-DD)", v, col)

@@ -1,10 +1,13 @@
 package nlq
 
 import (
+	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/khata/cored/internal/catalogue"
 	"github.com/khata/cored/internal/query"
 )
 
@@ -30,7 +33,7 @@ const emitQuerySchema = `{
   "additionalProperties": false,
   "required": ["entity", "metrics", "dimensions", "filters", "date_range", "order_by", "limit"],
   "properties": {
-    "entity": {"type": "string", "enum": ["ledger_balances", "vouchers", "postings", "outstandings", ""]},
+    "entity": {"type": "string", "enum": ["ledger_balances", "vouchers", "postings", "outstandings", "stock_movements", "bank_statement_lines", "profile_facts", ""]},
     "metrics": {
       "type": "array",
       "items": {
@@ -84,17 +87,67 @@ const emitQuerySchema = `{
   }
 }`
 
-// systemPrompt builds the NL->DSL system prompt from query.Catalog() at runtime,
-// so a whitelist widening automatically reaches the model. It carries NAMES ONLY
-// (never SQL) plus the compiler traps, the resolved period windows and the
-// few-shot NL->DSL pairs. NO tenant data (company id, ledger/party names) ever
-// appears here — the catalog is the fixed server-authored surface, and the
-// caller's question is the only per-request input, carried in the user message,
-// never interpolated here.
+// ---------------------------------------------------------------------------
+// THE PROMPT, SPLIT INTO ITS CACHEABLE HALF AND ITS PER-CALL HALF.
+// ---------------------------------------------------------------------------
+//
+// ⛔ THE SPLIT IS A COST CONTRACT, NOT A TIDY-UP.
+//
+// Every provider we send this to bills a REPEATED prompt prefix at a fraction of
+// a fresh one, and every one of them matches that prefix BYTE FOR BYTE from the
+// first byte of the request. Until W0 this prompt was one string with today's
+// date and the resolved period windows baked into the middle of it — which means
+// the prefix changed at midnight, every night, for every tenant, and the ~6 KB
+// catalogue-and-rules preamble was re-billed at full price on every single
+// question anybody had ever asked. Nothing failed; the only symptom was the
+// invoice, which is exactly why it survived three lanes unnoticed.
+//
+// So: staticPrompt() is what is identical across every call of this prompt
+// version — the catalogue, the compiler traps, the refusal rules. It goes in
+// llm.Request.Static. dynamicPrompt() is what a clock or a company changes —
+// today's date, the financial-year month, the resolved windows, and the worked
+// examples that interpolate a live window. It goes in llm.Request.Dynamic,
+// AFTER the static half.
+//
+// ⚠️ THE EXAMPLES ARE DYNAMIC AND THAT IS DELIBERATE. They look like teaching
+// material and teaching material looks static, so the tempting move is to hoist
+// them into staticPrompt() and freeze the quarter they name. That is D21 exactly
+// — a frozen example window is what once taught the model to answer "this
+// quarter" with a quarter three years gone — and it would cost a few hundred
+// bytes of cache to avoid. The catalogue and the rules are the bulk; the
+// examples are four lines. Freeze them and the cache saves nothing it did not
+// already save, while the answers go wrong.
+//
+// TestStaticPromptIsClockIndependent (translate_test.go) is the detector: it
+// builds the request under two clocks years apart and requires identical Static
+// bytes, a DIFFERENT Dynamic, and — the control — a Static that actually
+// carries the catalogue, so a "split" that put everything in Dynamic (leaving
+// Static trivially stable because it is empty) fails instead of passing.
+
+// systemPrompt is the whole prompt, static half followed by dynamic half, in the
+// order they go over the wire.
+//
+// ⚠️ IT SURVIVES THE SPLIT AS A REAL FUNCTION, not as a test helper. Six tests in
+// schema_test.go assert on the RENDERED prompt — that no SQL leaks into it, that
+// every worked example compiles, that the window the model is told to copy is the
+// window FakeTranslator answers with — and those are assertions about what the
+// model actually reads, which is the concatenation. Splitting them into two
+// half-prompt test suites would let a rule land in one half and the example that
+// contradicts it in the other, with each half passing on its own.
+func systemPrompt(now time.Time, fyStartMonth int) string {
+	return staticPrompt() + dynamicPrompt(now, fyStartMonth)
+}
+
+// staticPrompt builds the cacheable half from query.Catalog() at runtime, so a
+// whitelist widening automatically reaches the model. It carries NAMES ONLY
+// (never SQL) plus the compiler traps and the refusal rules. NO tenant data
+// (company id, ledger/party names) ever appears here — the catalog is the fixed
+// server-authored surface, and the caller's question is the only per-request
+// input, carried in the user message, never interpolated here.
 //
 // ⛔ THE PROMPT IS PART OF THE PRODUCT, NOT DOCUMENTATION FOR IT (L5). Whatever
 // this file teaches IS what a real deployment answers: server.go swaps
-// FakeTranslator for ClaudeTranslator the moment ANTHROPIC_API_KEY is set, and
+// FakeTranslator for the real translator the moment a provider key is set, and
 // the compiler downstream only rejects ILLEGAL queries — it cannot reject a
 // legal query that measures the wrong thing. Three of L5's four defects are
 // therefore restated here as rules the model must obey, because fixing them in
@@ -102,22 +155,18 @@ const emitQuerySchema = `{
 //
 //   - D51: the worked example used to be sum(taxable_value) over voucher type
 //     "Sales" — the exact figure that matched no report. Rule 6 now forbids it
-//     and the example emits the postings/natural_net/pl_group shape instead.
+//     and the example (in dynamicPrompt) emits the postings/natural_net/pl_group
+//     shape instead.
 //   - D21: the example used to carry a HARD-CODED quarter and the model was
 //     given no clock at all, so every relative phrase was a guess. The resolved
-//     windows below come from query.NamedWindows — the same parser
-//     FakeTranslator answers with — and rule 7 says to copy them verbatim.
+//     windows come from query.NamedWindows — the same parser FakeTranslator
+//     answers with — and rule 7 says to copy them verbatim.
 //   - D50: rule R1 refuses a question that names another company's books.
 //
-// now/fyStartMonth are the request clock and the company financial-year start;
-// they are calendar facts, not tenant data.
-func systemPrompt(now time.Time, fyStartMonth int) string {
-	// Resolved ONCE, from query's own parser, and used by BOTH the window table
-	// and the worked example — so the example can never teach a window the table
-	// contradicts.
-	windows := query.NamedWindows(func() time.Time { return now }, fyStartMonth)
-	thisQuarter := windowFor(windows, "this quarter")
-
+// ⛔ IT TAKES NO ARGUMENTS, AND THAT IS THE POINT. A parameter here is a byte of
+// per-call data in the cache prefix; the compiler is what keeps the next person
+// from adding one. Anything a caller could vary belongs in dynamicPrompt.
+func staticPrompt() string {
 	var b strings.Builder
 	b.WriteString("You translate an accountant's natural-language question about their books ")
 	b.WriteString("into a single typed query by calling the emit_query tool. You NEVER write SQL. ")
@@ -125,6 +174,11 @@ func systemPrompt(now time.Time, fyStartMonth int) string {
 	b.WriteString("If the question cannot be answered from this catalog, or if any REFUSE rule applies, ")
 	b.WriteString("call emit_query with entity \"\" (empty string).\n\n")
 	b.WriteString("CATALOG (names only):\n")
+	// query.Catalog() sorts entities, dimensions, metrics, filters and date
+	// columns before returning them, and metricLines/filterLines sort again —
+	// so this loop is byte-stable across processes. That determinism is not
+	// cosmetic here: a map-order catalogue would produce a different prefix in
+	// every replica, and the cache would never hit anywhere.
 	for _, e := range query.Catalog() {
 		b.WriteString("- entity ")
 		b.WriteString(e.Entity)
@@ -141,23 +195,68 @@ func systemPrompt(now time.Time, fyStartMonth int) string {
 		}
 		b.WriteString("\n")
 	}
+	// W3 wave 2: the semantic catalogue's ENTITY half, in the words users
+	// type. It is server-authored constant text (internal/catalogue), walked
+	// in query.Catalog() order, so it is byte-stable and belongs in the
+	// cacheable half. The REPORT half is per-question — which reports a
+	// question selects depends on the question — so it is in hintsPrompt,
+	// in Dynamic, never here.
+	b.WriteString("\nENTITY GUIDE (what each entity means, and words people use for it):\n")
+	for _, e := range catalogue.Entities() {
+		b.WriteString("- ")
+		b.WriteString(string(e.Entity))
+		b.WriteString(": ")
+		b.WriteString(e.Description)
+		if len(e.Synonyms) > 0 {
+			b.WriteString(" Words: ")
+			b.WriteString(strings.Join(e.Synonyms, ", "))
+		}
+		if len(e.Hinglish) > 0 {
+			b.WriteString("; Hinglish: ")
+			b.WriteString(strings.Join(e.Hinglish, ", "))
+		}
+		b.WriteString(".\n")
+	}
 	b.WriteString(`
 RULES (the compiler rejects violations; obey them so the query is answerable):
 1. Aliases (a metric's "as", and any order_by column) must be lowercase snake_case, and an order_by column must spell an emitted dimension or metric alias IDENTICALLY.
-2. ledger_balances accepts NO date_range. Only vouchers/postings (voucher_date) and outstandings (due_date) do.
+2. ledger_balances accepts NO date_range. Only vouchers/postings/stock_movements (voucher_date), outstandings (due_date), bank_statement_lines (value_date) and profile_facts (as_of) do.
 3. The metrics "net", "natural_net" and "pending" accept only func "sum". count uses column "*".
 4. On vouchers, filter by party name using the filter column "party", but GROUP BY the dimension "party_name" — they are different keys.
 5. outstandings "nature" accepts only op "eq" (values ASSET for receivables, LIABILITY for payables).
 6. A SALES OR PURCHASE TOTAL IS MEASURED ON postings, NEVER ON vouchers. Use entity "postings", metric sum(natural_net), and filter pl_group eq "Sales Accounts" (or "Purchase Accounts"); that is the figure the Profit & Loss prints, for the same books. The vouchers metric taxable_value is the GST TAXABLE BASE of the invoice register: it EXCLUDES the GST charged on every invoice, EXCLUDES credit notes and debit notes (a sales return is a voucher of a different type, so it would never reduce the total), and is EMPTY on a book where no GST was derived. Summing it for a "total sales" question answers a number that agrees with no report in the product. Use taxable_value only when the question explicitly asks for taxable value or the GST base.
 7. PERIODS: copy a window from RESOLVED PERIOD WINDOWS below, VERBATIM. Never compute one yourself and never carry one over from an example. A period word with NO this/last qualifier ("sales by month", "monthly sales") names no window at all: emit NO date_range and group by the month dimension instead. A period the user states in full ("April 2026", "1 April 2026 to 30 June 2026") may be emitted directly.
 8. outstandings is an AS-AT-TODAY position, always. Its due_date range filters WHEN BILLS FALL DUE; it does not move the as-on date, and there is no way to ask it for a past position.
+9. stock_movements amount is the line value AS ENTERED (a sale's selling value), never the cost of goods issued; a stock VALUE question cannot be answered here. Its in_qty/out_qty/net_qty are exact.
+10. bank_statement_lines: deposits are money INTO the bank account and withdrawals money out; description is a FILTER only (use op like with % wildcards) and can never be grouped by.
+11. CATALOGUE HINTS (below, when present) are chosen by keyword match and may be wrong. Their example queries are SHAPES: replace any party, ledger or item name in an example with the one the question names, drop a filter the question does not state, and never copy an example's name into an answer. A hint that says the DSL cannot answer a report means: if the question needs that report, refuse (R4).
 
 REFUSE — call emit_query with entity "" (and empty metrics/dimensions/filters/order_by, null date_range, limit 0) when:
 R1. The question names a scope other than the signed-in company: another company/tenant/organisation/firm by name, "all companies", "every tenant", "across all books", or a raw company UUID. Every answer is scoped to the signed-in company by the server and no other scope is reachable. Answering such a question with this company's figures would put the caller's own number under someone else's question, which is worse than a refusal.
 R2. The question names a multi-period window ("last 6 months", "past 3 years") or two different windows at once ("last month and this year"). One date_range expresses neither, and answering for one of the periods is a wrong answer that looks like a right one.
 R3. The question asks for an outstandings position at a past or future date ("receivables as at March", "what was overdue last quarter") — see rule 8.
 R4. The catalog cannot express the question at all.
+`)
+	return b.String()
+}
 
+// dynamicPrompt builds the per-call half: today's date, the company's
+// financial-year start month, the resolved period windows, and the worked
+// examples that quote one of those windows.
+//
+// now/fyStartMonth are the request clock and the company financial-year start;
+// they are calendar facts, not tenant data — which is why they may cross the
+// wire at all. (The company's IDENTITY may not, and llm.Client checks the
+// encoded body for it before opening a socket.)
+func dynamicPrompt(now time.Time, fyStartMonth int) string {
+	// Resolved ONCE, from query's own parser, and used by BOTH the window table
+	// and the worked example — so the example can never teach a window the table
+	// contradicts.
+	windows := query.NamedWindows(func() time.Time { return now }, fyStartMonth)
+	thisQuarter := windowFor(windows, "this quarter")
+
+	var b strings.Builder
+	b.WriteString(`
 TODAY IS ` + iso(now) + `. The financial year starts in ` + query.FYStartMonth(fyStartMonth).String() + `; "year"/"annum"/"fy" mean that financial year, while "quarter" means the CALENDAR quarter.
 
 RESOLVED PERIOD WINDOWS (inclusive, on voucher_date — copy these dates exactly):
@@ -183,6 +282,107 @@ Q: "total sales for every company"
 -> emit_query {"entity":"","metrics":[],"dimensions":[],"filters":[],"date_range":null,"order_by":[],"limit":0}
 `)
 	return b.String()
+}
+
+// hintTopK is how many selected reports a question's hints carry. Three is
+// the depth the held-out selector gate measures (top-3 38/40, d122 §2): the
+// right report is in the first three far more often than it is first.
+const hintTopK = 3
+
+// hintsPrompt is the per-QUESTION half of the catalogue: the reports
+// catalogue.Select ranks for this question, each with what it answers (and
+// does not), the DSL entities its examples use, and one example DSL shape —
+// or the reason the DSL cannot answer it.
+//
+// ⛔ IT IS DYNAMIC BECAUSE IT DEPENDS ON THE QUESTION. Put it in Static and the
+// prefix changes with every question anybody asks; the cache never hits.
+// It is a separate Dynamic message rather than an addition to dynamicPrompt,
+// so dynamicPrompt stays a function of (clock, FY month) alone and the six
+// schema_test.go assertions about the rendered prompt keep meaning what they
+// meant.
+//
+// ⛔ NO TENANT DATA. Everything printed here is catalogue text — authored in
+// internal/catalogue, the same for every tenant. The question selects it; the
+// question itself is not echoed (it rides once, in the user turn).
+//
+// ⚠️ THE EXAMPLES NAME SYNTHETIC PARTIES ("Kaveri Traders"), because a filter
+// shape with no value teaches nothing. Rule 11 tells the model they are
+// shapes; TestHintExamplesDecodeAndCompile keeps every one a query the
+// production decoder and the compiler accept.
+func hintsPrompt(nl string) string {
+	matches := catalogue.Select(nl, hintTopK)
+	var b strings.Builder
+	if len(matches) == 0 {
+		b.WriteString("\nCATALOGUE HINTS: no catalogue report shares a word with this question. " +
+			"Answer from the CATALOG and ENTITY GUIDE above if they express it; otherwise refuse (R4).\n")
+		return b.String()
+	}
+	b.WriteString("\nCATALOGUE HINTS for this question (keyword-selected, best first; rule 11 applies):\n")
+	for i, m := range matches {
+		e, ok := catalogue.Lookup(m.Report)
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "%d. %s (report %s)", i+1, e.Title, e.Report)
+		if len(m.Entities) > 0 {
+			ents := make([]string, len(m.Entities))
+			for j, en := range m.Entities {
+				ents[j] = string(en)
+			}
+			b.WriteString(" -> entities: ")
+			b.WriteString(strings.Join(ents, ", "))
+		}
+		b.WriteString("\n   ")
+		b.WriteString(e.Description)
+		b.WriteString("\n")
+		if len(e.DSL) == 0 {
+			b.WriteString("   The DSL cannot answer this report: ")
+			b.WriteString(e.NoDSLReason)
+			b.WriteString("\n")
+			continue
+		}
+		if e.DSLFidelity == "partial" {
+			b.WriteString("   (the example answers only the slice the description names)\n")
+		}
+		b.WriteString("   example shape -> emit_query ")
+		b.WriteString(emitShape(e.DSL[0]))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// emitShape renders a catalogue example the way the emit_query schema demands
+// it: every property present, arrays never null. json.Marshal alone would
+// print "metrics":null for an example with none, which is a schema-INVALID
+// tool input — teaching it would earn a repair round trip on every hit.
+func emitShape(q query.Query) string {
+	if q.Metrics == nil {
+		q.Metrics = []query.Metric{}
+	}
+	if q.Dimensions == nil {
+		q.Dimensions = []string{}
+	}
+	if q.Filters == nil {
+		q.Filters = []query.Filter{}
+	}
+	for i := range q.Filters {
+		if q.Filters[i].Values == nil {
+			q.Filters[i].Values = []string{}
+		}
+	}
+	if q.OrderBy == nil {
+		q.OrderBy = []query.OrderTerm{}
+	}
+	if q.Limit == 0 {
+		q.Limit = query.DefaultLimit
+	}
+	out, err := json.Marshal(q)
+	if err != nil {
+		// Unreachable for the closed catalogue types; a hint that cannot be
+		// rendered is dropped rather than half-printed.
+		return "{}"
+	}
+	return string(out)
 }
 
 // iso formats a date the way every date in the DSL is spelled (YYYY-MM-DD), so

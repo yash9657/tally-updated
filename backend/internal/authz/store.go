@@ -121,11 +121,27 @@ func (s *Store) Level(ctx context.Context, companyID, levelID uuid.UUID) (Level,
 	ctx = db.WithCompany(ctx, companyID)
 	var lv Level
 	var cutoff *time.Time
+	var closedThrough *time.Time
 	err := s.pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// ⛔ THE COMPANY'S YEAR-END LOCK IS READ IN THE SAME ROUND TRIP, and it
+		// is a CROSS JOIN rather than a second query on purpose: the PDP runs on
+		// every request, and a lock that costs an extra round trip is a lock
+		// somebody will later be tempted to cache or skip. The company row is
+		// visible under the same COMPANY GUC this query already sets.
+		//
+		// ⚠️ LEFT JOIN, NOT INNER. An inner join would make a missing company row
+		// return NO level at all, turning a data-integrity problem into "this
+		// user has no permissions" — which fails closed, but says the wrong
+		// thing and would be diagnosed for an hour. There is no company row to
+		// miss in practice; this is about which error you get when there is.
 		return tx.QueryRow(ctx,
-			`SELECT id, name, is_owner, default_access, requires_webauthn, backdated_cutoff
-			   FROM security_level WHERE id = $1`, levelID).
-			Scan(&lv.ID, &lv.Name, &lv.IsOwner, &lv.DefaultAccess, &lv.RequiresWebAuthn, &cutoff)
+			`SELECT sl.id, sl.name, sl.is_owner, sl.default_access,
+			        sl.requires_webauthn, sl.backdated_cutoff, c.books_closed_through
+			   FROM security_level sl
+			   LEFT JOIN company c ON c.id = sl.company_id
+			  WHERE sl.id = $1`, levelID).
+			Scan(&lv.ID, &lv.Name, &lv.IsOwner, &lv.DefaultAccess, &lv.RequiresWebAuthn,
+				&cutoff, &closedThrough)
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -134,6 +150,7 @@ func (s *Store) Level(ctx context.Context, companyID, levelID uuid.UUID) (Level,
 		return Level{}, fmt.Errorf("authz: level: %w", err)
 	}
 	lv.BackdatedCutoff = cutoff
+	lv.BooksClosedThrough = closedThrough
 	return lv, nil
 }
 
@@ -146,18 +163,39 @@ func (s *Store) Level(ctx context.Context, companyID, levelID uuid.UUID) (Level,
 func (s *Store) SeedCompanyAuthDefaults(ctx context.Context, companyID, userID uuid.UUID) error {
 	ctx = db.WithCompany(ctx, companyID)
 	err := s.pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		// company GUC is set by RunInTx; also set the user GUC so the
-		// company_membership WITH CHECK (user_id = app_current_user_id()) passes.
-		if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID.String()); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `SELECT seed_company_auth_defaults($1, $2)`, companyID, userID)
-		return err
+		return s.SeedCompanyAuthDefaultsInTx(ctx, tx, companyID, userID)
 	})
 	if err != nil {
 		return fmt.Errorf("authz: seed company auth defaults: %w", err)
 	}
 	return nil
+}
+
+// SeedCompanyAuthDefaultsInTx is the same seeding inside a transaction the
+// CALLER owns.
+//
+// It exists for RESTORE (T14). A restore writes a whole company in one
+// transaction, and the membership that makes the company reachable has to be
+// part of it: seeding afterwards, in a second transaction, means a failure there
+// leaves a fully restored company that NOBODY IS A MEMBER OF — visible in the
+// database, unreachable through the product, and undeletable because there is no
+// delete path and every immutability trigger refuses DELETE for every role.
+//
+// It is IDEMPOTENT, which is what makes it correct against a company whose
+// security_level and acl_rule rows have just been restored from an archive:
+// every level insert is ON CONFLICT (company_id, name) DO NOTHING and the rule
+// seeding is guarded on the level having no rules, so against a restored company
+// it adds exactly one thing — the membership — and binds it to the archive's OWN
+// Owner level rather than a second one.
+func (s *Store) SeedCompanyAuthDefaultsInTx(ctx context.Context, tx pgx.Tx, companyID, userID uuid.UUID) error {
+	// The company GUC is set by whichever RunInTx opened this transaction; the
+	// user GUC is set here so company_membership's
+	// WITH CHECK (user_id = app_current_user_id()) passes.
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID.String()); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `SELECT seed_company_auth_defaults($1, $2)`, companyID, userID)
+	return err
 }
 
 // Rules reads all acl_rule rows for a security level under the COMPANY GUC.

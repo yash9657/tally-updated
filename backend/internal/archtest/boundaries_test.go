@@ -90,7 +90,33 @@ var allowedDeps = map[string]map[string]bool{
 	// constraint worth keeping: compliance must stay a leaf that knows nothing
 	// about storage. If you ever find yourself wanting compliance -> masters,
 	// that is the signal the logic belongs on this side of the line instead.
-	"internal/masters": {"internal/platform/db": true, "internal/compliance": true},
+	//
+	// THE SECOND EDGE, TO internal/inventory, IS THE SAME ARGUMENT ONE FEATURE
+	// ALONG (T9). stock_item.valuation_method names the VALUER a report replays
+	// the item's movements through, and inventory is where the valuers live. So
+	// the vocabulary of costing methods has exactly TWO copies — the valuers
+	// themselves and migration 0078's CHECK, pinned to each other by
+	// TestValuationMethodsMatchTheMigration — instead of three.
+	//
+	// ⛔ THE ALTERNATIVE IS NOT "no edge", IT IS A THIRD COPY, and that copy is
+	// the one that goes stale ahead of the others: a masters-local list of
+	// methods would let a master be created naming a method no valuer implements,
+	// and the report that then failed would fail for the WHOLE COMPANY, on the
+	// Stock Summary and the Balance Sheet, long after the master was written.
+	// masters therefore validates by asking inventory.ValuerFor whether a valuer
+	// EXISTS, which is the only question worth asking.
+	//
+	// internal/inventory's own allowed set is EMPTY ({} above): it imports
+	// nothing in this repo, has no I/O and no clock, so this edge cannot drag a
+	// dependency in behind it. And the direction is the one that matters, exactly
+	// as it is for compliance: inventory must stay a leaf that knows nothing
+	// about storage. inventory -> masters would be the signal that the logic
+	// belongs on this side of the line.
+	"internal/masters": {
+		"internal/platform/db": true,
+		"internal/compliance":  true,
+		"internal/inventory":   true,
+	},
 	// banking (T4) is the WRITE side of bank reconciliation. It touches the db
 	// layer and NOTHING else — deliberately, and the empty-but-for-db set is the
 	// enforcement of the feature's central rule: reconciling records a fact about
@@ -98,7 +124,30 @@ var allowedDeps = map[string]map[string]bool{
 	// to internal/ledger here would be the beginning of "while we are clearing
 	// this, also adjust the books", which is exactly what a reconciliation must
 	// not do. The read side lives in internal/reporting, which stays read-only.
-	"internal/banking": {"internal/platform/db": true},
+	//
+	// ⭐ T4 SLICE 2b ADDED THE ONE EDGE TO internal/bankstatement, AND IT RUNS IN
+	// THIS DIRECTION DELIBERATELY. bankstatement's entry below anticipated the
+	// question and answered it: the tempting edge was bankstatement -> banking,
+	// "so that a matched row could write its own bank_reconciliation row", and it
+	// said such an edge "belongs on THIS side of the line" — because memo §2.1
+	// requires a resolved match to land in 0045's table precisely so there is ONE
+	// source of "cleared".
+	//
+	// So banking still owns every write of a clearance, and it calls
+	// bankstatement.LinkMatch to record — inside the SAME transaction — which
+	// imported bank row that clearance came from. The edge buys two things no
+	// other arrangement does: the tick and its link cannot land separately, and
+	// matching acquires no write path of its own to drift from this one.
+	//
+	// ⛔ NOTE WHAT THE EDGE STILL DOES NOT REACH. Neither package may see
+	// internal/ledger, a voucher or a balance, and adding bankstatement here
+	// changes none of that: it is a leaf over the same db layer. The rule this
+	// map enforces — reconciling records a fact about the BANK and never adjusts
+	// the books — survives intact.
+	"internal/banking": {
+		"internal/platform/db":   true,
+		"internal/bankstatement": true,
+	},
 	// bankstatement (T4 slice 2a) is the WRITE side of bank-statement IMPORT, and
 	// its allowed set is the same one-edge set as banking above, for the same
 	// reason stated one line further: importing records what the BANK said, and
@@ -175,12 +224,162 @@ var allowedDeps = map[string]map[string]bool{
 	// read-only, RLS-scoped tx. It imports the db layer and nothing else (the
 	// translator is a pure leaf; the real-Claude adapter is the documented swap).
 	"internal/query": {"internal/platform/db": true},
-	// nlq (wave 2 WS1) is the real-Claude NL->DSL adapter — the ONLY query-path
-	// package that touches the network. It depends on query (the Query it emits +
-	// the Catalog it advertises) and NOTHING else (not even platform/db). The edge
-	// is ONE-WAY by design: query must stay a network-free pure leaf, so query
-	// never imports nlq (TestQueryPackageIsNetworkFree pins that).
-	"internal/nlq": {"internal/query": true},
+	// nlq (wave 2 WS1) is the NL->DSL adapter — the ONLY query-path package that
+	// touches the network. It depends on query (the Query it emits + the Catalog
+	// it advertises) and, since W0, on internal/llm. The edge is ONE-WAY by
+	// design: query must stay a network-free pure leaf, so query never imports
+	// nlq (TestQueryPackageIsNetworkFree pins that).
+	//
+	// ⛔ internal/llm IS ADDED HERE AND NOWHERE NEAR internal/query. nlq used to
+	// hold its own Messages-API structs, its own *http.Client and its own
+	// non-200 rule; W0 moved all three into internal/llm so that the retry
+	// budget, the token budget and the trajectory span are written once instead
+	// of once per feature. What must NOT follow is the mirror-image edit —
+	// putting "internal/llm" into internal/query's set two entries above,
+	// "so the compiler can call the model directly". That would give the SQL
+	// compiler a socket, and TestQueryPackageIsNetworkFree would stay GREEN
+	// while it happened, because that test scans only internal/query's own
+	// files and does not follow transitive imports. THIS LINE, in the entry
+	// above, is the real proof of the invariant.
+	//
+	// W3 wave 2 adds internal/catalogue: the translator prompt now carries
+	// the semantic catalogue (the entity guide in the cacheable half, the
+	// selected reports per question in the dynamic half). The edge points
+	// the SAFE way — nlq (which may reach the network) reads the catalogue
+	// (constant data over authz/query/actions); the catalogue must never
+	// import nlq or llm, and its own line below still says so.
+	"internal/nlq": {"internal/query": true, "internal/llm": true, "internal/catalogue": true},
+	// W3's semantic catalogue: report metadata keyed by authz's vocabulary,
+	// example DSL re-validated by query.Compile, display routes resolved from
+	// the generated actions registry. All three edges are READS of constant
+	// data; none is a database or network edge, and it is the reason the
+	// catalogue is NOT inside internal/query (whose set must stay
+	// {platform/db} — see the ⛔ note on internal/nlq above).
+	"internal/catalogue": {"internal/authz": true, "internal/query": true, "internal/actions": true},
+	// W3's entity profiles. reporting because a money fact a report prints is
+	// TAKEN from that report, never re-derived (the D20/D51 lesson — see
+	// profile/vocabulary.go); query because every profile tool has a DSL
+	// twin over the profile_facts entity. No llm, no network: the feature
+	// jobs are deterministic Go, and the ≤400-token LLM narratives the plan
+	// mentions are owed to a package that may import internal/llm.
+	"internal/profile": {"internal/platform/db": true, "internal/reporting": true, "internal/query": true},
+	// W3 Tier B: the hand-written SQL validator and the agent_ro executor.
+	// platform/db ONLY — it must not reach the query compiler (a second SQL
+	// path sharing code with the first would couple their failure modes), the
+	// llm client, or any feature package.
+	"internal/tierb": {"internal/platform/db": true},
+	// W3 wave 2: the retrieval store (0098). platform/db for the RLS-scoped
+	// tables; llm for the ONE production Embedder (llm.Client.Embed, which
+	// carries the budget, the content-free span and the tenant-id needle
+	// check). Not query — a served golden DSL is re-compiled by the CALLER
+	// (golden.go says so) — and no feature package: retrieval is a leaf.
+	"internal/embed": {"internal/platform/db": true, "internal/llm": true},
+	// W4's insight engine (d125). Every edge is a READ of something another
+	// lane owns and must not be re-derived here: profile for W3's facts (and
+	// Refresh, which the nightly run calls), reporting for Outstandings,
+	// forecast for the 13-week projection, statutory/rules for Rule 138's
+	// threshold (a pure leaf), compliance/itc for NormalizeDocNo — the ONE
+	// place a supplier document number is normalised (0032's rule).
+	//
+	// ⛔ NOT internal/llm. The detectors, the evidence gate and the ranker are
+	// deterministic and network-free (TestW3PackagesAreNetworkFree covers this
+	// package too); only the narrator below may reach a model, and the engine
+	// talks to it through the insights.Narrator interface it declares.
+	// ⛔ AND NOT internal/ledger or any writer: an insight names an action a
+	// human takes; it has no service it could call to take one.
+	"internal/insights": {
+		"internal/platform/db":     true,
+		"internal/profile":         true,
+		"internal/reporting":       true,
+		"internal/forecast":        true,
+		"internal/statutory/rules": true,
+		"internal/compliance/itc":  true,
+	},
+	// The digest narrator: the insight engine's only model edge, and the
+	// number-provenance check that decides whether the model's words are shown.
+	// insights for the item and template types, llm for the client. Nothing
+	// with a database: it narrates what it is handed.
+	"internal/insights/narrate": {"internal/insights": true, "internal/llm": true},
+	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
+	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
+	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in
+	// both directions.
+	//
+	// Outward: internal/llm, internal/actions, every future agent step and
+	// eventually any handler that wants a span will import this package, so any
+	// sibling edge it gained would be transitively linked into all of them. The
+	// first tempting one is "internal/platform/db, so a span can look up the
+	// company name" — that puts a database round-trip on the telemetry path,
+	// where a slow pool turns into a refused voucher write. The company id is
+	// already in the Scope the middleware fills in; a name is a report's job.
+	//
+	// Inward: it may be imported by anyone, which is only safe BECAUSE it can
+	// reach nothing. A recorder that could read the books would be a way for an
+	// observability concern to acquire domain authority, which is the same
+	// argument internal/notify's entry makes about a notifier.
+	//
+	// ⛔ AND NOT internal/llm, though the two are always used together. The
+	// dependency runs the other way and only in one direction — see llm's entry
+	// below: llm DECLARES the narrow Recorder interface it consumes and this
+	// package satisfies it structurally. internal/server is what joins them.
+	"internal/trajectory": {},
+	// llm (W0/D1) is the provider abstraction: five adapters over one Adapter
+	// seam, the repair loop, the encoded-body tenant-id scan, and the per-tenant
+	// token budget. Exactly ONE edge, to the db layer, and it exists for exactly
+	// one type: PGBudget, which reserves and settles tokens against
+	// llm_token_budget (migration 0091) inside the caller's RLS-scoped tx. A
+	// budget that lived in memory would reset on every deploy, which is not a
+	// budget.
+	//
+	// ⛔ NOT internal/trajectory, AND THAT ASYMMETRY IS THE W0 DECISION (D-B).
+	// This package declares a one-method Recorder interface in trace.go and
+	// accepts whatever satisfies it; internal/trajectory satisfies it
+	// structurally without either package naming the other, and internal/server
+	// — the composition root, the only place that may know both — writes the
+	// six-line adapter. Accept interfaces, return structs. The payoff is that
+	// both packages are testable with no fake imported across a boundary, and
+	// that a deployment with tracing off links no exporter at all.
+	//
+	// ⛔ AND NOT internal/query, internal/nlq OR ANY FEATURE PACKAGE. The arrow
+	// points from the feature to the provider, never back: nlq imports llm (see
+	// above). The moment llm knew what a Query was, the "one seam per provider"
+	// property would be gone and the next feature would need its own.
+	"internal/llm": {"internal/platform/db": true},
+	// actions (W0/D3) is the GENERATED ActionSpec registry: one row per (method,
+	// chi route pattern) mounted under /v1/companies/{companyID}, each carrying
+	// the ACL key the PDP will actually evaluate for it.
+	//
+	// The single edge is to internal/authz, and it is a SAFETY property rather
+	// than a convenience. ActionSpec spells its verb as `authz.Action` and its
+	// noun as `authz.Resource` — the closed vocabulary as TYPES — so a spec
+	// CANNOT name an action outside it and "the ACL key equals the arm the
+	// router took" holds by construction instead of by discipline. The
+	// alternative that was rejected is plain strings, which reintroduce exactly
+	// the drift that the deleted `export` token (authz/vocabulary.go) is a
+	// monument to.
+	//
+	// ⛔ NOT internal/server, EVER, THOUGH THE GENERATOR LIVES THERE. routeAction
+	// is unexported and the router is the oracle, so the generator is a test in
+	// package server that WALKS the real router and PUSHES a golden into this
+	// package. Every edge points inward at the composition root; an import in
+	// the other direction would be a cycle and, worse, would make the registry
+	// able to observe the thing it is supposed to be an independent record of.
+	//
+	// ⛔ AND NOT internal/platform/db. The registry is a compile-time fact about
+	// the router, not a query: it must be readable by an agent planner, a doc
+	// generator or a test with no database anywhere in sight.
+	"internal/actions": {"internal/authz": true},
+	// evals/tau (W1a, d124) is the state-based task harness. {} — THE STRICTEST
+	// POLICY, and the reason is the same as form140's: it is a JUDGE, and a
+	// judge that could import the ledger could be tempted to read the books by
+	// a door the agent under test does not have. It sees the books only through
+	// the Books interface (an HTTP surface), exactly as the agent does, so an
+	// agent cannot write anywhere the judge does not look. Its DB test imports
+	// server/testdb/migrations; test files are outside this walker by design.
+	//
+	// No line in internal/server's set: server does not import it, and must
+	// not — the harness is a client of the product, not a part of it.
+	"internal/evals/tau": {},
 	// notify (item C) is the transactional OUTBOX for outbound notifications.
 	// It touches the db layer and nothing else — deliberately: a notifier that
 	// could reach into the ledger or the authz store would be a way for a
@@ -204,7 +403,79 @@ var allowedDeps = map[string]map[string]bool{
 	// edge cannot become a route into cored: rules' own allowed set is the EMPTY
 	// map immediately below, so it can reach nothing this package could not
 	// already reach — which is nothing.
-	"internal/statutory": {"internal/statutory/rules": true},
+	//
+	// W2 ADDED ONE EDGE, internal/durable, AND IT IS THE STEP ENGINE THIS
+	// PACKAGE ALREADY RAN ON. Run/StepStore/MemStore moved there (runner.go is
+	// now aliases) so that the agent plane — which lives inside cored and may
+	// NOT import this package, see server's set below — runs on the same
+	// engine rather than a second copy. durable's own set is the EMPTY map, so
+	// this edge reaches nothing either.
+	"internal/statutory": {"internal/statutory/rules": true, "internal/durable": true},
+	// durable (W2, D121) is the step-replay engine: Run, StepStore (ctx +
+	// TryLock), ErrParked, the advisory locker. ⛔ ITS ALLOWED SET IS EMPTY AND
+	// MUST STAY SO. It is imported by BOTH the IRN plane and the agent plane,
+	// so any sibling it gained would be linked into both — and the first
+	// tempting one is internal/platform/db ("so a store can set the company
+	// GUC"), which would drag tenancy into statutoryd. Tenant-scoped stores
+	// live with their callers (internal/agent's run store), not here.
+	"internal/durable": {},
+	// intentlog (W2, D121) is the agent intent log: append, verify, anchor
+	// over a caller's pgx.Tx. ⛔ EMPTY SET: it takes the transaction it is
+	// handed and reaches no sibling, so the hash-chain code can be read and
+	// re-implemented by an auditor without reading anything else in the tree.
+	"internal/intentlog": {},
+	// policy (W2, D121) decides what an agent may do: structural rules, the
+	// agent's own ACL, delegation, autonomy, the provenance gate. It imports
+	// authz FOR THE EVALUATOR — ACL(agent) is authz.Evaluate over AgentRules,
+	// not a second evaluator — and actions for the typed registry rows whose
+	// Risk it keys on. ⛔ NOT internal/server (the router is where ACL(user)
+	// is judged, and policy is consulted from there, never the reverse) and
+	// NOT internal/llm: a policy that could ask a model is a policy a prompt
+	// injection can argue with.
+	"internal/policy": {"internal/authz": true, "internal/actions": true},
+	// agent (W2, D121) is the loop: durable runs, model decisions, tools, the
+	// approval park, the poller.
+	//
+	// ⛔ ITS EDGES ARE THE WHOLE SECURITY ARGUMENT, SO READ WHAT IS ABSENT.
+	// NOT internal/ledger, internal/masters, internal/orders, internal/banking
+	// or any feature package: the agent has no service it could call to write
+	// the books. Its only write path is the Dispatcher interface, which
+	// internal/server implements by running the real router in process — so a
+	// write that skipped the PDP, the handler's decoding or the validators
+	// would need an import this line forbids. NOT internal/server (the
+	// dispatcher is injected; agent -> server would be a cycle and a side
+	// door). NOT internal/statutory: the engine is internal/durable.
+	// internal/platform/db is for its own tables (runs, steps, approvals,
+	// decisions) under RLS; internal/llm is the model; internal/actions the
+	// registry it searches; internal/policy the gate; internal/intentlog the
+	// record.
+	"internal/agent": {
+		"internal/durable":     true,
+		"internal/llm":         true,
+		"internal/actions":     true,
+		"internal/policy":      true,
+		"internal/intentlog":   true,
+		"internal/platform/db": true,
+	},
+	// mcp (W6, D126) is the MCP server: JSON-RPC over Streamable HTTP, the
+	// tool manifest, grants and sessions.
+	//
+	// ⛔ READ WHAT IS ABSENT, AS FOR internal/agent. NOT internal/server (the
+	// router is where identity is judged; mcp is mounted INTO it, never the
+	// reverse), NOT any feature package, NOT internal/llm, NOT
+	// internal/durable or internal/intentlog: its only way to act on the books
+	// is agent.Engine.Submit, which records a decision and lets the agent loop
+	// run the dispatcher. internal/actions is the registry the manifest is
+	// generated from; internal/policy the EffectiveRights filter over it and
+	// the delegation types; internal/platform/db its own two tables (0105)
+	// under RLS. TestMCPReachesNoHandlerExceptThroughTheAgent (in the package)
+	// adds what an import set cannot see: no Dispatch call, no agent.Request.
+	"internal/mcp": {
+		"internal/agent":       true,
+		"internal/actions":     true,
+		"internal/policy":      true,
+		"internal/platform/db": true,
+	},
 	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
 	// load-bearing in BOTH directions.
 	//
@@ -270,7 +541,13 @@ var allowedDeps = map[string]map[string]bool{
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.
 	"internal/migration": {
-		"internal/integration":     true,
+		"internal/integration": true,
+		// gststate is the statutory State-code table, a pure reference leaf with
+		// no I/O. The importer needs it because a Tally export records a party's
+		// State by NAME and never as a code, while cored stores the two-digit GST
+		// code — so somewhere a name has to become a code, and the alternative to
+		// this edge is a second copy of the table inside the importer.
+		"internal/gststate":        true,
 		"internal/masters":         true,
 		"internal/ledger":          true,
 		"internal/reporting":       true,
@@ -400,15 +677,54 @@ var allowedDeps = map[string]map[string]bool{
 	//
 	// It is a NON-test package, so it could in principle be linked into cored.
 	// TestNoProductionCodeImportsTestdb below is what forbids that.
-	"internal/platform/testdb": {},
+	"internal/platform/testdb": {"internal/platform/tenant": true},
+	// tenant is the SCHEMA-DERIVED CENSUS of which tables hold one company's data
+	// (internal/platform/tenant). Its allowed set is the EMPTY SET for the same
+	// reason testdb's nearly is: it issues catalog queries over a caller-supplied
+	// pgx ConnLike and imports no sibling at all — not platform/db, which would be
+	// the tempting edge and is the wrong one. Census has to run on whatever
+	// connection the caller already holds (a pooled admin conn in testdb, the
+	// request's pgx.Tx in the backup service), and taking a *db.Pool would both
+	// break testdb's emptiness and stop the census running inside the restore's
+	// single transaction.
+	//
+	// It is the ONE enumeration: teardown and backup both derive from it, because
+	// the day they derive from two lists is the day a new migration's table is
+	// cleaned up but not backed up, and the omission surfaces as a restored company
+	// missing a plane of its books.
+	"internal/platform/tenant": {},
+	// backup (T14) is whole-company archive out and whole-company restore in.
+	// TWO EDGES AND NO MORE, and the ones it does NOT have are the point:
+	//
+	// ⛔ NOT internal/ledger. A restore INSERTs archived rows verbatim, because
+	// preserving primary keys is what preserves the hash chain (CanonicalPayload
+	// contains voucher_id and every ledger/stock id). A backup package that could
+	// call ledger.Post would be a SECOND voucher path — one that mints new ids,
+	// re-derives hashes and would attest to a chain it had just written itself.
+	//
+	// ⛔ NOT internal/masters, internal/identity or internal/reporting, for the
+	// same reason stated from the other side: an archive is rows in and rows out.
+	// The moment restore goes through a service, the restored company stops being
+	// the archived one and starts being whatever today's defaulting produces.
+	//
+	// It reaches platform/tenant for the census — the ONE enumeration, shared with
+	// the teardown harness — and platform/db for the transaction.
+	"internal/backup": {
+		"internal/platform/db":     true,
+		"internal/platform/tenant": true,
+	},
 	"internal/server": {
-		"internal/platform/db": true,
-		"internal/authn":       true,
-		"internal/authz":       true,
-		"internal/webauthn":    true,
-		"internal/ledger":      true,
-		"internal/masters":     true,
-		"internal/reporting":   true,
+		// W4: the insight routes, the poller, and the narrator's composition.
+		"internal/insights":         true,
+		"internal/insights/narrate": true,
+		"internal/backup":           true,
+		"internal/platform/db":      true,
+		"internal/authn":            true,
+		"internal/authz":            true,
+		"internal/webauthn":         true,
+		"internal/ledger":           true,
+		"internal/masters":          true,
+		"internal/reporting":        true,
 		// Bank reconciliation (T4) is TWO edges because it is two halves: the
 		// read model lives in reporting (which stays read-only by its package
 		// contract) and the WRITE lives in banking. server is the composition
@@ -504,6 +820,56 @@ var allowedDeps = map[string]map[string]bool{
 		// internal/statutory. The proxy did not buy cored an import of the IRN
 		// workflow plane; it bought it an HTTP client.
 		"internal/einvoice": true,
+		// W0, the agent plane's three foundation packages. All three are here
+		// for the reason this comment block exists at all: a new internal
+		// package needs its OWN allowed set AND a line in THIS set, and only
+		// the first passes when the package is tested alone (see the ⛔ note on
+		// internal/einvoice above — "which is how it gets missed").
+		//
+		// internal/trajectory: server is where a span acquires a tenant. The
+		// scope middleware inside the /v1/companies/{companyID} block reads the
+		// company, user and subject the auth middleware already resolved and
+		// puts them in the context, because the span-creating call sites sit
+		// several frames below and have no other way to learn them.
+		"internal/trajectory": true,
+		// internal/llm: server is the composition root that reads LLM_PROVIDER
+		// and friends, refuses a half-configured provider out loud, and hands
+		// the constructed client to the feature packages. No handler may build
+		// one for itself — a second construction site is a second place for a
+		// key, a timeout and a budget to drift.
+		"internal/llm": true,
+		// internal/actions: the generated registry. server both PRODUCES it (the
+		// golden generator walks this package's router) and may READ it, and the
+		// second direction is the point of D3 — a future agent endpoint needs to
+		// enumerate what it is allowed to do without a second table of routes.
+		// The edge is safe because actions imports only authz.
+		"internal/actions": true,
+		// W2 (D121), the agent plane. server is its composition root and its
+		// only write path: agent_dispatch.go runs the agent's requests through
+		// THIS package's router, and companyAuthMiddleware applies
+		// internal/policy to them. durable and intentlog are here only because
+		// server reads a run's events and wires the engine; the engine itself
+		// lives in internal/agent.
+		//
+		// ⛔ STILL NOT internal/statutory. The step engine the agent runs on was
+		// lifted into internal/durable precisely so that this set did not have
+		// to gain the IRN plane (see the ⛔ notes on internal/ewaybill and
+		// internal/einvoice above).
+		"internal/agent":     true,
+		"internal/policy":    true,
+		"internal/intentlog": true,
+		"internal/durable":   true,
+		// W2 breadth: the agent's five profile tools (agent/profiles.go) are
+		// W3's functions, read by the server for the run's human with that
+		// human's ACL applied per fact (server/agent_profiles.go). Server, not
+		// agent: the agent package still reaches the books only through the
+		// Dispatcher and its ProfileReader seam.
+		"internal/profile": true,
+		// W6 (D126): the MCP server, mounted into this router's
+		// {companyID} subtree so companyAuthMiddleware authenticates every
+		// transport request. It drives the agent engine above; it is not a
+		// second write path.
+		"internal/mcp": true,
 	},
 	"internal/archtest": {},
 }
@@ -790,4 +1156,48 @@ func TestQueryPackageIsNetworkFree(t *testing.T) {
 		t.Fatal("scanned no internal/query source files — the walk is vacuous")
 	}
 	t.Logf("internal/query network-free across %d source files", scanned)
+}
+
+// TestW3PackagesAreNetworkFree extends the same proof to W3's three new
+// packages. internal/tierb runs model-written SQL; internal/profile writes the
+// facts the agent believes; internal/catalogue feeds the selector. None has a
+// reason to open a socket, and the model-backed parts W3 owes (narratives,
+// embeddings) must arrive through internal/llm in a package that says so —
+// not as a quiet net/http import here. allowedDeps covers internal imports;
+// this covers the stdlib ones it cannot see. Mutation check: add
+// `_ "net/http"` to internal/tierb/exec.go and this goes red.
+func TestW3PackagesAreNetworkFree(t *testing.T) {
+	root := backendRoot(t)
+	fset := token.NewFileSet()
+	// embed (W3 wave 2) is in the list: its model calls go through llm.Client.Embed.
+	for _, pkg := range []string{"tierb", "profile", "catalogue", "embed", "insights"} {
+		scanned := 0
+		dir := filepath.Join(root, "internal", pkg)
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+			if perr != nil {
+				return perr
+			}
+			scanned++
+			for _, imp := range f.Imports {
+				ip := strings.Trim(imp.Path.Value, `"`)
+				if networkPkgs[ip] || strings.HasPrefix(ip, "net/") {
+					t.Errorf("internal/%s must be network-free, but %s imports %q", pkg, filepath.Base(path), ip)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk internal/%s: %v", pkg, err)
+		}
+		if scanned == 0 {
+			t.Fatalf("scanned no internal/%s source files — the walk is vacuous", pkg)
+		}
+	}
 }

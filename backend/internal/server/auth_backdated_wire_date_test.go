@@ -109,6 +109,97 @@ var wireDatesInPackageServer = map[string]wireDateVerdict{
 	// ---- NOT A DATE THE CUTOFF CAN OWN, WITH THE REASON. ------------------
 	"voucherDateProbe.voucher_date": {reason: "the PEEK's own probe type, not a wire contract"},
 
+	// ---- T4 SLICE 2b — THE MATCHING RESPONSE. ----------------------------
+	//
+	// ⭐ EVERY ONE OF THESE IS A RESPONSE FIELD, AND THE SLICE'S WRITE IS
+	// ALREADY JUDGED ABOVE. Accepting a proposed match is not a route of its
+	// own: it is PUT .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo} with
+	// a statement_line_id added to the body, so the date it asserts is
+	// setBankDateReq.bank_date — the entry four lines up, which IS judged and IS
+	// exercised. Slice 2b deliberately added no second way to assert a date,
+	// precisely so this census would have nothing new to judge.
+	//
+	// ⚠️ THEY ARE LISTED RATHER THAN SKIPPED for the reason
+	// currencyListItem.latest_rate_date states: the census scans by SHAPE, and
+	// "it is only a response" is exactly the sentence that would be wrong the
+	// day someone accepts one of them back as an input.
+	"lineProposalView.value_date": {reason: "" +
+		"a RESPONSE field: the date the BANK gave an imported statement row, echoed by " +
+		"GET .../bank-statement/{ledgerID}/matches so the operator can see what they are " +
+		"being asked to match. Deriving proposals writes nothing, so there is no entry for " +
+		"the cutoff to judge. When this date IS asserted, it is asserted through " +
+		"setBankDateReq.bank_date on the bank-reconciliation PUT, which is judged above."},
+
+	"candidateView.voucher_date": {reason: "" +
+		"a RESPONSE field: the date of a voucher the matcher OFFERS as a candidate. It is a " +
+		"date the books already hold, read back so the operator can weigh the proposal; " +
+		"nothing in this response can change it, and accepting the candidate writes a BANK " +
+		"date rather than a voucher date."},
+
+	"lineProposalView.candidates": {reason: "" +
+		"NOT A DATE AT ALL — the census matches by substring and 'candidates' contains " +
+		"'date'. It is the list of legs the matcher offers for one bank row. Listed rather " +
+		"than renamed, because the field name is the right one and a census false positive " +
+		"is cheaper than a worse name."},
+
+	"resolutionView.bank_date": {reason: "" +
+		"a RESPONSE field: the date on the bank_reconciliation row a resolved match " +
+		"produced, read back so the screen can show what was recorded. The row was written " +
+		"through the bank-reconciliation PUT, where setBankDateReq.bank_date WAS judged by " +
+		"the cutoff on the way in."},
+
+	"resolutionView.line_value_date": {reason: "" +
+		"a RESPONSE field, and specifically the EVIDENCE half of a disagreement: it is the " +
+		"statement row's own date, shown beside bank_date so a reader can see when the two " +
+		"have drifted apart (somebody retyped the Bank Date cell after matching). It is " +
+		"read from the imported statement and is never an input."},
+
+	"resolutionView.bank_date_differs": {reason: "" +
+		"NOT A DATE — a BOOLEAN whose name contains one. True when the clearance's bank " +
+		"date is no longer the statement row's own value date. It is derived on read from " +
+		"the two fields above and is never sent by a client."},
+
+	"currencyListItem.latest_rate_date": {reason: "" +
+		"a RESPONSE field, never an input: it is the date of the newest rate on file, emitted by " +
+		"GET /currencies so a picker can say how stale a rate is. The cutoff judges WRITES — it " +
+		"reads a date out of a request body to decide whether an entry may be made — so there is " +
+		"no request here for it to judge. ⚠️ It is listed rather than skipped because the census " +
+		"scans by SHAPE, and 'it is only a response' is exactly the sentence that would be wrong " +
+		"the day someone accepts it back as an input."},
+
+	"currencyRateReq.effective_date": {reason: "" +
+		"the date a published EXCHANGE RATE took effect, which is a fact about the money market " +
+		"and not about this company's books. Three reasons the cutoff cannot own it, and the " +
+		"third is the one that makes it safe:\n" +
+		"  (1) it posts NOTHING. A currency_rate row names no ledger, carries no dr_cr and " +
+		"      appears on no statement; there is no entry here for a closed period to protect.\n" +
+		"  (2) BACK-DATING IT IS THE NORMAL CASE, not the suspicious one. A company adopting " +
+		"      this product mid-year has to enter the rates that were in force BEFORE its " +
+		"      cutoff, and the unadjusted-forex report is precisely a question about past " +
+		"      dates. A cutoff here would make that report unbuildable for the periods it is " +
+		"      about.\n" +
+		"  (3) ⛔ AND IT CANNOT RESTATE ANYTHING. A voucher stores its OWN rate " +
+		"      (migration 0080), so this table is read for DEFAULTS and for the revaluation " +
+		"      report and is never joined by the ledger. Writing a rate dated inside a closed " +
+		"      period moves no posted voucher, no balance and no statement — which is exactly " +
+		"      what the cutoff exists to prevent, and is structurally impossible here.\n" +
+		"⚠️ IF A LATER TRACK EVER MAKES THE LEDGER READ THIS TABLE, THIS ENTRY BECOMES FALSE " +
+		"and the field must move to `judged`. That is the one change to watch for."},
+
+	// ---- T11 BUDGETS (migrations 0085/0086). FOUR FIELDS, ONE REASON, SPELLED
+	// OUT ON EACH rather than shared through a variable: this map is read one entry
+	// at a time by whoever is defending a field, and a cross-reference is how the
+	// three shipped defects got their reassuring comments.
+	//
+	// budgetReq is the REQUEST (create/alter a plan); budgetView is the RESPONSE.
+	// Both are listed because the census scans by SHAPE, and "it is only a
+	// response" is exactly the sentence that would be wrong the day someone accepts
+	// it back as an input.
+	"budgetReq.from_date":  {reason: "a budget's PLANNING WINDOW, not the date an entry was made. Four reasons, and the fourth is the one that makes it safe: (1) IT POSTS NOTHING — a budget writes no voucher, no posting and no balance and appears on no statement; migration 0085 grants UPDATE and DELETE on both tables precisely because a plan is not a record of a fact, so there is no entry here for a closed period to protect. (2) BACK-DATING IS THE NORMAL CASE, not the suspicious one: keying last year's plan so last year's variance can be looked at is an ordinary act, and it is the only way a company adopting this product mid-year can report on a period it has already lived through — a cutoff here would make that report unbuildable for exactly the periods it is about, which is the argument currencyRateReq.effective_date makes above. (3) THE DATES ARE A RANGE, NOT AN EVENT: from_date/to_date bound a comparison, so there is no single instant for cutoffDeny to place on one side of a line, and judging the pair would mean inventing a rule about which bound counts. (4) AND IT CANNOT RESTATE ANYTHING — budget_line's targets are FKs to account_group / ledger / cost_centre and nothing in the ledger reads either table: the plane is read only by reporting.BudgetVarianceFor, which puts the figure in its own column beside an actual it derives independently, so writing a plan dated inside a closed period moves no posted voucher, no balance and no statement. IF A LATER TRACK EVER LETS A BUDGET POST — an accrual, a provision, an auto-reversing commitment — THIS ENTRY BECOMES FALSE and all four fields move to `judged`. That is the one change to watch for."},
+	"budgetReq.to_date":    {reason: "a budget's PLANNING WINDOW, not the date an entry was made. Four reasons, and the fourth is the one that makes it safe: (1) IT POSTS NOTHING — a budget writes no voucher, no posting and no balance and appears on no statement; migration 0085 grants UPDATE and DELETE on both tables precisely because a plan is not a record of a fact, so there is no entry here for a closed period to protect. (2) BACK-DATING IS THE NORMAL CASE, not the suspicious one: keying last year's plan so last year's variance can be looked at is an ordinary act, and it is the only way a company adopting this product mid-year can report on a period it has already lived through — a cutoff here would make that report unbuildable for exactly the periods it is about, which is the argument currencyRateReq.effective_date makes above. (3) THE DATES ARE A RANGE, NOT AN EVENT: from_date/to_date bound a comparison, so there is no single instant for cutoffDeny to place on one side of a line, and judging the pair would mean inventing a rule about which bound counts. (4) AND IT CANNOT RESTATE ANYTHING — budget_line's targets are FKs to account_group / ledger / cost_centre and nothing in the ledger reads either table: the plane is read only by reporting.BudgetVarianceFor, which puts the figure in its own column beside an actual it derives independently, so writing a plan dated inside a closed period moves no posted voucher, no balance and no statement. IF A LATER TRACK EVER LETS A BUDGET POST — an accrual, a provision, an auto-reversing commitment — THIS ENTRY BECOMES FALSE and all four fields move to `judged`. That is the one change to watch for."},
+	"budgetView.from_date": {reason: "a budget's PLANNING WINDOW, not the date an entry was made. Four reasons, and the fourth is the one that makes it safe: (1) IT POSTS NOTHING — a budget writes no voucher, no posting and no balance and appears on no statement; migration 0085 grants UPDATE and DELETE on both tables precisely because a plan is not a record of a fact, so there is no entry here for a closed period to protect. (2) BACK-DATING IS THE NORMAL CASE, not the suspicious one: keying last year's plan so last year's variance can be looked at is an ordinary act, and it is the only way a company adopting this product mid-year can report on a period it has already lived through — a cutoff here would make that report unbuildable for exactly the periods it is about, which is the argument currencyRateReq.effective_date makes above. (3) THE DATES ARE A RANGE, NOT AN EVENT: from_date/to_date bound a comparison, so there is no single instant for cutoffDeny to place on one side of a line, and judging the pair would mean inventing a rule about which bound counts. (4) AND IT CANNOT RESTATE ANYTHING — budget_line's targets are FKs to account_group / ledger / cost_centre and nothing in the ledger reads either table: the plane is read only by reporting.BudgetVarianceFor, which puts the figure in its own column beside an actual it derives independently, so writing a plan dated inside a closed period moves no posted voucher, no balance and no statement. IF A LATER TRACK EVER LETS A BUDGET POST — an accrual, a provision, an auto-reversing commitment — THIS ENTRY BECOMES FALSE and all four fields move to `judged`. That is the one change to watch for."},
+	"budgetView.to_date":   {reason: "a budget's PLANNING WINDOW, not the date an entry was made. Four reasons, and the fourth is the one that makes it safe: (1) IT POSTS NOTHING — a budget writes no voucher, no posting and no balance and appears on no statement; migration 0085 grants UPDATE and DELETE on both tables precisely because a plan is not a record of a fact, so there is no entry here for a closed period to protect. (2) BACK-DATING IS THE NORMAL CASE, not the suspicious one: keying last year's plan so last year's variance can be looked at is an ordinary act, and it is the only way a company adopting this product mid-year can report on a period it has already lived through — a cutoff here would make that report unbuildable for exactly the periods it is about, which is the argument currencyRateReq.effective_date makes above. (3) THE DATES ARE A RANGE, NOT AN EVENT: from_date/to_date bound a comparison, so there is no single instant for cutoffDeny to place on one side of a line, and judging the pair would mean inventing a rule about which bound counts. (4) AND IT CANNOT RESTATE ANYTHING — budget_line's targets are FKs to account_group / ledger / cost_centre and nothing in the ledger reads either table: the plane is read only by reporting.BudgetVarianceFor, which puts the figure in its own column beside an actual it derives independently, so writing a plan dated inside a closed period moves no posted voucher, no balance and no statement. IF A LATER TRACK EVER LETS A BUDGET POST — an accrual, a provision, an auto-reversing commitment — THIS ENTRY BECOMES FALSE and all four fields move to `judged`. That is the one change to watch for."},
+
 	"billAllocationReq.due_date": {reason: "" +
 		"a bill's MATURITY, not the date of the entry: the voucher carrying it is dated by " +
 		"voucher_date and judged on that. A due date places nothing in a period"},

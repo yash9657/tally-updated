@@ -1,0 +1,11 @@
+# Build context for Dockerfile.vercel: only the package and requirement files.
+.venv/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+*.egg-info/
+tests/
+docs/
+.env
+.env.*
+insightd/benchmark/last_report.json

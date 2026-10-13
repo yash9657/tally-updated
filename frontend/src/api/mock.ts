@@ -16,7 +16,12 @@ import type { CoredClient } from "./client";
 // See the note at the tdsRegister mock below for the two occasions it did.
 import registerProse from "./goldens/tds-register-prose.json";
 import { ApiError } from "./http";
+import {
+  PRINT_TEMPLATE_KINDS,
+  printTemplateSurfaceFor,
+} from "../screens/printTemplateSurface";
 import type {
+  BooksClosure,
   BalanceSheetResponse,
   CompanyFeaturesRequest,
   CompanyFeaturesResponse,
@@ -43,10 +48,14 @@ import type {
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
   Money,
+  SetValuationMethodRequest,
+  SetValuationMethodResponse,
   OutstandingKind,
   OutstandingParty,
   OutstandingsQuery,
   OutstandingsResponse,
+  UnadjustedForexResponse,
+  UnadjustedForexBill,
   PartyOpenBillsResponse,
   ProfitLossResponse,
   TrialBalanceResponse,
@@ -66,16 +75,37 @@ import type {
   PostingRequest,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  CreateStockGroupRequest,
+  CreateCurrencyRequest,
+  CreateCurrencyResponse,
+  CurrencyListItem,
+  ListCurrenciesResponse,
+  ForexSettingsResponse,
+  SetForexSettingsRequest,
+  SetCurrencyRateRequest,
+  CreateStockGroupResponse,
+  InventoryVocabularyResponse,
+  ListStockGroupsResponse,
+  ListUnitsResponse,
+  StockGroupListItem,
+  StockGroupSubtotal,
+  UnitListItem,
   ListStockItemsResponse,
   StockBatchListItem,
   StockItemListItem,
   StockPositionRow,
   StockSummaryItem,
   StockSummaryResponse,
+  ListGroupsResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankMatchCandidate,
+  BankMatchCounts,
+  BankMatchesResponse,
+  BankMatchProposal,
+  BankMatchResolution,
   BankReconciliationResponse,
   BankStatementImport,
   DrCr,
@@ -123,6 +153,27 @@ import type {
   CostCentreSummaryResponse,
   CreateCostCategoryRequest,
   CreateCostCentreRequest,
+  EmployeeView,
+  ListEmployeesResponse,
+  CreateEmployeeRequest,
+  CreateEmployeeResponse,
+  PayRunRequest,
+  PayRunResponse,
+  PayrollRegisterResponse,
+  PayrollRegisterRow,
+  PayslipResponse,
+  PayslipDeferral,
+  Form138Request,
+  StatutoryFileDownload,
+  SalaryComponentView,
+  ListSalaryComponentsResponse,
+  SetSalaryComponentRequest,
+  SetSalaryComponentResponse,
+  StatutoryElectionView,
+  ListStatutoryElectionsResponse,
+  SetStatutoryElectionRequest,
+  SetStatutoryElectionResponse,
+  PayrollVocabularyResponse,
   TDSChallanListResponse,
   AllocateToChallanRequest,
   AllocateToChallanResponse,
@@ -135,6 +186,8 @@ import type {
   SetTDSProfileRequest,
   SetTDSProfileResponse,
   BankReconLine,
+  SetAsideRequest,
+  SetAsideResponse,
   SetBankDateRequest,
   SetBankDateResponse,
   VoucherVersionView,
@@ -144,10 +197,42 @@ import type {
   TaxAllocationKind,
   TDSDeductionView,
   TCSCollectionView,
+  PrintTemplateField,
+  PrintTemplateOverrides,
+  PrintTemplateRequest,
+  PrintTemplateResponse,
+  AlterBudgetResponse,
+  Budget,
+  BudgetBasis,
+  BudgetDimension,
+  BudgetLine,
+  BudgetLineListResponse,
+  BudgetListResponse,
+  BudgetStatus,
+  BudgetVarianceResponse,
+  GSTR9Envelope,
+  GSTR9Month,
+  GSTR9Divergence,
+  GSTR9Table,
+  GSTR9TaxLedgers,
+  GSTTax,
+  BudgetVarianceRow,
+  CreateBudgetLineRequest,
+  CreateBudgetLineResponse,
+  CreateBudgetRequest,
+  CreateBudgetResponse,
+  DeleteBudgetResponse,
 } from "./types";
 // A VALUE, not a type: the recorded `payload.class` labels the server stamps.
 // The mock must agree with them exactly — see classLabel().
 import { VOUCHER_CLASS_LABELS } from "./types";
+// ⛔ THE RATE HELPERS, NEVER THE MONEY ONES. `api/rate.ts`'s header states the
+// reason at length: money is fixed-4 in this product and `parseFixed4` TRUNCATES
+// the fifth decimal onward, so a rate put through it silently becomes a different
+// rate and every figure derived from it is plausible. The mock has to be exactly as
+// careful as the screen, or the double is the one place the bug is invisible.
+import { RATE_DECIMALS, parseRate, formatRate } from "./rate";
+
 import type { QueryRequest, QueryResult } from "./query";
 import type {
   CreateSecurityLevelResponse,
@@ -169,6 +254,25 @@ import type {
   UpdateMemberResponse,
   UpdateSecurityLevelResponse,
 } from "./admin";
+import {
+  AGENT_UNCONFIGURED,
+  runFinished,
+  type AgentApproval,
+  type AgentAutonomyRow,
+  type AgentDecisionRequest,
+  type AgentEvent,
+  type AgentRun,
+  type SetAgentAutonomyRequest,
+  type StartAgentRunRequest,
+} from "./agent";
+import type {
+  Insight,
+  InsightDigest,
+  InsightState,
+  InsightSuppression,
+  InsightVerdict,
+  SuppressInsightRequest,
+} from "./insights";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 import { taxableValueOf } from "../screens/vouchers/itemInvoice";
 
@@ -240,6 +344,22 @@ function mainLocation(companyID: string): GodownListItem {
   };
 }
 
+/** A seeded SIMPLE unit — every company gets "Nos", as migration 0005 does. */
+function seedUnit(companyID: string, symbol: string, formalName: string): UnitListItem {
+  return {
+    id: `${companyID}:unit-${symbol.toLowerCase()}`,
+    symbol,
+    formal_name: formalName,
+    decimal_places: 0,
+    is_system: true,
+    // Simple: no base, and "" rather than "0.0000" — a unit with no base
+    // restates into nothing, and a zero factor would read as "one of these holds
+    // none of those".
+    base_unit_symbol: "",
+    conversion_factor: "",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Stock replay (the mock's GET /stock-summary)
 // ---------------------------------------------------------------------------
@@ -259,6 +379,22 @@ function mainLocation(companyID: string): GodownListItem {
 // floats, for the same reason the wire is strings.
 
 /** Scale of a fixed-4 quantity/value, as a BigInt. */
+/**
+ * The ONE bucket a party's unreferenced balance is reported under (D106).
+ *
+ * ⛔ IT MUST MATCH cored's `reporting.OnAccountRefName` AND `ledger.OnAccountRefName`
+ * EXACTLY. The report groups by (ledger, ref_name), so a mock that spelled it
+ * differently would put an explicit ON_ACCOUNT reference and the derived residue in
+ * two rows here and one row against the real server — and the screen tests would be
+ * proving a layout the product never renders. That is D84's failure (this double
+ * being looser than cored) wearing a different hat.
+ */
+// Derived from `api/rate.ts`'s RATE_DECIMALS rather than written as a literal, so
+// the mock cannot end up on a different scale from the parser it uses.
+const MOCK_RATE_SCALE = 10n ** BigInt(RATE_DECIMALS);
+
+const ON_ACCOUNT_REF = "On Account";
+
 const QSCALE = 10_000n;
 /** Working precision of the running weighted-average cost rate (inventory.rateScale). */
 const RATE_SCALE = 10n ** 16n;
@@ -300,6 +436,26 @@ interface MockPosition {
   outwardValue: bigint;
   qty: bigint;
   value: bigint;
+  /**
+   * The ITEM's costing method (T9), carried on the position because that is
+   * what the replay needs at each movement.
+   */
+  method: string;
+  /** The ITEM's stock group (T10), for the group subtotals. */
+  group: string;
+  /**
+   * THE COSTED LAYERS, oldest first — empty for a weighted-average position,
+   * which has one blended rate and needs no layers.
+   *
+   * ⛔ THE MOCK REPLAYS THE METHOD, IT DOES NOT LABEL ONE. Hardcoding
+   * `valuation_method: "WEIGHTED_AVG"` on the row (which is what this did) while
+   * folding a weighted average was harmless while that was the only method; the
+   * moment an item can be FIFO, a mock that folds an average and prints "FIFO"
+   * beside it makes every screen test PASS against figures the browser will not
+   * reproduce — the exact class of divergence register row D84 exists to stop,
+   * and the worst kind, because both numbers look right.
+   */
+  lots: { qty: bigint; value: bigint }[];
 }
 
 function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
@@ -354,6 +510,12 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         outwardValue: 0n,
         qty: 0n,
         value: 0n,
+        method:
+          c.stockItems.find((s) => s.id === l.stock_item_id)
+            ?.valuation_method ?? "WEIGHTED_AVG",
+        group:
+          c.stockItems.find((s) => s.id === l.stock_item_id)?.stock_group ?? "",
+        lots: [],
       };
       positions.set(key, p);
     }
@@ -368,19 +530,70 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         ? gross
         : q4div(gross * (100n * QSCALE - disc), 100n * QSCALE);
 
+    const layered = p.method === "FIFO" || p.method === "LIFO";
+
     if (l.direction === "IN") {
       p.inwardQty += qty;
       p.inwardValue += value;
       p.qty += qty;
       p.value += value;
+      if (layered) {
+        // An empty queue is a fresh position, one issued flat, or one that has
+        // gone NEGATIVE and lost its layers; all three become ONE blended layer
+        // of whatever is now held, and a still-negative position holds none.
+        if (p.lots.length === 0) {
+          if (p.qty > 0n) p.lots = [{ qty: p.qty, value: p.value }];
+        } else {
+          p.lots.push({ qty, value });
+        }
+      }
       continue;
     }
+
     const nextQty = p.qty - qty;
     let consumed: bigint;
-    if (nextQty === 0n) {
-      consumed = p.value; // empty the position: take the whole remaining value
-      p.qty = 0n;
-      p.value = 0n;
+    if (layered && nextQty > 0n) {
+      // Walk the queue from the end the method names. FIFO eats the oldest
+      // layer, LIFO the newest; the SURVIVORS stay in arrival order either way,
+      // or the next issue would eat them in the wrong sequence.
+      let remaining = qty;
+      consumed = 0n;
+      const kept: { qty: bigint; value: bigint }[] = [];
+      const queue =
+        p.lots.length > 0 ? p.lots : [{ qty: p.qty, value: p.value }];
+      for (let i = 0; i < queue.length; i++) {
+        const lot = queue[p.method === "LIFO" ? queue.length - 1 - i : i]!;
+        if (remaining === 0n) {
+          kept.push(lot);
+        } else if (lot.qty <= remaining) {
+          consumed += lot.value;
+          remaining -= lot.qty;
+        } else {
+          // A partial issue out of one layer, at the LAYER's own rate carried
+          // at RATE_SCALE — rounding the rate to 4 dp first loses value on
+          // every issue and leaves a layer holding nothing but a paisa.
+          const rate = q4div(lot.value * RATE_SCALE, lot.qty);
+          const take = q4div(remaining * rate, RATE_SCALE);
+          consumed += take;
+          kept.push({ qty: lot.qty - remaining, value: lot.value - take });
+          remaining = 0n;
+        }
+      }
+      if (p.method === "LIFO") kept.reverse();
+      p.lots = kept;
+      p.qty = nextQty;
+      p.value -= consumed;
+    } else if (nextQty === 0n || (layered && nextQty < 0n)) {
+      // The position is emptied (or driven past empty): take everything the
+      // layers held and NOT ONE PAISA MORE — stock never received has no cost
+      // to consume, and valuing the shortfall at the SALE rate is the classic
+      // inventory bug. Weighted average keeps its own long-standing behaviour
+      // for a negative overshoot (it consumes qty * the running rate), which is
+      // why this arm is `layered &&` for the negative case only.
+      consumed = p.value > 0n ? p.value : 0n;
+      p.qty = nextQty;
+      p.value -= consumed;
+      p.lots = [];
     } else {
       const rate = p.qty === 0n ? 0n : q4div(p.value * RATE_SCALE, p.qty);
       consumed = q4div(qty * rate, RATE_SCALE);
@@ -399,7 +612,8 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     godown: p.godown,
     batch_id: p.key.batchID,
     batch: p.batch,
-    valuation_method: "WEIGHTED_AVG",
+    valuation_method: p.method,
+    stock_group: p.group,
     opening_qty: "0.0000",
     opening_value: "0.0000",
     inward_qty: q4str(p.inwardQty),
@@ -432,6 +646,15 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         outward_value: "0.0000",
         closing_qty: "0.0000",
         closing_value: "0.0000",
+        // The basis, from the position that arrived first: every position of one
+        // item shares the item's method, exactly as the server folds it.
+        valuation_method: row.valuation_method,
+        stock_group: row.stock_group,
+        // Filled after the fold: the restatement is a function of the item's
+        // FINAL closing quantity, and doing it per position would restate each
+        // one separately and then add the roundings up.
+        base_unit: "",
+        base_qty: "",
         positions: [],
       };
       items.push(it);
@@ -445,9 +668,86 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     it.closing_value = addMoney(it.closing_value, row.closing_value);
   }
 
+  // ---- T10a: THE COMPOUND-UNIT RESTATEMENT, once per item after the fold.
+  for (const it of items) {
+    const unit = c.units.find(
+      (u) => u.symbol.toLowerCase() === it.unit.toLowerCase(),
+    );
+    if (!unit || unit.base_unit_symbol === "" || unit.conversion_factor === "") {
+      continue;
+    }
+    it.base_unit = unit.base_unit_symbol;
+    // Fixed-4 throughout, like every other quantity here. ⛔ closing_qty is NOT
+    // touched: the stored quantity is the one that was keyed.
+    it.base_qty = q4str(q4div(q4(it.closing_qty) * q4(unit.conversion_factor), QSCALE));
+  }
+
+  // ---- T10b: THE GROUP SUBTOTALS — the whole BRANCH, so an item counts in
+  // every ANCESTOR of its group. The mock walks the parent chain rather than an
+  // ltree path (it has no ltree), which is a second implementation of the same
+  // rule and therefore able to disagree with the server — which is the point of
+  // having it: a screen test that renders these is rendering something derived.
+  const ancestors = (group: string): string[] => {
+    const chain: string[] = [];
+    let cursor = group;
+    // A cycle is impossible through the API (the server refuses one) but a
+    // hand-built fixture could hold one; the bound stops an infinite loop from
+    // hanging a test suite instead of failing it.
+    for (let hops = 0; cursor !== "" && hops < 32; hops++) {
+      chain.push(cursor);
+      cursor = c.stockGroups.find((g) => g.name === cursor)?.parent_name ?? "";
+    }
+    return chain;
+  };
+  const subtotals = new Map<string, StockGroupSubtotal>();
+  const ungrouped: StockGroupSubtotal = {
+    group: "",
+    depth: 0,
+    item_count: 0,
+    opening_value: "0.0000",
+    inward_value: "0.0000",
+    outward_value: "0.0000",
+    closing_value: "0.0000",
+  };
+  const fold = (into: StockGroupSubtotal, it: StockSummaryItem) => {
+    into.item_count += 1;
+    into.opening_value = addMoney(into.opening_value, it.opening_value);
+    into.inward_value = addMoney(into.inward_value, it.inward_value);
+    into.outward_value = addMoney(into.outward_value, it.outward_value);
+    into.closing_value = addMoney(into.closing_value, it.closing_value);
+  };
+  for (const it of items) {
+    if (it.stock_group === "") {
+      fold(ungrouped, it);
+      continue;
+    }
+    for (const name of ancestors(it.stock_group)) {
+      let sub = subtotals.get(name);
+      if (!sub) {
+        sub = {
+          group: name,
+          depth: c.stockGroups.find((g) => g.name === name)?.depth ?? 0,
+          item_count: 0,
+          opening_value: "0.0000",
+          inward_value: "0.0000",
+          outward_value: "0.0000",
+          closing_value: "0.0000",
+        };
+        subtotals.set(name, sub);
+      }
+      fold(sub, it);
+    }
+  }
+  // Tree order: by depth, then by name — the server sorts by ltree path, which
+  // is the same order for a tree whose siblings are named uniquely.
+  const groups = [...subtotals.values()].sort(
+    (a, b) => a.depth - b.depth || a.group.localeCompare(b.group),
+  );
+  if (ungrouped.item_count > 0) groups.push(ungrouped);
+
   let total = "0.0000";
   for (const row of rows) total = addMoney(total, row.closing_value);
-  return { as_on: asOn ?? "", items, rows, total_value: total };
+  return { as_on: asOn ?? "", groups, items, rows, total_value: total };
 }
 
 /**
@@ -591,22 +891,118 @@ const MOCK_MINOR_HEADS: MinorHead[] = [
  * "Company" FORBIDS it. Same caveat as above: served, never a client's own copy.
  */
 const MOCK_DEDUCTOR_CATEGORIES: DeductorCategory[] = [
-  { code: "A", description: "Central Government", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
-  { code: "S", description: "State Government", state_name_code_required: true, ministry_required: false, ministry_allowed: false },
-  { code: "D", description: "Statutory body (Central Govt.)", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
-  { code: "E", description: "Statutory body (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
-  { code: "G", description: "Autonomous body (Central Govt.)", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
-  { code: "H", description: "Autonomous body (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
-  { code: "L", description: "Local Authority (Central Govt.)", state_name_code_required: false, ministry_required: false, ministry_allowed: true },
-  { code: "N", description: "Local Authority (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
-  { code: "K", description: "Company", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "M", description: "Branch / Division of Company", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "P", description: "Association of Person (AOP)", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "T", description: "Association of Person (Trust)", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "J", description: "Artificial Juridical Person", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "B", description: "Body of Individuals", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "Q", description: "Individual/HUF", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "F", description: "Firm", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  {
+    code: "A",
+    description: "Central Government",
+    state_name_code_required: false,
+    ministry_required: true,
+    ministry_allowed: true,
+  },
+  {
+    code: "S",
+    description: "State Government",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "D",
+    description: "Statutory body (Central Govt.)",
+    state_name_code_required: false,
+    ministry_required: true,
+    ministry_allowed: true,
+  },
+  {
+    code: "E",
+    description: "Statutory body (State Govt.)",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "G",
+    description: "Autonomous body (Central Govt.)",
+    state_name_code_required: false,
+    ministry_required: true,
+    ministry_allowed: true,
+  },
+  {
+    code: "H",
+    description: "Autonomous body (State Govt.)",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "L",
+    description: "Local Authority (Central Govt.)",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "N",
+    description: "Local Authority (State Govt.)",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "K",
+    description: "Company",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "M",
+    description: "Branch / Division of Company",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "P",
+    description: "Association of Person (AOP)",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "T",
+    description: "Association of Person (Trust)",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "J",
+    description: "Artificial Juridical Person",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "B",
+    description: "Body of Individuals",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "Q",
+    description: "Individual/HUF",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "F",
+    description: "Firm",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
 ];
 
 /** The format's literal for a deductor not required to hold a PAN (masters.PANNotRequired). */
@@ -704,18 +1100,72 @@ export interface MockTDSDeduction {
  * server's own catalog by a test — see the note on `taxSections`.
  */
 export const MOCK_TDS_SECTIONS: TaxSectionDoc[] = [
-  { section: "194C", rate_ind_huf_pct: "1", rate_other_pct: "2", threshold_rupees: "30000.0000", basis: "PER_TXN" },
-  { section: "194H", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "20000.0000", basis: "ANNUAL" },
-  { section: "194I-A", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "50000.0000", basis: "MONTHLY" },
-  { section: "194I-B", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "50000.0000", basis: "MONTHLY" },
-  { section: "194J-D", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "0.0000", basis: "NIL" },
-  { section: "194J-P", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "50000.0000", basis: "ANNUAL" },
-  { section: "194J-T", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "50000.0000", basis: "ANNUAL" },
+  {
+    section: "194C",
+    rate_ind_huf_pct: "1",
+    rate_other_pct: "2",
+    threshold_rupees: "30000.0000",
+    basis: "PER_TXN",
+  },
+  {
+    section: "194H",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "20000.0000",
+    basis: "ANNUAL",
+  },
+  {
+    section: "194I-A",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "50000.0000",
+    basis: "MONTHLY",
+  },
+  {
+    section: "194I-B",
+    rate_ind_huf_pct: "10",
+    rate_other_pct: "10",
+    threshold_rupees: "50000.0000",
+    basis: "MONTHLY",
+  },
+  {
+    section: "194J-D",
+    rate_ind_huf_pct: "10",
+    rate_other_pct: "10",
+    threshold_rupees: "0.0000",
+    basis: "NIL",
+  },
+  {
+    section: "194J-P",
+    rate_ind_huf_pct: "10",
+    rate_other_pct: "10",
+    threshold_rupees: "50000.0000",
+    basis: "ANNUAL",
+  },
+  {
+    section: "194J-T",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "50000.0000",
+    basis: "ANNUAL",
+  },
 ];
 
 export const MOCK_TCS_SECTIONS: TaxSectionDoc[] = [
-  { section: "206C(1)-SCRAP", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "0.0000", basis: "PER_TXN" },
-  { section: "206C(1F)-MV", rate_ind_huf_pct: "1", rate_other_pct: "1", threshold_rupees: "1000000.0000", basis: "PER_TXN" },
+  {
+    section: "206C(1)-SCRAP",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "0.0000",
+    basis: "PER_TXN",
+  },
+  {
+    section: "206C(1F)-MV",
+    rate_ind_huf_pct: "1",
+    rate_other_pct: "1",
+    threshold_rupees: "1000000.0000",
+    basis: "PER_TXN",
+  },
 ];
 
 export const MOCK_TDS_DEDUCTIONS: MockTDSDeduction[] = [
@@ -870,6 +1320,14 @@ interface MockCompany {
   fyStartDate: string;
   baseCurrency: string;
   /**
+   * WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080). "" is "not
+   * chosen", which covers BOTH of the server's encodings of that (no
+   * company_forex_settings row at all, or a row with a NULL column) — the two are
+   * deliberately indistinguishable to a caller, so one empty string is the faithful
+   * mirror rather than a simplification.
+   */
+  forexGainLossLedgerID: string;
+  /**
    * The 0015 company-profile block. Grouped rather than splayed across the
    * type so a new profile field is one edit here and one in `defaultProfile`.
    * `booksBeginningFrom` is the load-bearing one: distinct from fyStartDate,
@@ -910,6 +1368,9 @@ interface MockCompany {
     address?: string;
     city?: string;
     pincode?: string;
+    /** Born blocked (0095): an agent-created ledger no voucher may post to. */
+    blocked?: boolean;
+    blockedReason?: string;
     /**
      * The company's OWN bank account identity (migration 0064). STORED here for
      * the same reason the address row above is: a mock that accepted them on
@@ -922,6 +1383,21 @@ interface MockCompany {
     isSystem?: boolean;
   }[];
   vouchers: DayBookEntry[];
+  /**
+   * WHICH VOUCHER EACH insightd DRAFT PRODUCED — the mock's stand-in for
+   * migration 0077's partial unique index on
+   * `voucher_head (company_id, source_draft_id)`.
+   *
+   * ⛔ IT IS NOT A CONVENIENCE. cored enforces once-only accept inside the
+   * voucher's OWN transaction, and that guarantee is the entire point of §7.3 B:
+   * a second machine, with none of this browser's memos or queues, must be unable
+   * to post the same supplier bill twice. A mock that let the second POST through
+   * would make every test of that guarantee green for the wrong reason — the
+   * `false negative` this whole row exists to end. Kept a Map rather than derived
+   * from `vouchers` because acceptance is TERMINAL ACROSS A DELETE, exactly as it
+   * is on the server.
+   */
+  acceptedDrafts: Map<string, { voucher_id: string; voucher_no: string }>;
   /**
    * Bank reconciliations, keyed `${ledgerID}:${voucherID}:${legNo}`.
    *
@@ -968,6 +1444,16 @@ interface MockCompany {
     string,
     { imports: BankStatementImport[]; lines: BankStatementLine[] }
   >;
+  /**
+   * T4 slice 2b — RESOLUTIONS ONLY, keyed `${ledgerID}:${lineID}`.
+   *
+   * ⭐ THERE IS NO CANDIDATE STORE, AND THAT MIRRORS THE SERVER RATHER THAN
+   * SIMPLIFYING IT. Proposals are DERIVED on every read in both places, because
+   * a stored candidate goes stale silently: a voucher altered, deleted or
+   * cleared between the proposal and the acceptance leaves the operator choosing
+   * from a list that no longer describes the books.
+   */
+  bankMatches: Map<string, BankMatchResolution>;
   /** s.394(2) declarations, keyed `${buyer}:${section}:${taxYear}`. */
   tcsDeclarations: Map<string, TCSDeclaration>;
   /**
@@ -978,6 +1464,46 @@ interface MockCompany {
    * the surrogate id would make the duplicate a mock cannot refuse — and the
    * duplicate is the refusal an operator meets most.
    */
+  /**
+   * THE PAYROLL MASTERS AND RUNS (Track 3).
+   *
+   * ⛔⛔ READ `mockPayrollRegister` BEFORE PINNING ANY FIGURE THAT COMES OUT OF
+   * HERE. This store holds employees, their salary structure and their
+   * elections as REAL ROWS — a screen must be able to read back exactly what it
+   * wrote — and it COMPUTES NOTHING STATUTORY. Every PF, EPS, ESI and TDS figure
+   * it serves is 0.0000, and those zeros are an ABSTENTION, not a computation.
+   *
+   * Reproducing the engine here would be a second implementation of Indian
+   * payroll law in another language: the wage classification alone carries
+   * s.2(88)'s exhaustive exclusion list and the Vivekananda Vidyamandir holding,
+   * and a screen test pinning a number this file invented would be pinning a
+   * payroll engine nobody reviewed. That is the D84 lesson in its sharpest form
+   * — a mock that is DIFFERENT from cored is a source of false green, and
+   * "different" includes being cleverer.
+   *
+   * So the payslip carries every statutory component as a DEFERRAL with the
+   * reason written on it (the same channel cored uses for a rate that has not
+   * been notified), and ⛔ THE ORACLE FOR ANY PAYROLL FIGURE IS THE BROWSER
+   * AGAINST CORED — never this arm.
+   */
+  employees: EmployeeView[];
+  /** Salary components by employee id, in insertion order. */
+  salaryComponents: Map<string, SalaryComponentView[]>;
+  /** Statutory elections by employee id, in insertion order. */
+  statutoryElections: Map<string, StatutoryElectionView[]>;
+  /**
+   * Posted pay runs, keyed by wage month "YYYY-MM".
+   *
+   * KEYED BY MONTH because that is what uniqueness is written on: a wage month
+   * is posted once, and a second run of a posted month answers `already_posted`
+   * with the FIRST run's identifiers and writes nothing. A screen that read that
+   * as a fresh posting would tell an operator a correction took effect when the
+   * stored run is the earlier one.
+   */
+  payRuns: Map<
+    string,
+    { payRunID: string; voucherID: string; voucherNo: string }
+  >;
   tdsChallans: Map<string, TDSChallan>;
   /**
    * Which challan paid which deduction, keyed by the allocation triple
@@ -1009,6 +1535,39 @@ interface MockCompany {
   stockItems: StockItemListItem[];
   godowns: GodownListItem[];
   batches: StockBatchListItem[];
+  /**
+   * T10 — the ITEM HIERARCHY and the company's own UNITS.
+   *
+   * ⛔ THE UNITS ARE HELD AS ROWS, not synthesized, because a COMPOUND unit's
+   * conversion factor is what the Stock Summary restates a quantity with. A mock
+   * that invented units on read could not hold a factor, so a screen test would
+   * render a base quantity of zero and pass — the mock LABELLING a feature it
+   * does not compute, which is register row D84 exactly (it happened once
+   * already this lane, with the valuation method).
+   */
+  stockGroups: StockGroupListItem[];
+  /**
+   * T8 — the company's FOREIGN currencies. ⛔ The base currency is deliberately
+   * never in here, and createCurrency below refuses it, because the SERVER
+   * refuses it with a database trigger. A mock that allowed it would let a
+   * screen test create "INR" on an INR company and pass — D84 exactly.
+   */
+  currencies: CurrencyListItem[];
+  /**
+   * ⭐⭐ THE RATE HISTORY, AND IT EXISTS BECAUSE T8 STEP 7 MADE `latest_rate` TOO
+   * LOOSE TO BE A DOUBLE. `CurrencyListItem` carries only the LATEST rate, which is
+   * all the currency-list screen needs. The unadjusted-forex report asks a
+   * different question — "the latest rate ON OR BEFORE this date" — and its whole
+   * Decision 3 turns on whether the answer EXISTS. A double that answered with the
+   * latest rate whatever date it was asked for would price a report from a rate
+   * entered after the date it claims to be as at, and would never produce the
+   * unpriced row this report has to disclose. That is D84's class exactly.
+   *
+   * ⚠️ IT IS NOT ON THE WIRE. cored has no rate-history route; this mirrors the
+   * `currency_rate` TABLE, which the server queries directly.
+   */
+  currencyRates: { currencyID: string; on: string; rate: string }[];
+  units: UnitListItem[];
   /**
    * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
    * Unlike the day-book DayBookEntry (which keeps ledger NAMEs for display),
@@ -1186,6 +1745,41 @@ const MOCK_IMPORT_DISCLOSURE =
   "deduplicated row by row, and NOT checked against this account's number. " +
   "The server does all three and refuses files this accepts.";
 
+/**
+ * D111 — the name a statement is stored under when the operator PASTED it
+ * rather than choosing a file.
+ *
+ * ⛔ IT MIRRORS THE SERVER'S SHAPE AND NOT ITS BYTES, and that is stated rather
+ * than implied: cored derives the same sentence (`name.go`), but its fingerprint
+ * is the first eight characters of the file's SHA-256 and this one is a 32-bit
+ * FNV-1a — there is no synchronous SHA-256 in a browser. So the two names AGREE
+ * IN FORM and will differ in the parenthesis, and nothing may compare a mock
+ * name with a cored name expecting equality. What they do share is the property
+ * the defect is about: two different pastes get two different names.
+ *
+ * The alternative — leaving the mock naming pastes `""` — is worse than a
+ * divergence: it is the mock agreeing with the BUG, which is exactly how a
+ * screen's handling of a defect passes here and fails against the real server.
+ */
+function mockStatementName(
+  supplied: string,
+  periodFrom: string,
+  periodTo: string,
+  lines: number,
+  content: string,
+): string {
+  const name = (supplied ?? "").trim();
+  if (name !== "") return name;
+  const when = periodTo === periodFrom ? periodFrom : `${periodFrom} to ${periodTo}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < content.length; i++) {
+    h ^= content.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  const fingerprint = h.toString(16).padStart(8, "0");
+  return `pasted statement ${when}, ${lines} ${lines === 1 ? "row" : "rows"} (${fingerprint})`;
+}
+
 function mockEmptyMapping(): StatementColumnMapping {
   return {
     encoding: "",
@@ -1208,7 +1802,16 @@ function mockEmptyMapping(): StatementColumnMapping {
  * an id or an empty statement that reads as "nothing imported".
  */
 function mockRequireBankLedger(
-  c: { ledgers: { id: string; name: string; group: string; bankParentGroup?: string; bankAccountNumber?: string; bankIFSC?: string }[] },
+  c: {
+    ledgers: {
+      id: string;
+      name: string;
+      group: string;
+      bankParentGroup?: string;
+      bankAccountNumber?: string;
+      bankIFSC?: string;
+    }[];
+  },
   ledgerID: string,
 ) {
   const ledger = c.ledgers.find((l) => l.id === ledgerID);
@@ -1281,8 +1884,18 @@ function mockUnitsToMoney(u: bigint): Money {
 function mockParseDate(raw: string, layout: string): string {
   const digits = raw.split(/[/\-.]/).map((p) => p.trim());
   const months = [
-    "jan", "feb", "mar", "apr", "may", "jun",
-    "jul", "aug", "sep", "oct", "nov", "dec",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
   ];
   const pad = (n: string) => n.padStart(2, "0");
   const fail = () => {
@@ -1320,6 +1933,144 @@ function mockParseDate(raw: string, layout: string): string {
  * thing in this file that must not drift: a DEPOSIT becomes "D", because in our
  * books the bank asset rose, though the bank's own statement calls it a credit.
  */
+
+// ---------------------------------------------------------------------------
+// T4 SLICE 2b — the mock's matcher.
+//
+// ⚠️ READ THIS BEFORE PINNING A TIER IN A SCREEN TEST. This is a NARROWER
+// matcher than the server's, and the narrowing is deliberate and listed, in the
+// same spirit as `previewBankStatement`'s refusal to copy the synonym list:
+//
+//   * NO PARTIAL TIER. The server finds a bank row that is the sum of two
+//     vouchers, and the reverse. This does not, so a line that would be
+//     `partial` on the server is `""` (no candidate) here.
+//   * NO STRONG-KEY TIER. The server promotes a match to `exact` when a cheque
+//     number or UTR appears on the voucher. This looks only at amount, direction
+//     and date.
+//   * THE WINDOW IS FIXED. The server takes it as a parameter; this uses the
+//     same default (30 — Tally's own documented "Find Potential Matches within"
+//     default) so a screen test never pins a number the server would not send.
+//
+// ⭐ WHAT IT DOES REPRODUCE FAITHFULLY IS THE PART A SCREEN CAN GET WRONG:
+// amounts compared to the PAISE with zero tolerance, direction compared
+// directly, and AMBIGUITY IN BOTH DIRECTIONS — one row with two candidates, and
+// one voucher claimed by two rows. Those are invariant B-1, which is the rule
+// the whole slice exists to honour, and a screen that mis-renders it is the
+// failure that matters.
+// ---------------------------------------------------------------------------
+const MOCK_MATCH_WINDOW_DAYS = 30;
+
+function mockDaysApart(a: string, b: string): number {
+  const ms = Date.parse(a + "T00:00:00Z") - Date.parse(b + "T00:00:00Z");
+  return Math.abs(Math.round(ms / 86400000));
+}
+
+/** Every un-cleared, un-matched bank leg of one ledger, as a candidate shape. */
+function mockCandidateLegs(
+  c: MockCompany,
+  ledgerID: string,
+  ledgerName: string,
+): BankMatchCandidate[] {
+  const out: BankMatchCandidate[] = [];
+  for (const v of c.vouchers) {
+    const legs = v.postings.filter((p) => p.ledger === ledgerName);
+    legs.forEach((leg, legNo) => {
+      // A leg with ANY clearance is not a candidate — not "un-cleared as at a
+      // date", which is a different question. Offering a cleared leg would let a
+      // second clearance be asserted over the first.
+      if (c.bankDates.has(`${ledgerID}:${v.voucher_id}:${legNo}`)) return;
+      out.push({
+        voucher_id: v.voucher_id,
+        leg_no: legNo,
+        voucher_no: v.voucher_no,
+        class: v.class,
+        voucher_date: v.date,
+        narration: v.narration,
+        party: v.party,
+        amount: leg.amount,
+        dr_cr: leg.dr_cr as DrCr,
+        tier: "",
+        why: "",
+      });
+    });
+  }
+  return out;
+}
+
+function mockProposeMatches(
+  lines: BankStatementLine[],
+  legs: BankMatchCandidate[],
+): BankMatchProposal[] {
+  const proposals: BankMatchProposal[] = lines.map((ln) => {
+    const candidates: BankMatchCandidate[] = [];
+    for (const leg of legs) {
+      // ZERO TOLERANCE, compared as PAISE INTEGERS. A one-paisa difference is a
+      // bank charge or a different transaction, and a tolerance is how a real
+      // difference hides for a year.
+      if (mockMoneyToUnits(leg.amount) !== mockMoneyToUnits(ln.amount)) continue;
+      if (leg.dr_cr !== ln.dr_cr) continue;
+      const apart = mockDaysApart(ln.value_date, leg.voucher_date);
+      if (apart === 0) {
+        candidates.push({
+          ...leg,
+          tier: "exact",
+          why: "amount, direction and date all agree to the paisa and the day",
+        });
+      } else if (apart <= MOCK_MATCH_WINDOW_DAYS) {
+        candidates.push({
+          ...leg,
+          tier: "potential",
+          why:
+            `amount and direction agree to the paisa; the voucher is dated ${leg.voucher_date} ` +
+            `and the bank ${ln.value_date} — a cheque clearing late is ordinary`,
+        });
+      }
+    }
+    candidates.sort((a, b) => (a.tier === "exact" ? 0 : 1) - (b.tier === "exact" ? 0 : 1));
+    const bestTier = candidates[0]?.tier ?? "";
+    const atBest = candidates.filter((x) => x.tier === bestTier).length;
+    return {
+      line_id: ln.id,
+      line_no: ln.line_no,
+      value_date: ln.value_date,
+      description: ln.description,
+      amount: ln.amount,
+      dr_cr: ln.dr_cr,
+      bank_reference: ln.bank_reference || undefined,
+      cheque_number: ln.cheque_number || undefined,
+      best_tier: bestTier,
+      candidates,
+      ambiguous: atBest > 1,
+      acceptable_in_bulk: atBest === 1 && bestTier === "exact",
+    };
+  });
+
+  // ⛔ THE MIRROR AMBIGUITY: one leg claimed by more than one bank row. Each of
+  // those rows looks perfectly unambiguous ON ITS OWN, which is why this pass
+  // exists — without it both would be offered for bulk acceptance and the second
+  // would collide after the first had already asserted a clearance.
+  const claimants = new Map<string, number[]>();
+  proposals.forEach((p, i) => {
+    for (const cnd of p.candidates) {
+      if (cnd.tier !== p.best_tier) continue;
+      const k = `${cnd.voucher_id}:${cnd.leg_no}`;
+      claimants.set(k, [...(claimants.get(k) ?? []), i]);
+    }
+  });
+  for (const idxs of claimants.values()) {
+    if (idxs.length < 2) continue;
+    for (const i of idxs) {
+      proposals[i]!.ambiguous = true;
+      proposals[i]!.acceptable_in_bulk = false;
+      proposals[i]!.contested_by = idxs
+        .filter((o) => o !== i)
+        .map((o) => proposals[o]!.line_no)
+        .sort((a, b) => a - b);
+    }
+  }
+  return proposals;
+}
+
 function mockParseStatement(
   content: string,
   m: StatementColumnMapping,
@@ -1374,7 +2125,8 @@ function mockParseStatement(
       bank_reference: cell(r, m.bank_reference),
       cheque_number: cell(r, m.cheque_number),
     };
-    if (bal !== "") line.running_balance = mockUnitsToMoney(mockMoneyToUnits(bal));
+    if (bal !== "")
+      line.running_balance = mockUnitsToMoney(mockMoneyToUnits(bal));
     out.push(line);
   });
   return out;
@@ -1471,6 +2223,7 @@ const MOCK_VOCABULARY: SecurityVocabulary = {
     "report:anomalies",
     "report:gstr1",
     "report:gstr3b",
+    "report:gstr9",
     "report:reconciliation-queue",
     "*",
   ],
@@ -1569,6 +2322,113 @@ function validateDefaultAccess(da: string): void {
 export interface MockClientOptions {
   /** Seed a demo company so reports are non-empty. Default true. */
   seed?: boolean;
+  /**
+   * THE AGENT PLANE's tables, pre-filled (W2). The mock has no agent loop, so a
+   * test that wants something in the approval inbox or the side panel seeds it
+   * here. `model: true` makes startAgentRun record a run instead of answering
+   * 503 AGENT_UNCONFIGURED (the shipped server default, and the mock's).
+   */
+  agent?: {
+    model?: boolean;
+    runs?: AgentRun[];
+    approvals?: AgentApproval[];
+    events?: Record<string, AgentEvent[]>;
+    /** W2 breadth: pre-set autonomy rows. */
+    autonomy?: AgentAutonomyRow[];
+    /** Whether the signed-in member is an Owner (default true). */
+    owner?: boolean;
+  };
+  /**
+   * THE INSIGHT ENGINE's rows, pre-filled (W4). The mock has no detectors —
+   * they are Go and their numbers are evidence-checked there — so a screen
+   * test seeds the inbox it wants here. Default: empty.
+   */
+  insights?: Insight[];
+}
+
+/** What a mock client holds of the agent plane — per client, like `companies`. */
+interface MockAgentState {
+  model: boolean;
+  runs: AgentRun[];
+  approvals: AgentApproval[];
+  events: Map<string, AgentEvent[]>;
+  decisions: ({ approvalID: string } & AgentDecisionRequest)[];
+  /** W2 breadth: the autonomy table, and whether the caller is an Owner. */
+  autonomy: AgentAutonomyRow[];
+  owner: boolean;
+  /** Set by createMockClientWith: marks one of its ledgers blocked (tests). */
+  blockLedger?: (companyID: string, ledgerID: string, reason: string) => void;
+}
+
+/**
+ * The keys the mock offers for autonomy. A SECOND COPY of the server's
+ * autonomyKeys(), trimmed to the ones a screen test needs; the live client
+ * reads the server's list, which is the authority.
+ */
+const MOCK_AUTONOMY_KEYS = [
+  "alter bank-reconciliation",
+  "alter payment",
+  "create journal",
+  "create master",
+  "create payment",
+  "create receipt",
+  "create sales",
+];
+
+const mockAgentStates = new WeakMap<CoredClient, MockAgentState>();
+
+/**
+ * Every decision a mock client has recorded, in order (tests only).
+ *
+ * It exists so a test can assert what was DECIDED — the one thing a screen in
+ * this plane sends that matters — and, as importantly, what was NOT: a prefilled
+ * voucher whose Ctrl+A posted through createVoucher instead of through here
+ * would leave the approval pending and put a second, unapproved voucher on the
+ * books the moment somebody approved the first.
+ */
+export function mockAgentDecisions(
+  client: CoredClient,
+): readonly ({ approvalID: string } & AgentDecisionRequest)[] {
+  return mockAgentStates.get(client)?.decisions ?? [];
+}
+
+/**
+ * Add an approval to a mock client's inbox after construction (tests only) —
+ * for a fixture whose ledger ids exist only once the test has created the
+ * ledgers through the same client.
+ */
+export function mockAddAgentApproval(client: CoredClient, a: AgentApproval): void {
+  const st = mockAgentStates.get(client);
+  if (!st) throw new Error("mockAddAgentApproval: not a mock client");
+  st.approvals.push(JSON.parse(JSON.stringify(a)) as AgentApproval);
+}
+
+function newMockAgentState(opts: MockClientOptions): MockAgentState {
+  // Deep-copied so a decision never mutates a test's own fixture object — a
+  // fixture reused by a second test would otherwise arrive already decided.
+  return {
+    model: opts.agent?.model ?? false,
+    runs: (opts.agent?.runs ?? []).map((r) => JSON.parse(JSON.stringify(r)) as AgentRun),
+    approvals: (opts.agent?.approvals ?? []).map(
+      (a) => JSON.parse(JSON.stringify(a)) as AgentApproval,
+    ),
+    events: new Map(
+      Object.entries(opts.agent?.events ?? {}).map(([k, v]) => [k, v.slice()]),
+    ),
+    decisions: [],
+    autonomy: (opts.agent?.autonomy ?? []).map((r) => ({ ...r })),
+    owner: opts.agent?.owner ?? true,
+  };
+}
+
+/**
+ * Mark a mock ledger BORN BLOCKED, as an agent's commit would (tests only):
+ * the mock has no agent loop to create one.
+ */
+export function mockBlockLedger(client: CoredClient, companyID: string, ledgerID: string, reason: string): void {
+  const block = mockAgentStates.get(client)?.blockLedger;
+  if (!block) throw new Error("mockBlockLedger: not a mock client");
+  block(companyID, ledgerID, reason);
 }
 
 /** Construct a fresh in-memory CoredClient. State is isolated per instance. */
@@ -1626,6 +2486,117 @@ function mockCostCentres(): CostCentre[] {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// T11 — BUDGETS (migrations 0085/0086)
+// ---------------------------------------------------------------------------
+//
+// ⛔ THE FIXTURE DELIBERATELY MIXES THE TWO BASES, because the mixed case is the
+// one a screen gets wrong. A plan holding a CLOSING_BALANCE line and a
+// NETT_TRANSACTIONS line has NO addable grand total — a position plus a flow is
+// not a quantity — and `totals_are_addable: false` with three ZERO grand totals
+// is the shape every consumer must handle. A single-basis fixture would let a
+// screen draw a footer unconditionally and pass every test.
+//
+// ⛔ AND IT CARRIES ONE ROW OF EACH AWKWARD STATUS: an UNSPENT budget (nothing
+// posted), an UNBUDGETED actual in its own array with `variance_percent: null`,
+// and an ordinary OVER. A fixture of well-behaved rows is how a screen ships with
+// no "no budget set" rendering at all and a divide-by-zero in production.
+
+function mockBudgets(): Budget[] {
+  return [
+    {
+      id: "budget-fy26",
+      name: "FY 2026-27 Plan",
+      from_date: "2026-04-01",
+      to_date: "2027-03-31",
+      line_count: 3,
+      created_by: "seed",
+      created_at: "2026-04-01T00:00:00Z",
+    },
+    {
+      // An EMPTY plan, on purpose: the variance report over it is a page of
+      // unbudgeted actuals, which reads as "nothing was planned" and is
+      // indistinguishable from "the plan was never keyed". A screen must be able
+      // to show that a plan has no lines BEFORE drawing a report from it.
+      id: "budget-empty",
+      name: "Draft Plan (no lines yet)",
+      from_date: "2026-04-01",
+      to_date: "2027-03-31",
+      line_count: 0,
+      created_by: "seed",
+      created_at: "2026-04-02T00:00:00Z",
+    },
+  ];
+}
+
+function mockBudgetLines(budgetID: string): BudgetLine[] {
+  if (budgetID !== "budget-fy26") return [];
+  const line = (
+    id: string,
+    dimension: BudgetDimension,
+    targetID: string,
+    targetName: string,
+    nature: string,
+    basis: BudgetBasis,
+    drCr: string,
+    amount: string,
+    note = "",
+  ): BudgetLine => ({
+    id,
+    budget_id: budgetID,
+    dimension,
+    target_id: targetID,
+    target_name: targetName,
+    cost_category_id: "",
+    cost_category_name: "",
+    nature,
+    basis,
+    dr_cr: drCr,
+    amount,
+    note,
+    basis_means:
+      basis === "CLOSING_BALANCE"
+        ? "a POSITION as at the budget period's end date, with the opening balance folded in"
+        : "MOVEMENT inside the budget period, with the opening balance excluded",
+    created_at: "2026-04-01T00:00:00Z",
+  });
+  return [
+    line(
+      "budget-line-travel",
+      "LEDGER",
+      "ledger-travel",
+      "Travel Expenses",
+      "EXPENSE",
+      "NETT_TRANSACTIONS",
+      "D",
+      "500000.0000",
+      "assumes two regional trips per quarter",
+    ),
+    line(
+      "budget-line-rent",
+      "LEDGER",
+      "ledger-rent",
+      "Office Rent",
+      "EXPENSE",
+      "NETT_TRANSACTIONS",
+      "D",
+      "120000.0000",
+    ),
+    // The CLOSING_BALANCE line — this is what makes the plan mixed-basis.
+    line(
+      "budget-line-debtors",
+      "GROUP",
+      "group-sundry-debtors",
+      "Sundry Debtors",
+      "ASSET",
+      "CLOSING_BALANCE",
+      "D",
+      "4000000.0000",
+      "year-end receivables ceiling",
+    ),
+  ];
+}
+
 // Departments 60/40 and Branches 70/30 — each axis totalling the SAME 1,00,000.
 function mockAllocationFor(centreID: string): Money {
   switch (centreID) {
@@ -1642,8 +2613,74 @@ function mockAllocationFor(centreID: string): Money {
   }
 }
 
+/**
+ * The mock's year-end lock. Module-level so a screen test can close, re-open
+ * and close again through one client and see the state move — a mock that
+ * forgot between calls would let a screen pass while doing nothing.
+ */
+let mockClosedThrough: string | null = null;
+let mockClosedAt: string | null = null;
+let mockClosedBy: string | null = null;
+
+function mockClosure(): BooksClosure {
+  return {
+    closed: mockClosedThrough !== null,
+    closedThrough: mockClosedThrough,
+    closedAt: mockClosedAt,
+    closedBy: mockClosedBy,
+  };
+}
+
+/** Reset the mock's year-end lock between tests. */
+export function resetMockBooksClosure(): void {
+  mockClosedThrough = null;
+  mockClosedAt = null;
+  mockClosedBy = null;
+}
+
 export function createMockClient(opts: MockClientOptions = {}): CoredClient {
+  const agentState = newMockAgentState(opts);
+  const client = createMockClientWith(opts, agentState);
+  mockAgentStates.set(client, agentState);
+  return client;
+}
+
+function createMockClientWith(
+  opts: MockClientOptions,
+  agentState: MockAgentState,
+): CoredClient {
   const companies = new Map<string, MockCompany>();
+  // W4: the mock's insight tables. No detector runs here (see
+  // MockClientOptions.insights); verdicts, suppressions and digests are
+  // recorded exactly as the server's routes record them.
+  const insightState = {
+    insights: (opts.insights ?? []).map((i) => ({ ...i, verdicts: { ...i.verdicts } })),
+    suppressions: [] as InsightSuppression[],
+    digests: new Map<string, InsightDigest>(),
+  };
+  const mockDigestItems = () =>
+    insightState.insights
+      .filter((i) => i.state === "open" && !insightState.suppressions.some((s) => s.type === i.type && (s.entity_key === "" || s.entity_key === i.entity_key)))
+      .slice(0, 5)
+      .map((i, n) => ({
+        insight_id: i.id, type: i.type, title: i.title, fingerprint: i.fingerprint, entity_name: i.entity_name,
+        rank: n + 1, score: 0, impact_inr: i.impact_inr, p_real: 0, actionability: 0, novelty: 1, affinity: 1,
+        payload: i.payload, voucher_ids: i.voucher_ids, text: i.summary,
+      }));
+
+  /**
+   * PRINT TEMPLATES (track C): one row per (company, doc_kind), which is exactly
+   * `print_template`'s UNIQUE constraint.
+   *
+   * ⛔ PER-CLIENT AND NOT MODULE-SCOPED, and this was a real defect before it was
+   * one line. A module-scoped map is shared by every `createMockClient()` in a
+   * process, so one test's save leaked into the next test's "this company has
+   * customised nothing" — which failed loudly here, but in a suite ordered
+   * differently would have made a test pass for the wrong reason. `companies`
+   * above is per-client for the same reason; state that models a DATABASE belongs
+   * to the client that pretends to be one.
+   */
+  const printTemplates = new Map<string, PrintTemplateOverrides>();
 
   // =========================================================================
   // T3 mock state and helpers
@@ -1789,7 +2826,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * the company's purchase commitments. "Forbidden" would confirm the id names
    * something real; "not found" is the honest answer for this path. A mock that
    * served it would let a screen be built against a leak. */
-  function mockFindOrder(direction: OrderDirection, orderID: string): MockOrder {
+  function mockFindOrder(
+    direction: OrderDirection,
+    orderID: string,
+  ): MockOrder {
     const o = mockOrders.find((x) => x.order_id === orderID);
     if (!o || o.direction !== direction) {
       throw new ApiError(404, `no such ${direction.toLowerCase()} order`);
@@ -1963,7 +3003,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     asOn?: string,
   ): Promise<OutstandingsResponse> {
     const c = ensure(companyID);
-    const wantGroup = kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
+    const wantGroup =
+      kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
     // ⛔⛔ TWO QUESTIONS, TWO VARIABLES — AND THIS MOCK USED TO CONFLATE THEM
     // EXACTLY AS CORED DID (D86). `bound` is the date the ROWS are limited to
     // ("" = not limited); `agedOn` is the day the ageing is measured against and
@@ -1981,7 +3022,19 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
     // Net every reference on a CURRENT, non-deleted voucher. c.views holds
     // exactly those: an ALTER restates the view in place and a DELETE removes it.
-    const net = new Map<string, { ledgerID: string; ref: string; units: bigint; due: string }>();
+    // ⭐ THE KEY IS `ledger \0 ref \0 currency-code` SINCE T8 STEP 6, and `code` is
+    // on the VALUE as well so the emitted row does not have to re-split the key.
+    const net = new Map<
+      string,
+      {
+        ledgerID: string;
+        ref: string;
+        code: string;
+        units: bigint;
+        foreign: bigint;
+        due: string;
+      }
+    >();
     for (const view of c.views.values()) {
       if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
       for (const b of view.bill_allocations) {
@@ -1992,17 +3045,97 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           b.dr_cr === "D"
             ? mockMoneyToUnits(b.amount)
             : -mockMoneyToUnits(b.amount);
-        const key = `${b.ledger_id} ${b.ref_name}`;
+        // ⭐⭐ T8 STEP 6 — THE CURRENCY IS PART OF THE NETTING KEY, exactly as
+        // cored's GROUP BY is (Q5: "a ref_name that appears under two different
+        // currencies is a data error, not a sum"). ⛔ A DOUBLE THAT NETTED THEM
+        // TOGETHER WOULD BE LOOSER THAN THE SERVER, which is D84 and the reason
+        // this whole residue block exists: 61 test files build books through here.
+        //
+        // ⚠️ `On Account` IS COLLAPSED TO BASE, on BOTH sides, because cored
+        // collapses it: the residue is a difference of sums over many rates and
+        // has no single currency, and an explicit ON_ACCOUNT allocation carrying
+        // one would otherwise land in a different bucket from the derived residue
+        // that cancels it — two rows that each look right.
+        const code = b.ref_name === ON_ACCOUNT_REF ? "" : (b.currency ?? "");
+        const key = `${b.ledger_id}\u0000${b.ref_name}\u0000${code}`;
         const cur = net.get(key) ?? {
           ledgerID: b.ledger_id,
           ref: b.ref_name,
+          code,
           units: 0n,
+          foreign: 0n,
           due: "",
         };
         cur.units += kind === "PAYABLE" ? -signed : signed;
+        // ⛔ THE FOREIGN COLUMN IS SIGNED THE SAME WAY AND ZERO IN THE On Account
+        // BUCKET. `foreign_amount` is absent on a base row, which is 0 here — not
+        // NaN, and not the base amount.
+        if (b.ref_name !== ON_ACCOUNT_REF && b.foreign_amount) {
+          const sf =
+            b.dr_cr === "D"
+              ? mockMoneyToUnits(b.foreign_amount)
+              : -mockMoneyToUnits(b.foreign_amount);
+          cur.foreign += kind === "PAYABLE" ? -sf : sf;
+        }
         // The EARLIEST due date on the reference, as the server takes MIN().
-        if (b.due_date && (cur.due === "" || b.due_date < cur.due)) cur.due = b.due_date;
+        if (b.due_date && (cur.due === "" || b.due_date < cur.due))
+          cur.due = b.due_date;
         net.set(key, cur);
+      }
+    }
+
+    // ⛔⛔ THE ON-ACCOUNT RESIDUE (D106), MODELLED HERE BECAUSE A MOCK THAT IS
+    // LOOSER THAN CORED IS A SOURCE OF FALSE GREEN — which is D84, and three lanes
+    // hit it. cored reports the part of a party's balance that names no reference
+    // as one un-aged `On Account` row, via the identity
+    //
+    //     On Account = the ledger's whole balance − every named reference
+    //
+    // so the report reconciles to Sundry Debtors/Creditors by construction. If
+    // this double kept reporting only references, 61 test files would go on
+    // building books whose two reports silently disagree, and the screen tests
+    // would prove the old behaviour.
+    //
+    // ⚠️ IT IS THE SAME TWO PASSES AS THE SERVER'S: add every party POSTING, then
+    // take every named reference back out. A fully referenced voucher contributes
+    // +X and −X and vanishes, which is why an ordinary book grows no such row.
+    // ⚠️ THE On Account KEY CARRIES AN EMPTY CURRENCY, and it must be spelled the
+    // same way the bill-allocation key spells base, or the collapse silently
+    // becomes two buckets that never meet.
+    const onAcctKey = (ledgerID: string) =>
+      `${ledgerID}\u0000${ON_ACCOUNT_REF}\u0000`;
+    for (const view of c.views.values()) {
+      if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
+      const bump = (ledgerID: string, units: bigint) => {
+        const ledger = c.ledgers.find((l) => l.id === ledgerID);
+        if (!ledger || ledger.group !== wantGroup) return;
+        const key = onAcctKey(ledgerID);
+        const cur = net.get(key) ?? {
+          ledgerID,
+          ref: ON_ACCOUNT_REF,
+          code: "",
+          units: 0n,
+          foreign: 0n,
+          due: "",
+        };
+        // ⛔ NO FOREIGN FIGURE ON THE RESIDUE, matching cored's residue branches:
+        // `posting` DOES carry a currency and it is deliberately not read, because
+        // these two passes compute a DIFFERENCE OF SUMS whose halves are keyed on
+        // different tables. Base-only keeps D106's identity true by construction.
+        cur.units += kind === "PAYABLE" ? -units : units;
+        net.set(key, cur);
+      };
+      for (const p of view.postings ?? []) {
+        bump(
+          p.ledger_id,
+          p.dr_cr === "D" ? mockMoneyToUnits(p.amount) : -mockMoneyToUnits(p.amount),
+        );
+      }
+      for (const b of view.bill_allocations) {
+        bump(
+          b.ledger_id,
+          b.dr_cr === "D" ? -mockMoneyToUnits(b.amount) : mockMoneyToUnits(b.amount),
+        );
       }
     }
 
@@ -2015,24 +3148,47 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const slabTotals = new Map<string, bigint>();
     const byParty = new Map<string, OutstandingParty>();
     let total = 0n;
+    let onAccountUnits = 0n;
 
-    for (const { ledgerID, ref, units, due } of [...net.values()].sort((a, b) =>
-      a.ref.localeCompare(b.ref),
-    )) {
+    // ⛔⛔ T8 STEP 6 — THE CONFLICT COUNT IS TAKEN BEFORE THE ROWS ARE BUILT, over
+    // the groups that SURVIVE the zero skip. A reference is in conflict only once
+    // every one of its currency groups has been seen, so it cannot be decided while
+    // the rows are being emitted — and counting closed groups too would flag a
+    // correctly settled bill for ever. cored does the same in a second pass.
+    const survives = (u: bigint, f: bigint) => u !== 0n || f !== 0n;
+    const groupsPerRef = new Map<string, number>();
+    for (const g of net.values()) {
+      if (!survives(g.units, g.foreign)) continue;
+      const rk = `${g.ledgerID}\u0000${g.ref}`;
+      groupsPerRef.set(rk, (groupsPerRef.get(rk) ?? 0) + 1);
+    }
+
+    for (const { ledgerID, ref, code, units, foreign, due } of [
+      ...net.values(),
+    ].sort((a, b) => a.ref.localeCompare(b.ref) || a.code.localeCompare(b.code))) {
       // A fully-settled bill nets to zero and is not outstanding.
-      if (units === 0n) continue;
+      //
+      // ⛔ SINCE STEP 6 THAT IS TWO QUESTIONS. A bill with nothing left in rupees
+      // and $400 left in dollars is the row an exporter has to see, and a
+      // base-only skip drops it off the report entirely.
+      if (!survives(units, foreign)) continue;
       const ledger = c.ledgers.find((l) => l.id === ledgerID);
       if (!ledger) continue;
+      // ⛔ THE ON-ACCOUNT ROW IS UN-AGED AND IN NO SLAB, exactly as cored leaves
+      // it: money with no bill has no due date to be overdue against, and ageing
+      // it would file it in the FIRST slab as the freshest debt on the party.
+      const onAccount = ref === ON_ACCOUNT_REF;
       const overdue =
-        due === ""
+        onAccount || due === ""
           ? 0
           : Math.max(
               0,
-              Math.round(
-                (Date.parse(agedOn) - Date.parse(due)) / 86_400_000,
-              ),
+              Math.round((Date.parse(agedOn) - Date.parse(due)) / 86_400_000),
             );
-      const slab = SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ?? "180+ days";
+      const slab = onAccount
+        ? ""
+        : (SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ??
+          "180+ days");
       const party =
         byParty.get(ledgerID) ??
         ({
@@ -2048,10 +3204,18 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         due_date: due,
         overdue_days: overdue,
         slab,
+        on_account: onAccount,
+        currency_code: code,
+        foreign_pending: mockUnitsToMoney(foreign),
+        currency_conflict:
+          (groupsPerRef.get(`${ledgerID}\u0000${ref}`) ?? 0) > 1,
       });
       party.pending = mockUnitsToMoney(mockMoneyToUnits(party.pending) + units);
       byParty.set(ledgerID, party);
-      slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
+      // ⛔ ON-ACCOUNT MONEY IS IN NO SLAB, so it is accumulated separately and the
+      // slab column is deliberately SHORT of the total by exactly this much.
+      if (onAccount) onAccountUnits += units;
+      else slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
       total += units;
     }
 
@@ -2062,7 +3226,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // NO DATE LIMIT sentence. Echoing `agedOn` here is the defect.
       as_on: bound,
       aged_as_on: agedOn,
-      parties: [...byParty.values()].sort((a, b) => a.ledger.localeCompare(b.ledger)),
+      on_account_total: mockUnitsToMoney(onAccountUnits),
+      parties: [...byParty.values()].sort((a, b) =>
+        a.ledger.localeCompare(b.ledger),
+      ),
       slab_totals: SLABS.filter(([l]) => slabTotals.has(l)).map(([label]) => ({
         label,
         amount: mockUnitsToMoney(slabTotals.get(label) ?? 0n),
@@ -2070,6 +3237,13 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       total: mockUnitsToMoney(total),
     };
   }
+
+  agentState.blockLedger = (companyID, ledgerID, reason) => {
+    const l = ensure(companyID).ledgers.find((x) => x.id === ledgerID);
+    if (!l) throw new Error(`mockBlockLedger: no ledger ${ledgerID}`);
+    l.blocked = true;
+    l.blockedReason = reason;
+  };
 
   function ensure(companyID: string): MockCompany {
     let c = companies.get(companyID);
@@ -2088,6 +3262,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         allowNegativeStock: false,
         fyStartDate: "2026-04-01",
         baseCurrency: "INR",
+        // "" is "not chosen", the state every company starts in.
+        forexGainLossLedgerID: "",
         profile: defaultProfile("2026-04-01"),
         ledgers: [],
         // Every company is seeded with exactly one system location, mirroring
@@ -2097,11 +3273,25 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         godowns: [mainLocation(companyID)],
         stockItems: [],
         batches: [],
+        stockGroups: [],
+        currencies: [],
+        currencyRates: [],
+        // "Nos" is seeded with every company by migration 0005's
+        // seed_phase1_voucher_types, and the item form's unit picker reads this
+        // list — a fresh company with an empty one could not create an item at
+        // all (the form refuses an item with no unit, deliberately).
+        units: [seedUnit(companyID, "Nos", "Numbers")],
         vouchers: [],
+        acceptedDrafts: new Map(),
         bankDates: new Map(),
         deductorStatuses: new Map(),
         bankStatements: new Map(),
+        bankMatches: new Map(),
         tcsDeclarations: new Map(),
+        employees: [],
+        salaryComponents: new Map(),
+        statutoryElections: new Map(),
+        payRuns: new Map(),
         tdsChallans: new Map(),
         tdsAllocations: new Map(),
         // The fixture deductions are seeded into EVERY company, not just the demo
@@ -2148,6 +3338,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       allowNegativeStock: false,
       fyStartDate: "2026-04-01",
       baseCurrency: "INR",
+      // "" is "not chosen", the state every company starts in.
+      forexGainLossLedgerID: "",
       profile: defaultProfile("2026-04-01"),
       ledgers: [
         { id: "ledger-cash", name: "Cash", group: "Cash-in-Hand" },
@@ -2175,6 +3367,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         },
       ],
       godowns: [mainLocation(demoID)],
+      stockGroups: [],
+      currencies: [],
+      currencyRates: [],
+      units: [seedUnit(demoID, "Nos", "Numbers")],
       // Two demo items with DIFFERENT GST rates, so an item invoice keyed
       // against the seeded company exercises the multi-rate grouping rather
       // than the single-rate happy path.
@@ -2187,6 +3383,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           gst_rate_pct: "18.0000",
           valuation_method: "WEIGHTED_AVG",
           is_system: false,
+          // Ungrouped, like every item that predates T10 — a real state, and the
+          // one the Stock Summary's ungrouped bucket exists to report.
+          stock_group: "",
         },
         {
           id: "stock-gasket",
@@ -2196,14 +3395,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           gst_rate_pct: "12.0000",
           valuation_method: "WEIGHTED_AVG",
           is_system: false,
+          stock_group: "",
         },
       ],
       batches: [],
       vouchers: [],
+      acceptedDrafts: new Map(),
       bankDates: new Map(),
       deductorStatuses: new Map(),
       bankStatements: new Map(),
+      bankMatches: new Map(),
       tcsDeclarations: new Map(),
+      employees: [],
+      salaryComponents: new Map(),
+      statutoryElections: new Map(),
+      payRuns: new Map(),
       tdsChallans: new Map(),
       tdsAllocations: new Map(),
       tdsDeductions: mockDeductionFixtures(),
@@ -2238,6 +3444,42 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * Dr/Cr totals AND a parallel set of REAL-ledger_id PostingViews (for the
    * GET /vouchers/{id} hydration path). Canonicalize dr_cr to "D"/"C".
    */
+  /**
+   * Echo T8's three forex values onto a posting or bill-allocation VIEW —
+   * present only when the row is foreign, exactly as the live GET does
+   * (server.go's addForexJSON).
+   *
+   * ⛔⛔ ABSENT ON A BASE ROW, NEVER EMPTY-STRINGED. `currency_id: ""` is not
+   * "no currency": it is a two-of-three triple, which the live server refuses.
+   * A mock that emitted empty keys would let a client that echoes the GET back
+   * verbatim pass every offline test and 422 against cored on the first base
+   * voucher — the exact class of divergence the mock/cored contract test
+   * exists to catch.
+   *
+   * ⚠️ THE RATE IS PASSED THROUGH UNCHANGED, NOT RE-FORMATTED. It is
+   * NUMERIC(19,10) on the server and every money helper in this file is
+   * fixed-4; running it through `mockUnitsToMoney` would hand back 83.6512 and
+   * make the mock the one place where the bug is invisible.
+   */
+  function mockForex(
+    c: MockCompany,
+    row: { currency_id?: string; foreign_amount?: string; rate?: string },
+  ): {
+    currency_id?: string;
+    currency?: string;
+    foreign_amount?: string;
+    rate?: string;
+  } {
+    if (!row.currency_id) return {};
+    const cur = (c.currencies ?? []).find((x) => x.id === row.currency_id);
+    return {
+      currency_id: row.currency_id,
+      currency: cur?.code ?? "",
+      foreign_amount: row.foreign_amount ?? "",
+      rate: row.rate ?? "",
+    };
+  }
+
   function summarize(
     c: MockCompany,
     req: VoucherRequest,
@@ -2267,6 +3509,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ledger: ledger?.name ?? p.ledger_id,
         dr_cr: dc,
         amount,
+        // ⛔ AND RETAIN T8's THREE FOREX VALUES, for exactly the reason the
+        // ledger_id is retained one line up. A mock that dropped them would
+        // make every offline and component-test round trip of a foreign
+        // voucher look CORRECT while the live one lost the currency — and the
+        // mock is the oracle those tests trust. See mockForex.
+        ...mockForex(c, p),
       });
     }
     return { postings, postingViews, debit, credit };
@@ -2748,7 +3996,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           c.stockItems.find((s) => s.id === count.stock_item_id)?.name ??
           count.stock_item_id;
         refuse(
-          `physical count line ${i + 1} (${name}): the count is ${q4str(delta)} above the books, and bringing a surplus in at zero cost would write the item's weighted-average value down; state the rate the extra units are carried at`,
+          `physical count line ${i + 1} (${name}): the count is ${q4str(delta)} above the books, and bringing a surplus in at zero cost would carry the extra units at nothing and write the item's stock value down; state the rate the extra units are carried at`,
         );
       }
       out.push({
@@ -2836,9 +4084,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    *     parallel, so a posting-wide total would refuse correct parallel allocation and
    *     no total at all would let cost go silently unattributed.
    */
-  function costAllocationViews(
-    req: VoucherRequest,
-  ): CostAllocationView[] {
+  function costAllocationViews(req: VoucherRequest): CostAllocationView[] {
     const as = req.cost_allocations ?? [];
     if (as.length === 0) return [];
     const postings = req.postings ?? [];
@@ -2855,7 +4101,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const centres = mockCostCentres();
     const out: CostAllocationView[] = [];
     for (const a of as) {
-      if (!Number.isInteger(a.posting_seq) || a.posting_seq < 0 || a.posting_seq >= postings.length) {
+      if (
+        !Number.isInteger(a.posting_seq) ||
+        a.posting_seq < 0 ||
+        a.posting_seq >= postings.length
+      ) {
         throw new ApiError(
           422,
           postings.length === 0
@@ -2893,7 +4143,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       out.push({
         posting_seq: a.posting_seq,
         cost_category_id: a.cost_category_id,
-        cost_category_name: cats.find((c) => c.id === a.cost_category_id)?.name ?? "",
+        cost_category_name:
+          cats.find((c) => c.id === a.cost_category_id)?.name ?? "",
         cost_centre_id: a.cost_centre_id,
         cost_centre_name: centre?.path ?? "",
         amount: Number.parseFloat(a.amount).toFixed(4),
@@ -3100,13 +4351,15 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    *     Debtors disagree, and nothing reconciles them.
    */
   function billViews(
+    company: MockCompany,
     req: VoucherRequest,
     voucherNo: string,
     postings: readonly { ledger_id: string; dr_cr: string; amount: string }[],
   ): BillAllocationView[] {
     const bs = req.bill_allocations ?? [];
     if (bs.length === 0) return [];
-    const canonDC = (dc: string) => (dc.trim().toUpperCase().startsWith("D") ? "D" : "C");
+    const canonDC = (dc: string) =>
+      dc.trim().toUpperCase().startsWith("D") ? "D" : "C";
     // ⚠️ The SHARED scaled-integer helpers, never a local copy and never a float.
     // The invariant is exact to the paisa, and a second implementation of money
     // parsing is precisely how two places in one file come to disagree.
@@ -3122,7 +4375,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       const dc = canonDC(b.dr_cr);
       const signed = dc === "C" ? -units(b.amount) : units(b.amount);
-      signedByLedger.set(b.ledger_id, (signedByLedger.get(b.ledger_id) ?? 0n) + signed);
+      signedByLedger.set(
+        b.ledger_id,
+        (signedByLedger.get(b.ledger_id) ?? 0n) + signed,
+      );
       out.push({
         ledger_id: b.ledger_id,
         // THE SUBSTITUTION. An empty name is the normal case for a reference that
@@ -3132,12 +4388,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         dr_cr: dc,
         amount: mockUnitsToMoney(units(b.amount)),
         due_date: b.due_date ?? "",
+        ...mockForex(company, b),
       });
     }
     const postedByLedger = new Map<string, bigint>();
     for (const p of postings) {
-      const signed = canonDC(p.dr_cr) === "C" ? -units(p.amount) : units(p.amount);
-      postedByLedger.set(p.ledger_id, (postedByLedger.get(p.ledger_id) ?? 0n) + signed);
+      const signed =
+        canonDC(p.dr_cr) === "C" ? -units(p.amount) : units(p.amount);
+      postedByLedger.set(
+        p.ledger_id,
+        (postedByLedger.get(p.ledger_id) ?? 0n) + signed,
+      );
     }
     for (const [lid, got] of signedByLedger) {
       const want = postedByLedger.get(lid) ?? 0n;
@@ -3260,6 +4521,38 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     req: VoucherRequest,
   ): VoucherResponse {
     const c = ensure(companyID);
+    // ⛔⛔ §7.3 B — THE ONCE-ONLY ACCEPT, AND IT IS FIRST FOR THE REASON THE
+    // SERVER'S IS INSIDE THE TRANSACTION: the loser must write NOTHING. Not a
+    // voucher, not a number, not a day-book row. A mock that refused after
+    // pushing the entry would still be "correct" about the status code and would
+    // hide the only failure that matters.
+    //
+    // Mirrors migration 0077 exactly: keyed on the draft id alone (never on the
+    // body — a second machine can send a different amount for the same bill), and
+    // TERMINAL, so deleting the voucher does not put the bill back in the inbox.
+    const draftID = req.draft_id ?? "";
+    if (draftID !== "") {
+      const won = c.acceptedDrafts.get(draftID);
+      if (won) {
+        // The refusal shape is insightd's, because that is the one shape
+        // draftAccept.ts parses — `detail.code` picks the sentence, and
+        // `accepted_voucher_no` is the fact the operator needs. `error` is carried
+        // too because http.ts reads THAT key and nothing else to build
+        // ApiError.message. Both, exactly as cored's writeDraftAlreadyAccepted does.
+        const message =
+          `ledger: draft ${draftID} was already accepted as voucher ` +
+          `${won.voucher_no || won.voucher_id}; nothing was posted`;
+        throw new ApiError(409, message, {
+          error: message,
+          detail: {
+            code: "draft_already_accepted",
+            draft_id: draftID,
+            accepted_voucher_no: won.voucher_no,
+            accepted_voucher_id: won.voucher_id,
+          },
+        });
+      }
+    }
     const voucherID = id("voucher");
     // STOCK-ONLY CLASSES first: they are refused a money side outright, and a
     // Physical Stock has its correction DERIVED here (against the books as they
@@ -3323,7 +4616,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // ⚠️ Passed the FINAL posting list and the ALLOCATED number, because both
       // are things only the server knows: an item invoice's postings were
       // generated here, and the number was minted here.
-      bill_allocations: billViews(req, voucherNo, postingViews),
+      bill_allocations: billViews(c, req, voucherNo, postingViews),
       inventory: inventoryViews(c, req),
       // The ORDER LINKS. Validated first (fulfilmentViews throws the server's own
       // refusals), so an over-fulfilment never reaches the store. `null` because a
@@ -3344,6 +4637,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       tds: tdsView(req.tds),
       tcs: tcsView(req.tcs),
     });
+    // The draft is SPENT, and only now — after every write this call makes has
+    // landed. Recorded on CREATE only: an alter or a delete restating a draft id
+    // would repoint provenance and consume a draft whose bill never reached the
+    // books, which is why the server strips it for any op but CREATE.
+    if (draftID !== "") {
+      c.acceptedDrafts.set(draftID, {
+        voucher_id: voucherID,
+        voucher_no: voucherNo,
+      });
+    }
     return {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),
@@ -3453,7 +4756,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       postings: postingViews,
       // An ALTER keeps the voucher's existing number, so that is what an unnamed
       // reference is stamped with — never a fresh one.
-      bill_allocations: billViews(req, entry.voucher_no, postingViews),
+      bill_allocations: billViews(c, req, entry.voucher_no, postingViews),
       inventory: inventoryViews(c, req),
       // ⛔ AN ALTER RE-STATES THE LINKS: whatever this body carries becomes the
       // current version's links, and whatever it omits is GONE. That is why the
@@ -3502,7 +4805,41 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * VISIBLE in a picker, while a trailing space and a capital letter are not,
    * and the rule is aimed at the collisions an operator cannot see.
    */
-  function normalisedName(v: string): string {
+  /**
+ * The seeded PRIMARY groups whose `account_nature` is INCOME or EXPENSE — migration
+ * 0003's six Profit & Loss groups, and the only groups a realised exchange difference
+ * may be booked under.
+ *
+ * ⛔ A NAME LIST HERE STANDS IN FOR A COLUMN THE MOCK DOES NOT HAVE, exactly as
+ * `bankParentGroup` stands in for the ltree ancestry `reporting.BankLedgerPredicate`
+ * walks. The server tests `account_group.nature IN ('INCOME','EXPENSE')`, which is
+ * the primitive; this mock has no group hierarchy and no nature column, so it matches
+ * the immediate group name against the seeded set and against the ancestor a
+ * user-created sub-group records.
+ *
+ * ⚠️ SO A LEDGER IN A USER-CREATED SUB-GROUP OF, SAY, "Indirect Expenses" IS ACCEPTED
+ * BY THE SERVER AND MAY BE REFUSED HERE. That divergence is real and is recorded in
+ * `corpora/mock-vs-cored/masters.json` rather than papered over: a screen that looks
+ * right against this mock is not evidence the setter accepts a given ledger.
+ */
+const PL_PRIMARY_GROUPS = new Set([
+  "sales accounts",
+  "purchase accounts",
+  "direct incomes",
+  "indirect incomes",
+  "direct expenses",
+  "indirect expenses",
+]);
+
+function forexLedgerIsSuitable(
+  _c: MockCompany,
+  led: { group: string; bankParentGroup?: string },
+): boolean {
+  const names = [led.group, led.bankParentGroup ?? ""];
+  return names.some((n) => PL_PRIMARY_GROUPS.has(normalisedName(n)));
+}
+
+function normalisedName(v: string): string {
     return v.trim().toLowerCase();
   }
 
@@ -3615,6 +4952,43 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       return { group_id: id("group") };
     },
+    async listGroups(companyID): Promise<ListGroupsResponse> {
+      // DERIVED FROM THE LEDGERS' OWN GROUP NAMES rather than from a second
+      // fixture, so the mock cannot offer a group no ledger in it belongs to — a
+      // picker entry that resolves to nothing is exactly the kind of fixture-only
+      // state a screen test would pass on and a browser drive would fail on.
+      //
+      // ⚠️ THE NATURE IS INFERRED FROM THE NAME here and READ FROM THE COLUMN by
+      // cored, which is a real difference and is stated rather than hidden: the
+      // mock has no account_group table to read a nature out of. A screen must
+      // therefore not treat the mock's nature as authoritative for anything but
+      // rendering — the SIDE a budget line ends up on is derived server-side from
+      // the real column, which is why the field is served at all.
+      const seen = new Map<string, string>();
+      for (const l of ensure(companyID).ledgers) {
+        if (!seen.has(l.group)) seen.set(l.group, l.group);
+      }
+      const natureOf = (name: string): string => {
+        const n = name.toLowerCase();
+        if (n.includes("sales") || n.includes("income")) return "INCOME";
+        if (n.includes("purchase") || n.includes("expense")) return "EXPENSE";
+        if (n.includes("creditor") || n.includes("duties") || n.includes("capital"))
+          return "LIABILITY";
+        return "ASSET";
+      };
+      return {
+        groups: Array.from(seen.keys())
+          .sort()
+          .map((name) => ({
+            id: `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+            name,
+            parent_name: "",
+            nature: natureOf(name),
+            is_pl: natureOf(name) === "INCOME" || natureOf(name) === "EXPENSE",
+          })),
+      };
+    },
+
     async listLedgers(companyID): Promise<ListLedgersResponse> {
       return {
         ledgers: ensure(companyID).ledgers.map((l) => ({
@@ -3645,6 +5019,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           pincode: l.pincode ?? "",
           is_system: l.isSystem ?? false,
           is_bank: isBankLedger(l),
+          blocked: l.blocked ?? false,
+          ...(l.blocked ? { blocked_reason: l.blockedReason ?? "" } : {}),
         })),
       };
     },
@@ -3711,9 +5087,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // one supplier's outstandings across two accounts with nothing on screen
       // to tell them apart. An observation faithfully mirrored is still only as
       // good as the behaviour it observed.
-      const taken = c.ledgers.find((l) => normalisedName(l.name) === normalisedName(req.name));
+      const taken = c.ledgers.find(
+        (l) => normalisedName(l.name) === normalisedName(req.name),
+      );
       if (taken) {
-        throw new ApiError(422, duplicateMasterMessage("ledger", req.name, taken.name));
+        throw new ApiError(
+          422,
+          duplicateMasterMessage("ledger", req.name, taken.name),
+        );
       }
       const ledgerID = id("ledger");
       c.ledgers.push({
@@ -3743,12 +5124,70 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     ): Promise<CreateVoucherTypeResponse> {
       return { voucher_type_id: id("vtype") };
     },
-    async createUnit(_c, req: CreateUnitRequest): Promise<CreateUnitResponse> {
+    async createUnit(companyID, req: CreateUnitRequest): Promise<CreateUnitResponse> {
       // D84: mirrors masters.CreateUnit's required-symbol refusal.
-      if ((req.symbol ?? "").trim() === "") {
+      const symbol = (req.symbol ?? "").trim();
+      if (symbol === "") {
         throw new ApiError(422, "masters: unit symbol is required");
       }
-      return { unit_id: id("unit") };
+      const c = ensure(companyID);
+      const dup = c.units.find(
+        (u) => normalisedName(u.symbol) === normalisedName(symbol),
+      );
+      if (dup) {
+        throw new ApiError(422, duplicateMasterMessage("unit", symbol, dup.symbol));
+      }
+      // ---- T10: A COMPOUND UNIT, and the four refusals the server makes.
+      //
+      // ⛔ IT STORES THE ROW NOW, where it used to mint an id and throw the
+      // master away. That was survivable while a unit was a bare symbol; a
+      // compound unit carries the CONVERSION FACTOR the Stock Summary restates
+      // quantities with, so a discarded unit means every base quantity in a
+      // screen test reads empty and the test passes anyway.
+      const base = (req.base_unit_symbol ?? "").trim();
+      const factor = (req.conversion_factor ?? "").trim();
+      if ((base === "") !== (factor === "")) {
+        throw new ApiError(
+          422,
+          `masters: unit ${JSON.stringify(symbol)} states only half a conversion — a base unit ` +
+            `with no factor cannot be converted and a factor with no base converts to nothing`,
+        );
+      }
+      let baseRow: UnitListItem | undefined;
+      if (base !== "") {
+        if (!/^-?\d+(\.\d+)?$/.test(factor) || Number(factor) <= 0) {
+          throw new ApiError(
+            422,
+            `masters: unit ${JSON.stringify(symbol)} needs a conversion factor greater than zero`,
+          );
+        }
+        baseRow = c.units.find(
+          (u) => normalisedName(u.symbol) === normalisedName(base),
+        );
+        if (!baseRow) {
+          throw new ApiError(404, `masters: not found: base unit "${base}"`);
+        }
+        // A CHAIN is refused rather than half-resolved: this build converts one
+        // level, and resolving the first of two factors is wrong by the second.
+        if (baseRow.base_unit_symbol !== "") {
+          throw new ApiError(
+            422,
+            `masters: unit ${JSON.stringify(symbol)} would be measured in ${JSON.stringify(base)}, ` +
+              `which is itself compound; this build converts ONE level only`,
+          );
+        }
+      }
+      const unitID = id("unit");
+      c.units.push({
+        id: unitID,
+        symbol,
+        formal_name: (req.formal_name ?? "").trim(),
+        decimal_places: req.decimal_places ?? 0,
+        is_system: false,
+        base_unit_symbol: baseRow ? baseRow.symbol : "",
+        conversion_factor: base === "" ? "" : factor,
+      });
+      return { unit_id: unitID };
     },
     async createStockItem(
       companyID,
@@ -3796,17 +5235,314 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         );
       }
 
+      // T10: the STOCK GROUP must already exist, exactly as on the wire — a
+      // group minted from a misspelling subtotals half a company's stock under a
+      // name nobody meant.
+      const groupName = (req.stock_group_name ?? "").trim();
+      if (groupName !== "") {
+        const g = c.stockGroups.find(
+          (x) => normalisedName(x.name) === normalisedName(groupName),
+        );
+        if (!g) {
+          throw new ApiError(404, `masters: not found: stock group "${groupName}"`);
+        }
+        g.item_count += 1;
+      }
       const stockItemID = id("stock");
       c.stockItems.push({
         id: stockItemID,
         name: req.name,
         unit_symbol: req.unit_symbol,
+        stock_group: groupName,
         hsn: req.hsn ?? "",
         gst_rate_pct: req.gst_rate_pct ?? "0.0000",
-        valuation_method: "WEIGHTED_AVG",
+        // T9: the method ASKED FOR, defaulting to weighted average when the
+        // body names none. ⛔ It was hardcoded to WEIGHTED_AVG here, which is
+        // exactly the defect this mock exists to catch on the real wire (a body
+        // key accepted and discarded, register row D43) — a screen test would
+        // have passed against a mock that could not express the feature.
+        valuation_method: (req.valuation_method ?? "").trim() || "WEIGHTED_AVG",
         is_system: false,
       });
       return { stock_item_id: stockItemID };
+    },
+    async listUnits(companyID): Promise<ListUnitsResponse> {
+      return {
+        units: [...ensure(companyID).units].sort((a, b) =>
+          a.symbol.localeCompare(b.symbol),
+        ),
+      };
+    },
+    async listCurrencies(companyID): Promise<ListCurrenciesResponse> {
+      return {
+        currencies: [...ensure(companyID).currencies].sort((a, b) =>
+          a.code.localeCompare(b.code),
+        ),
+      };
+    },
+    async createCurrency(
+      companyID,
+      req: CreateCurrencyRequest,
+    ): Promise<CreateCurrencyResponse> {
+      const c = ensure(companyID);
+      const code = (req.code ?? "").trim();
+      if (code === "") {
+        throw new ApiError(422, "masters: currency code is required");
+      }
+      // D84: the mock refuses what the server refuses, IN THE SERVER'S ORDER.
+      // ⛔ THE BASE-CURRENCY REFUSAL IS FIRST because the server's trigger fires
+      // before the unique index can: on an INR company, "INR" is refused as the
+      // base currency and never as a duplicate.
+      if (
+        normalisedName(code) === normalisedName(c.baseCurrency) &&
+        c.baseCurrency !== ""
+      ) {
+        throw new ApiError(
+          422,
+          `${code}: that is this company's base currency, and the books are already kept in it. ` +
+            `Add a currency only for money you receive or pay in something else`,
+        );
+      }
+      const dup = c.currencies.find(
+        (x) => normalisedName(x.code) === normalisedName(code),
+      );
+      if (dup) {
+        throw new ApiError(422, duplicateMasterMessage("currency", code, dup.code));
+      }
+      const dp = req.decimal_places;
+      if (!Number.isInteger(dp) || dp < 0 || dp > 4) {
+        throw new ApiError(
+          422,
+          `masters: ${String(dp)} decimal places: money is carried to 4 decimals in this product, so a currency may have between 0 and 4`,
+        );
+      }
+      const id = `cur-${String(c.currencies.length + 1)}`;
+      c.currencies.push({
+        id,
+        code,
+        symbol: req.symbol,
+        formal_name: req.formal_name,
+        decimal_places: dp,
+        // ⛔ EMPTY, NOT "0". A currency starts with NO rate on file, and empty is
+        // the state the client must render as "no rate yet".
+        latest_rate: "",
+        latest_rate_date: "",
+      });
+      return { currency_id: id };
+    },
+    async forexSettings(companyID): Promise<ForexSettingsResponse> {
+      const c = ensure(companyID);
+      const id = c.forexGainLossLedgerID ?? "";
+      if (id === "") {
+        // ⛔ A 200 WITH AN EMPTY FIELD, NEVER A 404. "No forex ledger chosen" is the
+        // ordinary state of every company that never trades in a foreign currency,
+        // so reporting it the way a mistyped URL is reported would make the F11
+        // screen render an error for the common case.
+        return {};
+      }
+      const led = c.ledgers.find((l) => l.id === id);
+      return {
+        gain_loss_ledger_id: id,
+        gain_loss_ledger_name: led ? led.name : "",
+      };
+    },
+    async setForexSettings(companyID, req: SetForexSettingsRequest) {
+      const c = ensure(companyID);
+      const id = (req.gain_loss_ledger_id ?? "").trim();
+      if (id === "") {
+        // CLEARS the choice. Not a delete: the setting goes back to "not chosen",
+        // and every difference-realising settlement starts refusing again.
+        c.forexGainLossLedgerID = "";
+        return;
+      }
+      // D84: the mock refuses what the server refuses, IN THE SERVER'S ORDER —
+      // existence first (the server's SELECT finds no row), then suitability.
+      const led = c.ledgers.find((l) => l.id === id);
+      if (!led) {
+        throw new ApiError(422, `masters: no such ledger: ${id}`);
+      }
+      // ⛔ THE SUITABILITY REFUSAL IS THE POINT OF THIS SETTER, and the mock has to
+      // carry it or a screen built against the mock would offer every ledger in the
+      // chart of accounts and only discover the refusal in production. A realised
+      // gain credited to a Sundry Debtors ledger lands on a customer's own balance
+      // and makes a fully settled bill show a permanent residue.
+      if (!forexLedgerIsSuitable(c, led)) {
+        throw new ApiError(
+          422,
+          "that ledger cannot hold a realised exchange difference. Choose a revenue " +
+            "or expense ledger — a gain is credited to it and a loss debited, so a " +
+            "party, bank or cash ledger would move a balance that belongs to " +
+            "somebody else",
+        );
+      }
+      c.forexGainLossLedgerID = id;
+    },
+    async setCurrencyRate(companyID, req: SetCurrencyRateRequest) {
+      const c = ensure(companyID);
+      const cur = c.currencies.find(
+        (x) => normalisedName(x.code) === normalisedName(req.code),
+      );
+      if (!cur) {
+        throw new ApiError(404, `masters: not found: currency "${req.code}"`);
+      }
+      if (!(Number(req.rate) > 0)) {
+        throw new ApiError(
+          422,
+          `masters: rate ${req.rate}: an exchange rate must be greater than zero`,
+        );
+      }
+      // Replaces the rate for that date, exactly as the server's upsert does.
+      if (req.effective_date >= cur.latest_rate_date) {
+        cur.latest_rate = req.rate;
+        cur.latest_rate_date = req.effective_date;
+      }
+      // ⭐ AND THE HISTORY, which is what the unadjusted-forex report reads. ONE
+      // ROW PER (currency, day), replaced rather than appended — the server has a
+      // unique index on exactly that pair, and its comment says why: a second row
+      // for the same date is not extra information, it is an ambiguity.
+      const prior = c.currencyRates.findIndex(
+        (x) => x.currencyID === cur.id && x.on === req.effective_date,
+      );
+      if (prior >= 0) {
+        c.currencyRates[prior] = {
+          currencyID: cur.id,
+          on: req.effective_date,
+          rate: req.rate,
+        };
+      } else {
+        c.currencyRates.push({
+          currencyID: cur.id,
+          on: req.effective_date,
+          rate: req.rate,
+        });
+      }
+    },
+    async listStockGroups(companyID): Promise<ListStockGroupsResponse> {
+      // ⚠️ TREE ORDER (parents before children), which the server produces from
+      // its ltree path. The mock keeps insertion order and only sorts by depth,
+      // because a parent must exist before a child can name it — so insertion
+      // order is already topological.
+      return {
+        stock_groups: [...ensure(companyID).stockGroups].sort(
+          (a, b) => a.depth - b.depth,
+        ),
+      };
+    },
+    async createStockGroup(
+      companyID,
+      req: CreateStockGroupRequest,
+    ): Promise<CreateStockGroupResponse> {
+      const c = ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (name === "") {
+        throw new ApiError(422, "masters: stock group name is required");
+      }
+      // D84: the mock refuses what the server refuses, in the server's order.
+      const dup = c.stockGroups.find(
+        (g) => normalisedName(g.name) === normalisedName(name),
+      );
+      if (dup) {
+        throw new ApiError(
+          422,
+          duplicateMasterMessage("stock group", name, dup.name),
+        );
+      }
+      const parent = (req.parent_name ?? "").trim();
+      let depth = 0;
+      if (parent !== "") {
+        const p = c.stockGroups.find(
+          (g) => normalisedName(g.name) === normalisedName(parent),
+        );
+        if (!p) {
+          throw new ApiError(404, `masters: not found: parent stock group "${parent}"`);
+        }
+        depth = p.depth + 1;
+      }
+      const groupID = id("stock-group");
+      c.stockGroups.push({
+        id: groupID,
+        name,
+        parent_name: parent === "" ? "" : parent,
+        depth,
+        item_count: 0,
+      });
+      return { stock_group_id: groupID };
+    },
+    async inventoryVocabulary(
+      _companyID,
+    ): Promise<InventoryVocabularyResponse> {
+      // The three methods cored implements, with the server's own labels. The
+      // mock mirrors the WIRE and not a convenience: a screen that renders a
+      // picker from this in a test must be rendering the same set the browser
+      // gets, or the test proves nothing about the picker.
+      return {
+        valuation_methods: [
+          {
+            method: "WEIGHTED_AVG",
+            label: "Avg. Cost (default)",
+            basis:
+              "One blended rate for the whole position: every receipt re-prices " +
+              "the stock already on hand, so a late purchase changes what earlier issues cost.",
+          },
+          {
+            method: "FIFO",
+            label: "FIFO",
+            basis:
+              "The oldest receipt is issued first, so closing stock is carried at " +
+              "what the MOST RECENT purchases cost — higher than average in a rising market.",
+          },
+          {
+            method: "LIFO",
+            label: "LIFO (Perpetual)",
+            basis:
+              "The newest receipt at the time of each issue is consumed first, so closing " +
+              "stock is carried at what the OLDEST purchases cost. Not LIFO Annual, which " +
+              "cannot be stated until the year closes.",
+          },
+        ],
+        default: "WEIGHTED_AVG",
+      };
+    },
+    async setStockItemValuationMethod(
+      companyID,
+      stockItemID,
+      req: SetValuationMethodRequest,
+    ): Promise<SetValuationMethodResponse> {
+      const c = ensure(companyID);
+      const item = c.stockItems.find((s) => s.id === stockItemID);
+      if (!item) {
+        throw new ApiError(
+          404,
+          `masters: not found: stock item ${stockItemID}`,
+        );
+      }
+      const method = (req.valuation_method ?? "").trim();
+      // Mirrors the wire's two refusals, in the server's order: a method no
+      // valuer implements is 422 at the MASTER (never a failing report later),
+      // and a no-op is 409 so the audit trail of restatements holds only real
+      // ones. D84's rule — the mock is not allowed to be the loose one.
+      if (!["WEIGHTED_AVG", "FIFO", "LIFO"].includes(method)) {
+        throw new ApiError(
+          422,
+          `masters: valuation method ${JSON.stringify(method)} is not one this build can value stock with (WEIGHTED_AVG, FIFO, LIFO)`,
+        );
+      }
+      if (item.valuation_method === method) {
+        throw new ApiError(
+          409,
+          `masters: the stock item already uses that valuation method: ${item.name} is already ${method}`,
+        );
+      }
+      item.valuation_method = method;
+      return {
+        stock_item_id: item.id,
+        name: item.name,
+        valuation_method: method,
+        restates:
+          "Stock value is derived at report time, so this item's WHOLE history is " +
+          "now valued on the new basis — including periods that have already been reported. " +
+          "Switching back reproduces the earlier figures exactly.",
+      };
     },
     async listStockItems(companyID): Promise<ListStockItemsResponse> {
       return {
@@ -4913,7 +6649,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         const voucherID = (a.voucher_id ?? "").trim();
         const section = (a.section ?? "").trim();
         if (voucherID === "") {
-          throw invalid("an allocation must name the voucher whose deduction was paid");
+          throw invalid(
+            "an allocation must name the voucher whose deduction was paid",
+          );
         }
         if (section === "") {
           throw invalid(
@@ -4963,7 +6701,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         // be told apart from one that named the WRONG kind and the refusal can
         // say which mistake was made.
         parsed.push({
-          voucherID, section, legSeq: a.leg_seq, rawAmount, amountUnits, triple,
+          voucherID,
+          section,
+          legSeq: a.leg_seq,
+          rawAmount,
+          amountUnits,
+          triple,
           sentKind: a.kind,
         });
       }
@@ -5009,10 +6752,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // the allocate-later route needed its own cap for D2 as well.
       const kindsOnThisChallan = new Set<TaxAllocationKind>(
         (challan.allocations ?? []).map(
-          (a) => c.tdsDeductions.get(allocationTriple(a.voucher_id, a.section, a.leg_seq))?.kind ?? "TDS",
+          (a) =>
+            c.tdsDeductions.get(
+              allocationTriple(a.voucher_id, a.section, a.leg_seq),
+            )?.kind ?? "TDS",
         ),
       );
-      for (const { voucherID, section, legSeq, rawAmount, amountUnits, triple, sentKind } of parsed) {
+      for (const {
+        voucherID,
+        section,
+        legSeq,
+        rawAmount,
+        amountUnits,
+        triple,
+        sentKind,
+      } of parsed) {
         const deduction = c.tdsDeductions.get(triple);
         if (!deduction) {
           throw new ApiError(
@@ -5134,7 +6888,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
       c.tdsChallans.set(cin, updated);
       for (const v of added) {
-        c.tdsAllocations.set(allocationTriple(v.voucher_id, v.section, v.leg_seq), cin);
+        c.tdsAllocations.set(
+          allocationTriple(v.voucher_id, v.section, v.leg_seq),
+          cin,
+        );
       }
       return {
         id: updated.id,
@@ -5213,7 +6970,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const name = (req.name ?? "").trim();
       if (name === "") {
-        throw new ApiError(400, "masters: invalid cost master: a cost category needs a name");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: a cost category needs a name",
+        );
       }
       // ⛔ THE MOCK MUST REFUSE WHAT THE SERVER REFUSES, and this check exists
       // because it did not. The screen originally sent no created_by; the server
@@ -5223,7 +6983,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // reads as "the passkey failed" and is not. A mock more permissive than the
       // server does not model the server; it hides it.
       if ((req.created_by ?? "").trim() === "") {
-        throw new ApiError(400, "masters: invalid cost master: created_by is required");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: created_by is required",
+        );
       }
       // Case- AND whitespace-insensitive, matching the server's
       // lower(btrim(name)) unique index. A Go check that normalised differently
@@ -5254,7 +7017,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const existing = mockCostCategories().find((c) => c.id === categoryID);
       if (!existing) {
-        throw new ApiError(404, "masters: there is no cost category with that id for this company");
+        throw new ApiError(
+          404,
+          "masters: there is no cost category with that id for this company",
+        );
       }
       return { ...existing, name: (req.name ?? "").trim() || existing.name };
     },
@@ -5297,11 +7063,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       const name = (req.name ?? "").trim();
       if (name === "") {
-        throw new ApiError(400, "masters: invalid cost master: a cost centre needs a name");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: a cost centre needs a name",
+        );
       }
       // See createCostCategory: the mock refuses what the server refuses.
       if ((req.created_by ?? "").trim() === "") {
-        throw new ApiError(400, "masters: invalid cost master: created_by is required");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: created_by is required",
+        );
       }
       if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
         throw new ApiError(
@@ -5328,7 +7100,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ? mockCostCentres().find((c) => c.id === req.parent_id)
         : undefined;
       if (req.parent_id && !parent) {
-        throw new ApiError(404, "masters: there is no cost centre with that id to sit under");
+        throw new ApiError(
+          404,
+          "masters: there is no cost centre with that id to sit under",
+        );
       }
       if (parent && parent.cost_category_id !== req.cost_category_id) {
         throw new ApiError(
@@ -5368,7 +7143,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const existing = mockCostCentres().find((c) => c.id === centreID);
       if (!existing) {
-        throw new ApiError(404, "masters: there is no cost centre with that id for this company");
+        throw new ApiError(
+          404,
+          "masters: there is no cost centre with that id for this company",
+        );
       }
       if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
         throw new ApiError(
@@ -5378,7 +7156,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       return {
         id: existing.id,
-        cost_centre: { ...existing, name: (req.name ?? "").trim() || existing.name },
+        cost_centre: {
+          ...existing,
+          name: (req.name ?? "").trim() || existing.name,
+        },
       };
     },
 
@@ -5397,9 +7178,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         );
       }
       if (!axis) {
-        throw new ApiError(422, "there is no cost category with that id for this company");
+        throw new ApiError(
+          422,
+          "there is no cost category with that id for this company",
+        );
       }
-      const centres = mockCostCentres().filter((c) => c.cost_category_id === costCategoryID);
+      const centres = mockCostCentres().filter(
+        (c) => c.cost_category_id === costCategoryID,
+      );
       const nodes = centres.map((c) => {
         const own = mockAllocationFor(c.id);
         return {
@@ -5488,6 +7274,553 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         notes: [
           "These rows must NOT be added together. Each is a different axis through the SAME money, so a total across them is a multiple of the cost actually borne.",
         ],
+      };
+    },
+
+    // ---- T11: budgets and budget vs actual (migrations 0085/0086).
+    async listBudgets(companyID): Promise<BudgetListResponse> {
+      ensure(companyID);
+      return { budgets: mockBudgets() };
+    },
+    async createBudget(
+      companyID,
+      req: CreateBudgetRequest,
+    ): Promise<CreateBudgetResponse> {
+      ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (name === "") {
+        throw new ApiError(
+          400,
+          "a budget needs a name — a plan nobody can name is a plan nobody can be asked about",
+        );
+      }
+      if (!req.from_date || !req.to_date) {
+        throw new ApiError(
+          400,
+          "a budget needs both a from_date and a to_date (YYYY-MM-DD). A plan for no stated period cannot be compared against anything: the closing-balance basis would have no date to be measured as at",
+        );
+      }
+      if (req.to_date < req.from_date) {
+        throw new ApiError(
+          400,
+          "the budget period ends before it begins. Reversed bounds would match no movement at all and report the entire budget as unspent, which reads as a business fact rather than as a typo",
+        );
+      }
+      if (
+        mockBudgets().some(
+          (b) => b.name.trim().toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        throw new ApiError(
+          409,
+          `a budget called "${name}" already exists for this company (names are compared ignoring case and surrounding spaces)`,
+        );
+      }
+      return {
+        id: `budget-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        name,
+        from_date: req.from_date,
+        to_date: req.to_date,
+      };
+    },
+    async alterBudget(
+      companyID,
+      budgetID: string,
+      req: CreateBudgetRequest,
+    ): Promise<AlterBudgetResponse> {
+      ensure(companyID);
+      const existing = mockBudgets().find((b) => b.id === budgetID);
+      if (!existing) {
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      if (req.to_date < req.from_date) {
+        throw new ApiError(
+          400,
+          "the budget period ends before it begins",
+        );
+      }
+      return {
+        id: existing.id,
+        budget: {
+          ...existing,
+          name: (req.name ?? "").trim() || existing.name,
+          from_date: req.from_date || existing.from_date,
+          to_date: req.to_date || existing.to_date,
+        },
+      };
+    },
+    async deleteBudget(
+      companyID,
+      budgetID: string,
+      deletedBy: string,
+    ): Promise<DeleteBudgetResponse> {
+      ensure(companyID);
+      const existing = mockBudgets().find((b) => b.id === budgetID);
+      if (!existing) {
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      if (!deletedBy) {
+        throw new ApiError(
+          400,
+          "deleted_by is required (?deleted_by=…) — a plan deleted by nobody in particular is a plan nobody can be asked about",
+        );
+      }
+      // ⚠️ THE COUNT IS SERVED because deleting a plan cascades to its lines, and
+      // "I deleted a budget" and "I deleted 3 budgeted figures" are different acts.
+      return {
+        id: existing.id,
+        deleted: true,
+        lines_deleted_by_cascade: existing.line_count,
+      };
+    },
+    async listBudgetLines(
+      companyID,
+      budgetID: string,
+    ): Promise<BudgetLineListResponse> {
+      ensure(companyID);
+      if (!mockBudgets().some((b) => b.id === budgetID)) {
+        // ⛔ 404 AND NOT AN EMPTY LIST. An empty line list for a plan that does not
+        // exist reads as "this plan has no figures", which is a different and more
+        // reassuring claim than "there is no such plan".
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      return { budget_id: budgetID, lines: mockBudgetLines(budgetID) };
+    },
+    async addBudgetLine(
+      companyID,
+      budgetID: string,
+      req: CreateBudgetLineRequest,
+    ): Promise<CreateBudgetLineResponse> {
+      ensure(companyID);
+      if (!mockBudgets().some((b) => b.id === budgetID)) {
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      if (!req.target_id) {
+        throw new ApiError(
+          400,
+          "target_id is required — the thing being budgeted. A line with no target could not be compared against anything",
+        );
+      }
+      // ⛔ A COST CENTRE HOLDS NO POSITION, so it may not be budgeted on one.
+      if (
+        req.dimension === "COST_CENTRE" &&
+        req.basis !== "NETT_TRANSACTIONS"
+      ) {
+        throw new ApiError(
+          400,
+          "a cost centre cannot be budgeted on a CLOSING_BALANCE. A cost centre is not an account: it holds no opening balance and carries no position, only allocations against dated postings. Use NETT_TRANSACTIONS",
+        );
+      }
+      // ⛔ AND IT HAS NO NATURE, so it cannot take a side by default.
+      if (req.dimension === "COST_CENTRE" && !req.dr_cr) {
+        throw new ApiError(
+          400,
+          'a cost centre budget must state its side (dr_cr "D" or "C"). A group or a ledger has a NATURE to take the side from; a cost centre has none. A cost budget is "D"',
+        );
+      }
+      if (!req.amount || Number(req.amount) <= 0) {
+        throw new ApiError(
+          400,
+          "a budget amount must be greater than zero. A budget of zero is the ABSENCE of a budget, and the report already has a distinct answer for a target nobody budgeted (UNBUDGETED). To plan to spend nothing here, set no line at all",
+        );
+      }
+      if (
+        mockBudgetLines(budgetID).some((l) => l.target_id === req.target_id)
+      ) {
+        throw new ApiError(
+          409,
+          "this budget already has a line for that target. One target gets one figure per budget: two would make the variance report show it twice, with the actual counted in full against each. Alter the existing line instead",
+        );
+      }
+      return { id: `budget-line-${req.target_id}`, budget_id: budgetID };
+    },
+    async alterBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      req: CreateBudgetLineRequest,
+    ): Promise<{ id: string; altered: boolean }> {
+      ensure(companyID);
+      const line = mockBudgetLines(budgetID).find((l) => l.id === lineID);
+      if (!line) {
+        throw new ApiError(404, `no budget line ${lineID} in this company`);
+      }
+      // ⛔ THE DIMENSION AND TARGET ARE IMMUTABLE. Re-filing a figure would leave
+      // the original target reading as unbudgeted and the new one as having been
+      // planned all along — a change of meaning dressed as a correction.
+      if (req.dimension && req.dimension !== line.dimension) {
+        throw new ApiError(
+          400,
+          `a budget line's dimension cannot be changed (it is ${line.dimension}). Delete this line and add the right one`,
+        );
+      }
+      if (req.target_id && req.target_id !== line.target_id) {
+        throw new ApiError(
+          400,
+          "a budget line's target cannot be changed. Delete this line and add one against the target you mean — that is two audited acts, which is what actually happened",
+        );
+      }
+      if (line.dimension === "COST_CENTRE" && req.basis !== "NETT_TRANSACTIONS") {
+        throw new ApiError(
+          400,
+          "a cost centre cannot be budgeted on a CLOSING_BALANCE — it holds no position, only allocations against dated postings",
+        );
+      }
+      return { id: lineID, altered: true };
+    },
+    async deleteBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      deletedBy: string,
+    ): Promise<{ id: string; deleted: boolean }> {
+      ensure(companyID);
+      if (!mockBudgetLines(budgetID).some((l) => l.id === lineID)) {
+        throw new ApiError(404, `no budget line ${lineID} in this company`);
+      }
+      if (!deletedBy) {
+        throw new ApiError(400, "deleted_by is required (?deleted_by=…)");
+      }
+      return { id: lineID, deleted: true };
+    },
+    async gstr9(
+      companyID,
+      from: string,
+      to: string,
+      ledgers: GSTR9TaxLedgers,
+      gstin?: string,
+    ): Promise<GSTR9Envelope> {
+      const c = ensure(companyID);
+
+      // ⛔ THE TWO REFUSALS, IN THE ORDER cored CHECKS THEM. The window is a pure
+      // check and runs first; the ledgers need no lookup but are checked second
+      // because that is the order handleGSTR9 checks them in. A mock that refused
+      // in a different order lets a screen's error handling pass here and fail
+      // against the real server.
+      const fy = financialYearOf(from, to);
+      if (!fy) {
+        throw new ApiError(
+          400,
+          "GSTR-9 covers an Indian financial year (1 April to 31 March), not " +
+            `${from} to ${to}. For a shorter window read the monthly GSTR-3B ` +
+            "instead — an annual return for a period the law does not recognise " +
+            "is a statutory-looking document about nothing",
+        );
+      }
+      const missing = (
+        [
+          ["cgst_ledger_id", ledgers.cgst],
+          ["sgst_ledger_id", ledgers.sgst],
+          ["igst_ledger_id", ledgers.igst],
+          ["input_cgst_ledger_id", ledgers.inputCGST],
+          ["input_sgst_ledger_id", ledgers.inputSGST],
+          ["input_igst_ledger_id", ledgers.inputIGST],
+        ] as [string, string][]
+      )
+        .filter(([, v]) => !v)
+        .map(([k]) => k);
+      if (missing.length > 0) {
+        throw new ApiError(
+          400,
+          `GSTR-9 is a reconciliation TO the books and needs the tax ledger ids: ${missing.join(", ")}. ` +
+            "Without them the books column is ZERO for every month and every period appears to " +
+            "disagree with the returns by exactly the tax charged, which is a wrong number that " +
+            "looks like a finding",
+        );
+      }
+
+      // Resolve the six ids to LEDGER NAMES, because a mock posting records the
+      // ledger by name and not by id.
+      const nameOf = (id: string) =>
+        c.ledgers.find((l) => l.id === id)?.name ?? "";
+      const outNames = [ledgers.cgst, ledgers.sgst, ledgers.igst].map(nameOf);
+      const inNames = [
+        ledgers.inputCGST,
+        ledgers.inputSGST,
+        ledgers.inputIGST,
+      ].map(nameOf);
+
+      const months: GSTR9Month[] = [];
+      for (let n = 0; n < 12; n++) {
+        const w = monthWindowOf(fy, n);
+        const books = (names: string[], cls: string): GSTTax => {
+          const head = (name: string) => {
+            let net = 0;
+            for (const v of c.vouchers) {
+              if (v.class.toUpperCase() !== cls) continue;
+              if (v.date < w.from || v.date > w.to) continue;
+              for (const p of v.postings) {
+                if (p.ledger !== name) continue;
+                const amt = Number(p.amount);
+                net += p.dr_cr === "C" ? amt : -amt;
+              }
+            }
+            return net.toFixed(4);
+          };
+          const [cg = "", sg = "", ig = ""] = names;
+          return { camt: head(cg), samt: head(sg), iamt: head(ig) };
+        };
+        const outward = books(outNames, "SALES");
+        const itc = books(inNames, "PURCHASE");
+        // ⛔⛔ THE RETURNS SIDE IS SET EQUAL TO THE BOOKS, AND THAT IS A LIMITATION
+        // OF THIS MOCK RATHER THAN A CLAIM ABOUT ANY REAL COMPANY. The server's
+        // three columns come from three INDEPENDENT computations — GSTR-1's
+        // section classifier, GSTR-3B's own SQL, and the postings — and this mock
+        // has none of the first two: it stores postings and never derives a GST
+        // return from anything.
+        //
+        // So THE MOCK CAN NEVER PRODUCE A DIVERGENCE, and a screen test that needs
+        // one MUST build the response itself rather than driving this method. A
+        // mock that faked a divergence would be worse: it would let a screen's
+        // offsetting rendering pass here while the real wire shape went untested.
+        months.push({
+          fp: w.fp,
+          from: w.from,
+          to: w.to,
+          r1_txval: "0.0000",
+          r1_tax: outward,
+          r3b_txval: "0.0000",
+          r3b_tax: outward,
+          books_outward_tax: outward,
+          r3b_itc_available: itc,
+          r3b_itc_ineligible: zeroTax9(),
+          books_itc_tax: itc,
+          hsn_txval: "0.0000",
+          hsn_tax: outward,
+          r1_matches_r3b: true,
+          r3b_matches_books: true,
+          itc_matches_books: true,
+          hsn_foots_to_r1: true,
+        });
+      }
+
+      const agreed = (a: string, b: string): GSTR9Divergence => ({
+        a,
+        b,
+        net: zeroTax9(),
+        gross: zeroTax9(),
+        offsetting: false,
+        agrees: true,
+      });
+
+      return {
+        gstr9: {
+          gstin: gstin ?? c.gstin,
+          fy: `${fy}-${String((fy + 1) % 100).padStart(2, "0")}`,
+          from,
+          to,
+          months,
+          outward_r1_vs_r3b: agreed("gstr1", "gstr3b"),
+          outward_r3b_vs_books: agreed("gstr3b", "books"),
+          outward_r1_vs_books: agreed("gstr1", "books"),
+          itc_vs_books: agreed("gstr3b-4a-plus-4d", "books"),
+          hsn_vs_r1: agreed("gstr1-table-12", "gstr1-sections"),
+          taxable_r1_vs_r3b: {
+            a: "gstr1",
+            b: "gstr3b",
+            net: "0.0000",
+            gross: "0.0000",
+            offsetting: false,
+            agrees: true,
+          },
+          tables: gstr9Tables(),
+          // The TEN unconditional tokens, in the sorted order cored emits them.
+          // ⛔ NOT A SUBSET. A mock that disclosed less than the server would let a
+          // screen ship without rendering a limitation the real product always has.
+          disclosures: [
+            "advances-not-modelled",
+            "amendments-not-modelled",
+            "annual-table-structure-unverified",
+            "books-carry-no-taxable-value",
+            "exempt-and-zero-rated-not-marked",
+            "itc-reversals-not-computed",
+            "no-annual-2a",
+            "no-cash-or-credit-ledger",
+            "not-filing-ready",
+            "portal-schema-unverified",
+          ],
+        },
+        reconciled: true,
+      };
+    },
+    async budgetVariance(
+      companyID,
+      budgetID: string,
+      dimension: BudgetDimension,
+      costCategoryID?: string,
+    ): Promise<BudgetVarianceResponse> {
+      ensure(companyID);
+      // ⛔ THE THREE REFUSALS, IN THE ORDER cored CHECKS THEM. The dimension is a
+      // pure check and runs first; the plan needs a lookup and runs second. A mock
+      // that refused in a different order would let a screen's error handling pass
+      // here and fail against the real server.
+      if (!dimension) {
+        throw new ApiError(
+          400,
+          "a dimension must be named (dimension): a budget is compared at ONE grain, and the three answer different questions — GROUP, LEDGER, COST_CENTRE",
+        );
+      }
+      if (!["GROUP", "LEDGER", "COST_CENTRE"].includes(dimension)) {
+        throw new ApiError(
+          400,
+          `"${dimension}" is not a budget dimension — want one of GROUP, LEDGER, COST_CENTRE`,
+        );
+      }
+      const plan = mockBudgets().find((b) => b.id === budgetID);
+      if (!budgetID) {
+        throw new ApiError(
+          400,
+          `a budget must be named (budget_id): a variance report is a comparison, and there is no default plan to compare against. This company has: ${mockBudgets()
+            .map((b) => `"${b.name}" (${b.from_date} to ${b.to_date}, ${b.id})`)
+            .join("; ")}`,
+        );
+      }
+      if (!plan) {
+        throw new ApiError(422, `no budget ${budgetID} in these books`);
+      }
+      // ⛔ THE COST-CENTRE ARM DEMANDS AN AXIS. The same money is allocated in full
+      // on every axis, so a report spanning two would total a multiple of the cost
+      // borne — the identical rule costCentreSummary enforces.
+      if (dimension === "COST_CENTRE" && !costCategoryID) {
+        throw new ApiError(
+          400,
+          "cost_category_id is required: a cost-centre variance is always for ONE axis, because centres on different axes describe the same money and summing them double-counts",
+        );
+      }
+
+      const lines = mockBudgetLines(budgetID).filter(
+        (l) => l.dimension === dimension,
+      );
+      const row = (
+        l: BudgetLine,
+        actualDebit: string,
+        status: BudgetStatus,
+        variance: string,
+        variancePercent: string | null,
+        notes: string[] = [],
+      ): BudgetVarianceRow => ({
+        dimension: l.dimension,
+        target_id: l.target_id,
+        target_name: l.target_name,
+        nature: l.nature,
+        basis: l.basis,
+        dr_cr: l.dr_cr,
+        budget: l.amount,
+        actual_debit: actualDebit,
+        actual_credit: "0.0000",
+        actual: actualDebit,
+        variance,
+        variance_percent: variancePercent,
+        status,
+        note: l.note,
+        notes,
+      });
+
+      const rows: BudgetVarianceRow[] = lines.map((l) => {
+        if (l.id === "budget-line-rent") {
+          // ⛔ UNSPENT, NOT ZERO VARIANCE. Nothing was posted at all.
+          return row(l, "0.0000", "UNSPENT", "-120000.0000", "-100.00", [
+            "Nothing was posted against this at all in the period. That is UNSPENT, not a variance of zero — the whole budget is untouched, which is a fact about the plan or about what has been keyed, not a sign of accuracy.",
+          ]);
+        }
+        if (l.id === "budget-line-debtors") {
+          return row(l, "3500000.0000", "UNDER", "-500000.0000", "-12.50");
+        }
+        return row(l, "620000.0000", "OVER", "120000.0000", "24.00");
+      });
+
+      // ⛔ UNBUDGETED IN ITS OWN ARRAY, WITH variance_percent NULL. A screen that
+      // has never seen this row ships with no "no budget set" rendering.
+      const unbudgeted: BudgetVarianceRow[] =
+        dimension === "COST_CENTRE"
+          ? []
+          : [
+              {
+                dimension,
+                target_id: "ledger-stationery",
+                target_name: "Stationery",
+                nature: "EXPENSE",
+                basis: "NETT_TRANSACTIONS",
+                dr_cr: "D",
+                budget: "0.0000",
+                actual_debit: "83000.0000",
+                actual_credit: "0.0000",
+                actual: "83000.0000",
+                variance: "83000.0000",
+                variance_percent: null,
+                variance_percent_absent_because:
+                  "no budget was set for this target, so there is nothing for the actual to be a percentage of",
+                status: "UNBUDGETED",
+                note: "",
+                notes: [
+                  "No budget line covers this. It is UNBUDGETED, not 100% over budget: the plan is silent about it rather than exceeded, and no percentage of a budget that was never set can be stated.",
+                ],
+              },
+            ];
+
+      const bases = Array.from(new Set(rows.map((r) => r.basis))).sort();
+      const totals = bases.map((basis) => {
+        const mine = rows.filter((r) => r.basis === basis);
+        const sum = (pick: (r: BudgetVarianceRow) => string) =>
+          (
+            mine.reduce((acc, r) => acc + Number(pick(r)), 0) as number
+          ).toFixed(4);
+        return {
+          basis,
+          rows: mine.length,
+          budget: sum((r) => r.budget),
+          actual: sum((r) => r.actual),
+          variance: sum((r) => r.variance),
+        };
+      });
+      // ⛔⛔ A GRAND TOTAL ONLY WHEN EVERY ROW SHARES ONE BASIS. A position plus a
+      // flow is not a quantity, and a client that ignores the flag must find zeros.
+      const addable = totals.length <= 1;
+      const notes: string[] = [];
+      if (!addable) {
+        notes.push(
+          `⛔ THIS PLAN MIXES BOTH BASES, SO THERE IS NO GRAND TOTAL. A closing-balance budget is a POSITION as at ${plan.to_date} and a nett-transactions budget is MOVEMENT within the period; adding them would not produce a quantity. Use the per-basis subtotals.`,
+        );
+      }
+      if (rows.length === 0) {
+        notes.push(
+          "This budget has no lines at this grain, so there is nothing to compare. Every actual below is listed as unbudgeted — that is the absence of a plan, not a plan that was met.",
+        );
+      }
+      notes.push(
+        `The budget column is this plan's WHOLE period (${plan.from_date} to ${plan.to_date}) and is not apportioned to any shorter window. Comparing a full-period budget against part-period actuals needs a spread rule (straight-line, monthly or seasonal) that nobody has chosen, so this report does not narrow the period rather than inventing one.`,
+      );
+      notes.push(
+        "OVER and UNDER are statements about arithmetic, not about good and bad. Spending more than budget and EARNING more than budget are both OVER. Each row carries the target's nature so a reader can tell which it is.",
+      );
+
+      const statusCounts: Partial<Record<BudgetStatus, number>> = {};
+      for (const r of [...rows, ...unbudgeted]) {
+        statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
+      }
+
+      const axis = mockCostCategories().find((c) => c.id === costCategoryID);
+      return {
+        budget_id: plan.id,
+        budget_name: plan.name,
+        dimension,
+        from_date: plan.from_date,
+        to_date: plan.to_date,
+        rows,
+        unbudgeted,
+        unbudgeted_count: unbudgeted.length,
+        unbudgeted_actual: unbudgeted
+          .reduce((acc, r) => acc + Number(r.actual), 0)
+          .toFixed(4),
+        totals,
+        totals_are_addable: addable,
+        total_budget: addable ? (totals[0]?.budget ?? "0.0000") : "0.0000",
+        total_actual: addable ? (totals[0]?.actual ?? "0.0000") : "0.0000",
+        total_variance: addable ? (totals[0]?.variance ?? "0.0000") : "0.0000",
+        status_counts: statusCounts,
+        cost_category_id: axis?.id ?? "",
+        cost_category_name: axis?.name ?? "",
+        notes,
       };
     },
 
@@ -5875,6 +8208,61 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           `banking: bank_date ${req.bank_date} is before the voucher date ${v.date}`,
         );
       }
+      // T4 slice 2b. A statement_line_id makes this the ACCEPTANCE of a
+      // proposed match — the same write, additionally recording which imported
+      // bank row the tick came from. There is no separate resolve route, here or
+      // on the server.
+      if (req.statement_line_id) {
+        const store = c.bankStatements.get(ledgerID);
+        const line = store?.lines.find((l) => l.id === req.statement_line_id);
+        if (!line) {
+          throw new ApiError(
+            404,
+            "bankstatement: that statement line is not on this bank account",
+          );
+        }
+        // ⛔ THE ASSERTED DATE MUST BE THE ROW'S OWN VALUE DATE, refused naming
+        // BOTH rather than resolved in either direction — silently preferring
+        // one would be invisible afterwards, because every figure would be real.
+        if (line.value_date !== req.bank_date) {
+          throw new ApiError(
+            400,
+            `bankstatement: this bank row is dated ${line.value_date} on the statement ` +
+              `but the request asserts ${req.bank_date}; a match records the bank's own date and nothing else`,
+          );
+        }
+        if (c.bankMatches.has(`${ledgerID}:${req.statement_line_id}`)) {
+          throw new ApiError(
+            409,
+            "bankstatement: that statement line has already been resolved",
+          );
+        }
+        // The TIER IS THE MOCK'S OWN VERDICT, never the caller's — there is no
+        // field by which a caller could describe its own evidence.
+        const apart = mockDaysApart(line.value_date, v.date);
+        const sameAmount =
+          mockMoneyToUnits(leg.amount) === mockMoneyToUnits(line.amount) &&
+          leg.dr_cr === line.dr_cr;
+        c.bankMatches.set(`${ledgerID}:${req.statement_line_id}`, {
+          line_id: req.statement_line_id,
+          status: "matched",
+          tier: !sameAmount
+            ? "manual"
+            : apart === 0
+              ? "exact"
+              : apart <= MOCK_MATCH_WINDOW_DAYS
+                ? "potential"
+                : "manual",
+          matched_by: req.created_by,
+          matched_at: new Date().toISOString(),
+          voucher_id: voucherID,
+          leg_no: legNo,
+          voucher_no: v.voucher_no,
+          class: v.class,
+          bank_date: req.bank_date,
+          line_value_date: line.value_date,
+        });
+      }
       c.bankDates.set(`${ledgerID}:${voucherID}:${legNo}`, {
         bankDate: req.bank_date,
         clearedAmount: leg.amount,
@@ -5894,6 +8282,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // intent is satisfied either way, and making a double-click an error is
       // friction with no safety gain.
       c.bankDates.delete(`${ledgerID}:${voucherID}:${legNo}`);
+      // ⭐ AND THE MATCH GOES WITH IT — migration 0088's ON DELETE CASCADE, which
+      // is what makes un-linking a match (Alt+F8) and un-ticking a bank date the
+      // SAME operation rather than two that can drift apart. A match outliving
+      // its clearance would leave the leg un-ticked while the bank row still read
+      // as matched.
+      for (const [k, m] of c.bankMatches) {
+        if (
+          k.startsWith(`${ledgerID}:`) &&
+          m.status === "matched" &&
+          m.voucher_id === voucherID &&
+          m.leg_no === legNo
+        ) {
+          c.bankMatches.delete(k);
+        }
+      }
       return { status: "unreconciled" };
     },
 
@@ -5946,13 +8349,42 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
       c.bankStatements.set(ledgerID, store);
 
+      // ⚠️ PARSE BEFORE DEDUPLICATING, which is the order cored uses too ("PARSE
+      // BEFORE OPENING THE TRANSACTION"). It matters since D111: the name a
+      // PASTED statement is stored under is derived from the file's own period
+      // and row count, so it does not exist until the file has been read — and
+      // the dedup below is by name.
+      const importID = `mock-import-${store.imports.length + 1}`;
+      const parsed = mockParseStatement(req.content, req.mapping, importID);
+      if (parsed.length === 0) {
+        throw new ApiError(
+          400,
+          "bankstatement: the file has no transaction rows: it has a header row and nothing under it",
+        );
+      }
+      const dates = parsed.map((l) => l.value_date).sort();
+      const fileName = mockStatementName(
+        req.file_name,
+        dates[0]!,
+        dates[dates.length - 1]!,
+        parsed.length,
+        req.content,
+      );
+
       // Only an identical FILE is caught, unlike the server, which dedups by
       // TRANSACTION. Named in the state comment.
-      const already = store.imports.find((i) => i.file_name === req.file_name);
+      //
+      // ⛔ IT IS THE RESOLVED NAME THAT IS COMPARED, NOT THE ONE THE CALLER
+      // SENT. Comparing `req.file_name` meant every PASTED statement matched
+      // every other pasted statement — both are "" — so the second paste on an
+      // account came back `already_imported` having stored nothing. That is
+      // D111 wearing the mock's clothes.
+      const already = store.imports.find((i) => i.file_name === fileName);
       if (already) {
         return {
           import_id: already.import_id,
           already_imported: true,
+          file_name: already.file_name,
           lines_in_file: already.line_count,
           new_lines: 0,
           duplicate_lines: already.line_count,
@@ -5965,19 +8397,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         };
       }
 
-      const importID = `mock-import-${store.imports.length + 1}`;
-      const parsed = mockParseStatement(req.content, req.mapping, importID);
-      if (parsed.length === 0) {
-        throw new ApiError(
-          400,
-          "bankstatement: the file has no transaction rows: it has a header row and nothing under it",
-        );
-      }
       store.lines.push(...parsed);
-      const dates = parsed.map((l) => l.value_date).sort();
       const im: BankStatementImport = {
         import_id: importID,
-        file_name: req.file_name,
+        file_name: fileName,
         imported_by: req.created_by,
         imported_at: new Date().toISOString(),
         period_from: dates[0]!,
@@ -5992,6 +8415,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return {
         import_id: importID,
         already_imported: false,
+        file_name: fileName,
         lines_in_file: parsed.length,
         new_lines: parsed.length,
         duplicate_lines: 0,
@@ -6002,6 +8426,173 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         period_to: im.period_to,
         disclosures: [MOCK_IMPORT_DISCLOSURE],
       };
+    },
+
+    // ---- BANK STATEMENT MATCHING (T4 slice 2b).
+    //
+    // ⚠️ See mockProposeMatches for what this matcher deliberately does NOT do
+    // (no partial tier, no strong-key tier, a fixed window). What it DOES
+    // reproduce faithfully is ambiguity in both directions, which is invariant
+    // B-1 and the thing a screen can get dangerously wrong.
+    async bankStatementMatches(
+      companyID,
+      ledgerID,
+      opts?,
+    ): Promise<BankMatchesResponse> {
+      const c = ensure(companyID);
+      const ledger = mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? { imports: [], lines: [] };
+      const from = opts?.from;
+      const to = opts?.to;
+      const inPeriod = (d: string) => (!from || d >= from) && (!to || d <= to);
+
+      const resolvedKeys = new Set(
+        [...c.bankMatches.keys()]
+          .filter((k) => k.startsWith(`${ledgerID}:`))
+          .map((k) => k.slice(ledgerID.length + 1)),
+      );
+      const open = store.lines.filter(
+        (l) => inPeriod(l.value_date) && !resolvedKeys.has(l.id),
+      );
+      const legs = mockCandidateLegs(c, ledgerID, ledger.name);
+      const proposals = mockProposeMatches(open, legs);
+
+      const proposed = new Set<string>();
+      for (const p of proposals) {
+        for (const cnd of p.candidates) proposed.add(`${cnd.voucher_id}:${cnd.leg_no}`);
+      }
+      const unmatchedLegs = legs.filter(
+        (l) => !proposed.has(`${l.voucher_id}:${l.leg_no}`),
+      );
+
+      const resolved = [...c.bankMatches.entries()]
+        .filter(([k]) => k.startsWith(`${ledgerID}:`))
+        .map(([, m]) => ({
+          ...m,
+          // Derived on READ, never stored: true when somebody retyped the Bank
+          // Date cell after matching, so the tick and the statement row no
+          // longer agree about WHEN.
+          bank_date_differs:
+            m.status === "matched" &&
+            !!m.bank_date &&
+            !!m.line_value_date &&
+            m.bank_date !== m.line_value_date,
+        }))
+        .sort((a, b) => (a.matched_at < b.matched_at ? 1 : -1));
+
+      const counts: BankMatchCounts = {
+        lines: proposals.length,
+        exact: proposals.filter((p) => p.best_tier === "exact").length,
+        potential: proposals.filter((p) => p.best_tier === "potential").length,
+        partial: proposals.filter((p) => p.best_tier === "partial").length,
+        ambiguous: proposals.filter((p) => p.ambiguous).length,
+        no_candidate: proposals.filter((p) => p.best_tier === "").length,
+        acceptable_in_bulk: proposals.filter((p) => p.acceptable_in_bulk).length,
+        unmatched_legs: unmatchedLegs.length,
+      };
+
+      const disclosures = [
+        "NOTHING ON THIS SCREEN HAS BEEN RECONCILED. Every row below is a PROPOSAL; " +
+          "a bank date is written only when you accept one, and accepting is the assertion " +
+          "that this bank row IS that voucher.",
+        `Candidates were sought within ${MOCK_MATCH_WINDOW_DAYS} days either side of the bank's date. ` +
+          "That window is this build's search width, not a rule from anywhere — widening it only " +
+          "shows you more proposals, because none of them clears itself.",
+        "Amounts must agree TO THE PAISA. A row that is one paisa out is not shown as a match to anything, " +
+          "deliberately: it is a bank charge or a different transaction, and absorbing it into a tolerance " +
+          "is how a real difference hides for a year.",
+      ];
+      if (counts.ambiguous > 0) {
+        disclosures.push(
+          `${counts.ambiguous} row(s) fit more than one voucher, or compete with another bank row for the same voucher. ` +
+            "None of them can be accepted in bulk and none has been chosen for you — " +
+            "two payments of the same amount on the same day are ordinary, and picking one is right half the time.",
+        );
+      }
+
+      return {
+        ledger_id: ledgerID,
+        ledger_name: ledger.name,
+        from: from ?? "",
+        to: to ?? "",
+        date_window_days: MOCK_MATCH_WINDOW_DAYS,
+        proposals,
+        unmatched_legs: unmatchedLegs,
+        resolved,
+        counts,
+        disclosures,
+      };
+    },
+
+    async setAsideStatementLine(
+      companyID,
+      ledgerID,
+      lineID,
+      req: SetAsideRequest,
+    ): Promise<SetAsideResponse> {
+      const c = ensure(companyID);
+      mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? { imports: [], lines: [] };
+      const line = store.lines.find((l) => l.id === lineID);
+      if (!line) {
+        throw new ApiError(
+          404,
+          "bankstatement: that statement line is not on this bank account",
+        );
+      }
+      if (c.bankMatches.has(`${ledgerID}:${lineID}`)) {
+        throw new ApiError(
+          409,
+          "bankstatement: that statement line has already been resolved",
+        );
+      }
+      // ⛔ NO CLEARANCE IS WRITTEN. A set-aside asserts that this bank row
+      // corresponds to nothing in the books; it is not a weaker kind of match,
+      // and it moves no balance — c.bankDates is untouched.
+      c.bankMatches.set(`${ledgerID}:${lineID}`, {
+        line_id: lineID,
+        status: "set-aside",
+        tier: "manual",
+        note: req.note,
+        matched_by: req.created_by ?? "ui",
+        matched_at: new Date().toISOString(),
+        line_value_date: line.value_date,
+      });
+      return { status: "set-aside" };
+    },
+
+    async restoreStatementLine(
+      companyID,
+      ledgerID,
+      lineID,
+    ): Promise<SetAsideResponse> {
+      const c = ensure(companyID);
+      mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? { imports: [], lines: [] };
+      if (!store.lines.some((l) => l.id === lineID)) {
+        throw new ApiError(
+          404,
+          "bankstatement: that statement line is not on this bank account",
+        );
+      }
+      const existing = c.bankMatches.get(`${ledgerID}:${lineID}`);
+      if (existing?.status === "matched") {
+        // ⛔ REFUSED, and the refusal is the feature. Deleting a matched row here
+        // would leave the clearance behind with nothing pointing at it: the leg
+        // would stay ticked while the bank row returned to the unmatched list,
+        // and the same row could be reconciled a second time against a second
+        // voucher. Both would look right.
+        throw new ApiError(
+          400,
+          "bankstatement: that line is MATCHED to a voucher, not set aside; " +
+            "un-tick the bank date on the reconciliation screen to undo it, " +
+            "which withdraws the clearance and the match together",
+        );
+      }
+      // Idempotent otherwise: restoring a line that was never set aside is a
+      // success, because the caller's intent is satisfied either way.
+      c.bankMatches.delete(`${ledgerID}:${lineID}`);
+      return { status: "unmatched" };
     },
 
     async importedStatement(
@@ -6016,8 +8607,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         imports: [],
         lines: [],
       };
-      const inPeriod = (d: string) =>
-        (!from || d >= from) && (!to || d <= to);
+      const inPeriod = (d: string) => (!from || d >= from) && (!to || d <= to);
       const lines = store.lines.filter((l) => inPeriod(l.value_date));
 
       // Money is summed as PAISE INTEGERS, never parseFloat: every money value
@@ -6031,9 +8621,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
 
       const disclosures = [
-        "MATCHING IS NOT BUILT YET (T4 slice 2b). These are the bank's own rows; nothing here " +
-          "says whether a row has been matched to a voucher or cleared. Reconciling is still done on the " +
-          "Bank Reconciliation screen by entering a Bank Date against each voucher.",
+        "THIS REPORT SHOWS NO MATCH STATUS (T4 slice 2b). These are the bank's own rows, and a row " +
+          "here may already be matched to a voucher, set aside as matching nothing, or untouched — " +
+          "nothing on this report says which. Matching now works: press Alt+S on the Bank " +
+          "Reconciliation screen. Reconciling by hand, a Bank Date at a time, still works too.",
       ];
       for (const im of store.imports) {
         if (!im.balance_walked) {
@@ -6049,7 +8640,6 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
             "against the file's own account. Record them on the ledger.",
         );
       }
-
 
       return {
         ledger_id: ledgerID,
@@ -6095,7 +8685,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       companyID,
       query?: OutstandingsQuery,
     ): Promise<OutstandingsResponse> {
-      return outstandingsOf(companyID, query?.kind ?? "RECEIVABLE", query?.as_on);
+      return outstandingsOf(
+        companyID,
+        query?.kind ?? "RECEIVABLE",
+        query?.as_on,
+      );
     },
 
     /**
@@ -6138,6 +8732,159 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
      * no PDP in this store, so `voucherClass` changes nothing here. That it is the
      * AUTHORITY can only be driven against real cored — see drive-l25-d97.mjs.
      */
+    async getUnadjustedForex(
+      companyID,
+      query?: { as_on?: string },
+    ): Promise<UnadjustedForexResponse> {
+      // ⛔⛔ MODELLED, NOT STUBBED, AND D84 IS THE REASON. A double that returned an
+      // empty list would let every screen test prove that a report with no rows
+      // renders — which is the one case this screen must NOT be tuned for. It nets
+      // the same open-bill universe cored does, prices it from the same rate
+      // history, and reproduces Decision 3's unpriced row.
+      //
+      // ⚠️ IT DOES **NOT** MODEL `ledger_opening_bill`, and that gap PRE-DATES this
+      // method: `setLedgerOpening` and `createLedger` store the opening BALANCE and
+      // never the breakup, so the mock's Outstandings has never carried an opening
+      // bill either. It is named here rather than quietly inherited — a foreign
+      // OPENING bill is exactly §0.2's trap, and the coverage for it lives in the Go
+      // test and in the drive's psql oracle.
+      const c = ensure(companyID);
+      const bound = (query?.as_on ?? "").trim();
+      const pricedOn = bound || new Date().toISOString().slice(0, 10);
+
+      type Grp = {
+        ledgerID: string;
+        ref: string;
+        refType: string;
+        code: string;
+        currencyID: string;
+        units: bigint;
+        foreign: bigint;
+        billRate: string;
+      };
+      const net = new Map<string, Grp>();
+      for (const view of c.views.values()) {
+        if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
+        for (const b of view.bill_allocations) {
+          // FOREIGN references only, and never the On Account bucket — see the
+          // server's own comment on why the exclusion is by NAME.
+          if (!b.currency_id || b.ref_name === ON_ACCOUNT_REF) continue;
+          const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
+          if (!ledger) continue;
+          if (
+            ledger.group !== "Sundry Debtors" &&
+            ledger.group !== "Sundry Creditors"
+          )
+            continue;
+          const key = `${b.ledger_id}\u0000${b.ref_name}\u0000${b.currency_id}`;
+          const cur = net.get(key) ?? {
+            ledgerID: b.ledger_id,
+            ref: b.ref_name,
+            refType: "NEW",
+            code: b.currency ?? "",
+            currencyID: b.currency_id,
+            units: 0n,
+            foreign: 0n,
+            billRate: "0",
+          };
+          // Debit-positive here, and oriented to the party's natural side below —
+          // the same two steps cored takes, in the same order.
+          const sgn = b.dr_cr === "D" ? 1n : -1n;
+          cur.units += sgn * mockMoneyToUnits(b.amount);
+          cur.foreign += sgn * mockMoneyToUnits(b.foreign_amount ?? "0");
+          // ⛔ THE OPENER'S RATE, NEVER AN `AGAINST` ROW'S. An AGAINST carries the
+          // SETTLEMENT-date rate, and taking it would report a plausible rate off
+          // the wrong document.
+          if (b.ref_type !== "AGAINST") {
+            cur.refType = b.ref_type;
+            cur.billRate = b.rate ?? "0";
+          }
+          net.set(key, cur);
+        }
+      }
+
+      // The latest rate ON OR BEFORE the date, or nothing at all.
+      const rateAsOn = (currencyID: string): string | null => {
+        let best: { on: string; rate: string } | null = null;
+        for (const r of c.currencyRates) {
+          if (r.currencyID !== currencyID) continue;
+          if (r.on > pricedOn) continue;
+          if (!best || r.on > best.on) best = { on: r.on, rate: r.rate };
+        }
+        return best ? best.rate : null;
+      };
+
+      const bills: UnadjustedForexBill[] = [];
+      let total = 0n;
+      let unrated = 0;
+      for (const g of net.values()) {
+        const ledger = c.ledgers.find((l) => l.id === g.ledgerID);
+        if (!ledger) continue;
+        const payable = ledger.group === "Sundry Creditors";
+        const book = payable ? -g.units : g.units;
+        const fgn = payable ? -g.foreign : g.foreign;
+        // Step 6's TWO-QUESTION skip: both columns zero means the reference is
+        // closed and its difference has been REALISED.
+        if (book === 0n && fgn === 0n) continue;
+
+        const r = rateAsOn(g.currencyID);
+        let difference = 0n;
+        if (r !== null) {
+          // round(foreign × rate, 4), ONE rounding on the PRODUCT — and the rate is
+          // scaled by 1e10, never quantised to money first (§6.3).
+          // ⛔ ONE ROUNDING, ON THE PRODUCT, AND THE RATE IS NEVER QUANTISED TO
+          // MONEY FIRST (§6.3). `fgn` is money in units of 1e-4 and `parseRate`
+          // returns units of 1e-10, so the product is in 1e-14 and dividing by
+          // 1e10 lands back on money. HALF-UP, to match decimal.Decimal.Round.
+          const scaled = fgn * parseRate(r);
+          const half = MOCK_RATE_SCALE / 2n;
+          const rounded =
+            scaled >= 0n
+              ? (scaled + half) / MOCK_RATE_SCALE
+              : -((-scaled + half) / MOCK_RATE_SCALE);
+          difference = rounded - book;
+          if (payable) difference = -difference;
+          total += difference;
+        } else {
+          unrated++;
+        }
+        bills.push({
+          ledger_id: g.ledgerID,
+          ledger: ledger.name,
+          group: ledger.group,
+          ref_name: g.ref,
+          ref_type: g.refType,
+          currency_code: g.code,
+          foreign_pending: mockUnitsToMoney(fgn),
+          book_value: mockUnitsToMoney(book),
+          difference: r === null ? "0.0000" : mockUnitsToMoney(difference),
+          bill_rate: formatRate(parseRate(g.billRate)),
+          rate_as_on: formatRate(parseRate(r ?? "0")),
+          has_rate_as_on: r !== null,
+        });
+      }
+      // Priced rows first, then by the ABSOLUTE difference — a loss of 50,000 is as
+      // interesting as a gain of 50,000, so sorting signed would bury every loss.
+      bills.sort((a, b) => {
+        if (a.has_rate_as_on !== b.has_rate_as_on)
+          return a.has_rate_as_on ? -1 : 1;
+        const aa = Math.abs(Number(a.difference));
+        const bb = Math.abs(Number(b.difference));
+        if (aa !== bb) return bb - aa;
+        return (
+          a.ledger.localeCompare(b.ledger) || a.ref_name.localeCompare(b.ref_name)
+        );
+      });
+      return {
+        as_on: bound,
+        priced_as_on: pricedOn,
+        bills,
+        total_difference: mockUnitsToMoney(total),
+        unrated_count: unrated,
+        posts_nothing: true,
+      };
+    },
+
     async getPartyOpenBills(
       companyID,
       _voucherClass,
@@ -6156,7 +8903,6 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         found: party !== undefined,
       };
     },
-
 
     async generateGSTR1(companyID, query: GSTR1Query): Promise<GSTR1Response> {
       ensure(companyID);
@@ -6515,8 +9261,27 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return {
         source_company: ensure(companyID).name,
         vouchers_posted: 0,
-        ledgers_ensured: 0,
+        vouchers_altered: 0,
+        vouchers_deleted: 0,
+        vouchers_skipped: 0,
+        vouchers_voided: 0,
+        voided_vouchers: [],
+        ledgers_tombstoned: [],
+        groups_ensured: [],
+        ledgers_ensured: [],
+        warnings: [],
         posted: [],
+        // ⚠️ ZEROES, AND HONEST ONES: this mock does not parse Tally XML at all
+        // (the real importer is 1,500 lines of Go), so it imports nothing and
+        // says so. The fields are present because the SHAPE is the server's —
+        // register row D84's rule — and a client that reads
+        // `res.stock_lines` must not get `undefined` here while type-checking.
+        stock_lines: 0,
+        opening_positions: 0,
+        stock_items_ensured: [],
+        units_ensured: [],
+        godowns_ensured: [],
+        batches_ensured: [],
       };
     },
 
@@ -6563,14 +9328,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     async closeSalesOrder(companyID, orderID: string, req: CloseOrderRequest) {
       return mockCloseOrder(companyID, "SALES", orderID, req);
     },
-    async closePurchaseOrder(companyID, orderID: string, req: CloseOrderRequest) {
+    async closePurchaseOrder(
+      companyID,
+      orderID: string,
+      req: CloseOrderRequest,
+    ) {
       return mockCloseOrder(companyID, "PURCHASE", orderID, req);
     },
     async createBom(companyID, req: CreateBomRequest) {
       const co = ensure(companyID);
       const name = (req.name ?? "").trim();
       if (!req.stock_item_id) {
-        throw new ApiError(422, "orders: a bill of materials must name the finished good it produces");
+        throw new ApiError(
+          422,
+          "orders: a bill of materials must name the finished good it produces",
+        );
       }
       if (name === "") {
         throw new ApiError(422, "orders: a bill of materials needs a name");
@@ -6598,7 +9370,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const seen = new Set<string>();
       for (const c of req.components) {
         if (seen.has(c.stock_item_id)) {
-          throw new ApiError(422, "orders: the same item appears twice in this recipe");
+          throw new ApiError(
+            422,
+            "orders: the same item appears twice in this recipe",
+          );
         }
         seen.add(c.stock_item_id);
       }
@@ -6609,9 +9384,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
             b.name.trim().toLowerCase() === name.toLowerCase(),
         )
       ) {
-        throw new ApiError(409, `orders: this item already has a recipe named "${name}"`);
+        throw new ApiError(
+          409,
+          `orders: this item already has a recipe named "${name}"`,
+        );
       }
-      if (req.is_default && mockBoms.some((b) => b.stock_item_id === req.stock_item_id && b.is_default)) {
+      if (
+        req.is_default &&
+        mockBoms.some(
+          (b) => b.stock_item_id === req.stock_item_id && b.is_default,
+        )
+      ) {
         // ⛔ Two defaults is a silent coin flip over which recipe a manufacture used,
         // and the two consume different materials.
         throw new ApiError(
@@ -6665,7 +9448,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const b = mockBoms.find((x) => x.bom_id === bomID);
       if (!b) {
-        throw new ApiError(404, "orders: no such bill of materials in this company");
+        throw new ApiError(
+          404,
+          "orders: no such bill of materials in this company",
+        );
       }
       return b;
     },
@@ -6679,11 +9465,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       const wanted = Number(qty);
       if (!Number.isFinite(wanted) || wanted <= 0) {
-        throw new ApiError(422, "orders: the quantity to make must be more than zero");
+        throw new ApiError(
+          422,
+          "orders: the quantity to make must be more than zero",
+        );
       }
       const b = mockBoms.find((x) => x.bom_id === bomID);
       if (!b) {
-        throw new ApiError(404, "orders: no such bill of materials in this company");
+        throw new ApiError(
+          404,
+          "orders: no such bill of materials in this company",
+        );
       }
       const output = Number(b.output_qty);
       return {
@@ -6887,8 +9679,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const current = co.views.get(voucherID)?.version_no;
       return {
         ...held.view,
-        stale:
-          current !== undefined && current !== held.generatedFromVersion,
+        stale: current !== undefined && current !== held.generatedFromVersion,
       };
     },
     /**
@@ -6949,7 +9740,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
       // ---- REFUSAL 2: no tax. An e-invoice reports a taxable supply.
       const tax =
-        Number(view.cgst ?? 0) + Number(view.sgst ?? 0) + Number(view.igst ?? 0);
+        Number(view.cgst ?? 0) +
+        Number(view.sgst ?? 0) +
+        Number(view.igst ?? 0);
       if (Number(view.taxable_value ?? 0) <= 0 && tax <= 0) {
         throw new ApiError(
           422,
@@ -7113,9 +9906,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
               ? mockMoneyToUnits(b.amount)
               : -mockMoneyToUnits(b.amount);
           const key = `${b.ledger_id} ${b.ref_name}`;
-          const cur =
-            net.get(key) ??
-            { ledgerID: b.ledger_id, units: 0n, due: "", inflow };
+          const cur = net.get(key) ?? {
+            ledgerID: b.ledger_id,
+            units: 0n,
+            due: "",
+            inflow,
+          };
           // Positive on the party's natural side, per direction.
           cur.units += inflow ? signed : -signed;
           if (b.due_date && (cur.due === "" || b.due_date < cur.due)) {
@@ -7154,11 +9950,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // week — cored answers THIRTEEN (measured: 13 buckets for the default
       // horizon), so a floor here would make the mock and the server disagree
       // about how far the projection reaches, in the direction that hides money.
-      const buckets = Array.from({ length: Math.ceil(HORIZON / BUCKET) }, (_, i) => ({
-        from: mockAddDays(asOnDate, i * BUCKET),
-        to: mockAddDays(asOnDate, (i + 1) * BUCKET),
-        ...zero(),
-      }));
+      const buckets = Array.from(
+        { length: Math.ceil(HORIZON / BUCKET) },
+        (_, i) => ({
+          from: mockAddDays(asOnDate, i * BUCKET),
+          to: mockAddDays(asOnDate, (i + 1) * BUCKET),
+          ...zero(),
+        }),
+      );
       const beyond = zero();
       const basisCounts = {
         due: { bills: 0, ...zero() },
@@ -7192,7 +9991,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           if (first) add(first);
           continue;
         }
-        const target = buckets.find((k) => b.settles >= k.from && b.settles < k.to);
+        const target = buckets.find(
+          (k) => b.settles >= k.from && b.settles < k.to,
+        );
         if (target) add(target);
         else add(beyond);
       }
@@ -7283,5 +10084,1274 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       return { from: from ?? "", to: to ?? "", findings: [] };
     },
+
+    // =======================================================================
+    // PAYROLL (Track 3). ⛔ READ THE `employees` FIELD'S DOC ON MockCompany
+    // BEFORE PINNING A FIGURE: this store computes NOTHING statutory, and every
+    // PF/EPS/ESI/TDS number it serves is an abstention rather than a
+    // computation. The oracle for a payroll figure is the browser against
+    // cored.
+    // =======================================================================
+
+    async listEmployees(
+      companyID,
+      includeInactive?: boolean,
+    ): Promise<ListEmployeesResponse> {
+      const c = ensure(companyID);
+      // Active first then by code — the server's own ORDER BY. A mock that
+      // returned insertion order would let a screen test pass while the live
+      // list is sorted differently, which is exactly the kind of difference
+      // nobody re-checks.
+      const rows = c.employees
+        .filter((e) => includeInactive || e.is_active)
+        .slice()
+        .sort((a, b) =>
+          a.is_active === b.is_active
+            ? a.code.localeCompare(b.code)
+            : a.is_active
+              ? -1
+              : 1,
+        );
+      return { employees: rows };
+    },
+
+    async createEmployee(
+      companyID,
+      req: CreateEmployeeRequest,
+    ): Promise<CreateEmployeeResponse> {
+      const c = ensure(companyID);
+      const code = (req.code ?? "").trim();
+      if (code === "") {
+        throw new ApiError(400, "payrolldb: employee code is required");
+      }
+      if (
+        c.employees.some((e) => e.code.toLowerCase() === code.toLowerCase())
+      ) {
+        throw new ApiError(
+          422,
+          `payrolldb: this company already has an employee with code ${JSON.stringify(code)}`,
+        );
+      }
+      const employeeID = id("employee");
+      c.employees.push({
+        id: employeeID,
+        code,
+        name: req.name ?? "",
+        doj: req.doj ?? "",
+        dol: req.dol ?? "",
+        designation: req.designation ?? "",
+        pan: req.pan ?? "",
+        uan: req.uan ?? "",
+        esic_ip_number: req.esic_ip_number ?? "",
+        bank_ifsc: req.bank_ifsc ?? "",
+        bank_account_last4: req.bank_account_last4 ?? "",
+        // ⛔ AN OMITTED FLAG IS TRUE, mirroring the server's *bool exactly. A
+        // mock that defaulted it to false would make every screen test pass
+        // against employees who are silently excluded from the pay run — which
+        // is a missing salary, discovered on pay day.
+        is_active: req.is_active === undefined ? true : req.is_active,
+        ...(req.payable_ledger_id
+          ? { payable_ledger_id: req.payable_ledger_id }
+          : {}),
+      });
+      return { employee_id: employeeID };
+    },
+
+    async listSalaryComponents(
+      companyID,
+      employeeID: string,
+    ): Promise<ListSalaryComponentsResponse> {
+      const c = ensure(companyID);
+      return { salary_components: c.salaryComponents.get(employeeID) ?? [] };
+    },
+
+    async setSalaryComponent(
+      companyID,
+      employeeID: string,
+      req: SetSalaryComponentRequest,
+    ): Promise<SetSalaryComponentResponse> {
+      const c = ensure(companyID);
+      if (!c.employees.some((e) => e.id === employeeID)) {
+        throw new ApiError(404, "payrolldb: no such employee");
+      }
+      if ((req.effective_from ?? "").trim() === "") {
+        throw new ApiError(
+          400,
+          "effective_from is required and must be YYYY-MM-DD: a salary component is effective-dated, and the pay run reads the window in force on the first day of the wage month",
+        );
+      }
+      const type = (req.type ?? "").trim();
+      const known = MOCK_PAYROLL_COMPONENT_TYPES.find((t) => t.code === type);
+      if (!known) {
+        throw new ApiError(
+          400,
+          `payroll: unknown salary component type: ${JSON.stringify(type)} — the type decides whether PF and ESI are contributed on this component (Code on Social Security s.2(88)), so it is a closed set`,
+        );
+      }
+      const componentID = id("salary-component");
+      const rows = c.salaryComponents.get(employeeID) ?? [];
+      rows.push({
+        id: componentID,
+        effective_from: req.effective_from,
+        effective_to: req.effective_to ?? "",
+        code: req.code,
+        type,
+        amount: mockFixed4(req.amount),
+        // From the SAME table the vocabulary is served from, so the flag on the
+        // row and the flag in the picker cannot disagree here either.
+        is_wages: known.is_wages,
+        in_deeming_test: known.in_deeming_test,
+      });
+      c.salaryComponents.set(employeeID, rows);
+      return { salary_component_id: componentID };
+    },
+
+    async listStatutoryElections(
+      companyID,
+      employeeID: string,
+    ): Promise<ListStatutoryElectionsResponse> {
+      const c = ensure(companyID);
+      return {
+        statutory_elections: c.statutoryElections.get(employeeID) ?? [],
+      };
+    },
+
+    async setStatutoryElection(
+      companyID,
+      employeeID: string,
+      req: SetStatutoryElectionRequest,
+    ): Promise<SetStatutoryElectionResponse> {
+      const c = ensure(companyID);
+      if (!c.employees.some((e) => e.id === employeeID)) {
+        throw new ApiError(404, "payrolldb: no such employee");
+      }
+      if ((req.effective_from ?? "").trim() === "") {
+        throw new ApiError(
+          400,
+          "effective_from is required and must be YYYY-MM-DD: an election is effective-dated, and the pay run reads the one in force on the first day of the wage month",
+        );
+      }
+      if ((req.pf_base ?? "").trim() === "") {
+        // The one refusal in this whole payroll arm that is a REAL rule and not
+        // a shape check: CEILING and ACTUAL differ for anybody paid above the
+        // EPF wage ceiling, so an unstated base is a contribution figure nobody
+        // chose. The mock refuses it because the server does.
+        throw new ApiError(
+          400,
+          "pf_base is required and must be CEILING or ACTUAL: the two differ for anybody paid above the EPF wage ceiling, so there is no safe default",
+        );
+      }
+      const electionID = id("statutory-election");
+      const rows = c.statutoryElections.get(employeeID) ?? [];
+      rows.push({
+        id: electionID,
+        effective_from: req.effective_from,
+        effective_to: req.effective_to ?? "",
+        pf_base: req.pf_base,
+        pf_voluntary_base: mockFixed4(req.pf_voluntary_base ?? "0"),
+        employer_matches_voluntary: req.employer_matches_voluntary ?? false,
+        eps_member: req.eps_member ?? false,
+        esi_applicable: req.esi_applicable ?? false,
+        // STORED AS GIVEN. "" is "no election", which is a different fact from
+        // "NEW" — see StatutoryElectionView.regime.
+        regime: req.regime ?? "",
+      });
+      c.statutoryElections.set(employeeID, rows);
+      return { statutory_election_id: electionID };
+    },
+
+    async payrollVocabulary(companyID): Promise<PayrollVocabularyResponse> {
+      ensure(companyID);
+      return {
+        component_types: MOCK_PAYROLL_COMPONENT_TYPES.map((t) => ({ ...t })),
+        pf_bases: ["CEILING", "ACTUAL"],
+        regimes: ["NEW", "OLD"],
+        default_regime: "NEW",
+        age_bands: ["BELOW_60", "SENIOR", "SUPER_SENIOR"],
+      };
+    },
+
+    async runPayroll(companyID, req: PayRunRequest): Promise<PayRunResponse> {
+      const c = ensure(companyID);
+      const month = (req.wage_month ?? "").trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+        throw new ApiError(
+          400,
+          `month ${JSON.stringify(month)} is not a wage month; it must be YYYY-MM (e.g. 2026-07)`,
+        );
+      }
+      const already = c.payRuns.get(month);
+      if (already) {
+        // ⛔ NOT AN ERROR AND NOT A FRESH POSTING. The server answers 201 with
+        // `already_posted: true` and the FIRST run's identifiers, and the mock
+        // must too — a screen that renders this as a new run tells an operator a
+        // correction took effect when the stored run is the earlier one.
+        return {
+          pay_run_id: already.payRunID,
+          voucher_id: already.voucherID,
+          voucher_no: already.voucherNo,
+          version_no: 1,
+          status: "POSTED",
+          already_posted: true,
+        };
+      }
+      // Eligibility mirrors the server's: ACTIVE employees only, and each must
+      // have a salary structure AND an election — cored refuses the whole run
+      // otherwise, by name, and a mock that posted anyway would hide the single
+      // most common payroll failure from every screen test.
+      const eligible = c.employees.filter((e) => e.is_active);
+      if (eligible.length === 0) {
+        throw new ApiError(
+          422,
+          `payrolldb: no employee is eligible for the ${month} pay run (active, joined on or before the month ended, and not left before it began); a run with no payslips computes nothing and would post an empty voucher`,
+        );
+      }
+      for (const e of eligible) {
+        if ((c.statutoryElections.get(e.id) ?? []).length === 0) {
+          throw new ApiError(
+            422,
+            `payrolldb: compute payslip for employee ${e.code}, wage month ${month}: no statutory election is in force for wage month ${month}; the PF contribution base and the tax regime are elections and there is no safe default for the first of them (CEILING and ACTUAL differ for anyone paid above the wage ceiling)`,
+          );
+        }
+        if ((c.salaryComponents.get(e.id) ?? []).length === 0) {
+          throw new ApiError(
+            422,
+            `payrolldb: compute payslip for employee ${e.code}, wage month ${month}: no salary structure is in force; there is nothing to pay and nothing to contribute on`,
+          );
+        }
+      }
+      const payRunID = id("pay-run");
+      const voucherID = id("voucher");
+      const voucherNo = String(c.payRuns.size + 1);
+      c.payRuns.set(month, { payRunID, voucherID, voucherNo });
+      return {
+        pay_run_id: payRunID,
+        voucher_id: voucherID,
+        voucher_no: voucherNo,
+        version_no: 1,
+        status: "POSTED",
+        already_posted: false,
+      };
+    },
+
+    async payrollRegister(
+      companyID,
+      month: string,
+    ): Promise<PayrollRegisterResponse> {
+      const c = ensure(companyID);
+      const run = c.payRuns.get(month);
+      if (!run) {
+        throw new ApiError(
+          404,
+          `payrolldb: no pay run for wage month ${month}`,
+        );
+      }
+      const rows = c.employees
+        .filter((e) => e.is_active)
+        .map((e) => mockRegisterRow(e, c.salaryComponents.get(e.id) ?? []));
+      return {
+        pay_run_id: run.payRunID,
+        wage_month: month,
+        status: "POSTED",
+        // ⛔ NAMED SO NOBODY MISTAKES THE MOCK'S ZEROS FOR A COMPUTATION. cored
+        // serves the real ruleset ids here ("ss-2026-07"), and the versions are
+        // ON the report because a payroll figure with no statement of which law
+        // produced it cannot be checked by anybody who was not present.
+        ss_ruleset_version: "mock-no-statutory-engine",
+        it_ruleset_version: "mock-no-statutory-engine",
+        rows,
+        totals: mockRegisterTotals(rows),
+      };
+    },
+
+    async payslip(
+      companyID,
+      month: string,
+      employeeID: string,
+    ): Promise<PayslipResponse> {
+      const c = ensure(companyID);
+      const run = c.payRuns.get(month);
+      if (!run) {
+        throw new ApiError(
+          404,
+          `payrolldb: no pay run for wage month ${month}`,
+        );
+      }
+      const e = c.employees.find((x) => x.id === employeeID);
+      if (!e) {
+        // The SAME answer cored gives for another tenant's employee id, which
+        // resolves through RLS to no rows: 404, and never that person's figures.
+        throw new ApiError(404, "payrolldb: no payslip for that employee");
+      }
+      const components = c.salaryComponents.get(employeeID) ?? [];
+      const gross = components.reduce(
+        (sum, comp) => sum + Number(comp.amount),
+        0,
+      );
+      return {
+        pay_run_id: run.payRunID,
+        wage_month: month,
+        employee_id: e.id,
+        employee_code: e.code,
+        employee_name: e.name,
+        days_paid: "0.0000",
+        lop_days: "0.0000",
+        gross: mockFixed4(String(gross)),
+        deductions: "0.0000",
+        net: mockFixed4(String(gross)),
+        lines: components.map((comp) => ({
+          code: comp.code,
+          type: comp.type,
+          tag: comp.is_wages ? "WAGES" : "EXCLUDED",
+          direction: "EARNING",
+          amount: comp.amount,
+        })),
+        // ⛔ THE ABSTENTION, SAID OUT LOUD ON THE PAYSLIP ITSELF. This is the
+        // channel cored uses for a component whose rate has not been notified,
+        // and it is the right one here: a blank where a number should be is a
+        // question somebody will ask, and the honest answer is "this was not
+        // computed", not "zero".
+        deferrals: MOCK_PAYROLL_DEFERRALS.map((d) => ({ ...d })),
+        ss_ruleset_version: "mock-no-statutory-engine",
+        it_ruleset_version: "mock-no-statutory-engine",
+      };
+    },
+
+    // ---- The three statutory FILES. The mock serves a NOTE, not a file.
+    //
+    // ⛔ IT MUST NOT PRODUCE ECR/ESI/Form-138 BYTES. Those layouts are the
+    // portals' own and cored's payrollfile package is where they live, spelled
+    // out record by record; a second hand-rolled copy here would be bytes a
+    // screen test could pin and nobody validated — and the one thing worse than
+    // an unvalidated statutory file is two of them that differ. What IS
+    // exercised, which is all a screen can be asked to get right, is that the
+    // download path carries the archive AND the disclosure headers.
+    async payrollPFECR(companyID, month: string) {
+      return mockStatutoryDownload(ensure(companyID), month, "ECR", "ECR.txt");
+    },
+    async payrollESIReturn(companyID, month: string) {
+      return mockStatutoryDownload(
+        ensure(companyID),
+        month,
+        "ESI monthly contribution return",
+        "ESI.csv",
+      );
+    },
+    async payrollForm138(companyID, req: Form138Request) {
+      return mockStatutoryDownload(
+        ensure(companyID),
+        `${req.tax_year} ${req.quarter}`,
+        "Form 138 Annexure I",
+        "Form138.txt",
+      );
+    },
+
+    // ---- T14: DATA (Alt+Y) — backup and restore.
+    //
+    // ⛔ THE MOCK DOES NOT FABRICATE AN ARCHIVE, and that is the honest shape
+    // rather than a gap. A real archive is 62 tables of rows that Postgres
+    // itself serialised with to_jsonb and that a restore feeds back through
+    // jsonb_populate_record; a hand-rolled imitation here would be bytes no
+    // restore has ever read, and a screen test pinned against it would prove
+    // that the mock and the screen agree with each other and nothing more.
+    //
+    // What it DOES do is answer honestly, so the screen's failure path is the
+    // thing under test: a backup hands back a plain-text note under the real
+    // filename, and a restore REJECTS it — with the sentence the operator would
+    // see — because the mock has no database to create a company in.
+    async backupCompany(companyID) {
+      const c = ensure(companyID);
+      const note =
+        `This is the in-memory MOCK client, not cored. No archive of ${c.name} ` +
+        `(${c.id}) was produced: an archive is every row of 62 tables as ` +
+        `Postgres itself serialised them, and a hand-rolled imitation here ` +
+        `would be bytes no restore has ever read.`;
+      return {
+        blob: new Blob([note], { type: "text/plain" }),
+        filename: "mock-company.tallybak.jsonl.gz",
+        header: () => null,
+      };
+    },
+    // ---- PER-COMPANY PRINT TEMPLATES (track C).
+    //
+    // ⛔ THIS ONE IS IMPLEMENTED RATHER THAN REFUSED, AND THE LINE IS WORTH
+    // STATING. The mock's rule is HONEST, NOT HELPFUL: it replays domain logic
+    // where the logic is genuinely reproducible (FIFO, group rollups) and refuses
+    // everywhere else, and it must never fake a payload a real backend has never
+    // produced. An override store is the reproducible case — it is one row per
+    // (company, doc_kind), keyed by a unique constraint, with no derivation at
+    // all — so an in-memory map behaves exactly as the server does.
+    //
+    // ✅ AND THE PARTS IT COULD NOT INVENT ARE READ FROM THE SERVER'S OWN
+    // GENERATED ARTEFACT. `honours` and `defaults` are decisions belonging to the
+    // Go renderers, and `print-template-surface.json` is emitted by
+    // TestPrintTemplateSurfaceGolden by RENDERING each kind twice per field. So
+    // these are not invented values that resemble the server's — they are the
+    // server's, measured.
+    //
+    // ⛔ IT ALSO REFUSES WHAT THE SERVER REFUSES, which is the part a lazier mock
+    // would skip. A mock more PERMISSIVE than the real backend is worse than no
+    // mock: a screen developed against it offers a control that works in every
+    // test and 400s in production. So an unknown kind is refused, and so is a
+    // field the kind's renderer does not read.
+    async getPrintTemplate(
+      companyID: string,
+      docKind: string,
+    ): Promise<PrintTemplateResponse> {
+      ensure(companyID);
+      return mockPrintTemplateBody(
+        docKind,
+        printTemplates.get(mockPrintTemplateKey(companyID, docKind)),
+      );
+    },
+    async savePrintTemplate(
+      companyID: string,
+      docKind: string,
+      req: PrintTemplateRequest,
+    ): Promise<PrintTemplateResponse> {
+      ensure(companyID);
+      const kind = mockPrintTemplateKind(docKind);
+      mockPrintTemplateRefuseUnhonoured(kind, req);
+      // A FULL RESTATEMENT, matching the route: an omitted field is stored as
+      // empty, which means "fall back to the built-in default". Merging would
+      // make an emptied box un-emptiable.
+      const stored: PrintTemplateOverrides = {
+        title: req.title ?? "",
+        header_lines: req.header_lines ?? null,
+        footer_lines: req.footer_lines ?? null,
+        declaration: req.declaration ?? "",
+        terms: req.terms ?? "",
+        signature_label: req.signature_label ?? "",
+        show_bank_details: req.show_bank_details ?? false,
+        bank_lines: req.bank_lines ?? null,
+      };
+      printTemplates.set(mockPrintTemplateKey(companyID, docKind), stored);
+      return mockPrintTemplateBody(docKind, stored);
+    },
+    async clearPrintTemplate(
+      companyID: string,
+      docKind: string,
+    ): Promise<PrintTemplateResponse> {
+      ensure(companyID);
+      mockPrintTemplateKind(docKind);
+      const key = mockPrintTemplateKey(companyID, docKind);
+      const cleared = printTemplates.delete(key);
+      // Idempotent, and honest about having found nothing — the server's contract.
+      return { ...mockPrintTemplateBody(docKind, undefined), cleared };
+    },
+
+    async restoreCompany(_archive: Blob) {
+      throw new ApiError(
+        422,
+        "This is the in-memory mock client. A restore CREATES a company from an " +
+          "archive, and the mock has no database to create one in — run against " +
+          "cored to restore.",
+      );
+    },
+
+    // ---- OFFLINE SYNC + THE RECONCILIATION QUEUE (track D).
+    //
+    // ⛔ THE MOCK IS NOT TAUGHT TO SEQUENCE. Faking syncCommit would mean a
+    // SECOND IMPLEMENTATION of the subtlest thing on the server — the atomic
+    // per-(company, type, FY) numbering allocator, the (HLC, node) total order
+    // that picks a conflict winner, per-intent idempotency, and the freeze rule —
+    // and a test could then pin bytes no real backend ever produced. The one
+    // honest answer is a refusal that says which gate to run instead.
+    async syncCommit() {
+      throw new ApiError(
+        501,
+        "the mock has no cloud sequencer: committing an outbox needs the real " +
+          "numbering allocator, the (HLC, node) conflict order and the freeze rule, " +
+          "and a second copy of those in TypeScript would be unvalidated. Run " +
+          "against cored (pnpm verify:demo / the track-D drive) to exercise a commit.",
+      );
+    },
+
+    // ⚠️ AN EMPTY QUEUE HERE IS ACCURATE, NOT A STAND-IN. The mock never refuses
+    // an alter or a delete — it models no freeze rule and no stale-base conflict —
+    // so nothing in this world has ever been parked, and reporting nothing is the
+    // truth about it rather than a convenient blank. A test that needs entries
+    // injects them by spreading this client and overriding the method, which is
+    // the pattern TallyImportScreen.test.tsx documents.
+    async reconciliationQueue() {
+      return { entries: [] };
+    },
+
+    // No row can exist here, so both of these answer the way the server answers
+    // for an id that names no open entry. ⛔ RETURNING A FABRICATED PARKED
+    // VOUCHER WOULD BE THE ONE THING THE RULE FORBIDS — inventing a payload a
+    // real backend never produced, which a screen test could then pin.
+    async reconciliationPayload(_companyID: string, reconID: string) {
+      throw new ApiError(
+        404,
+        `no open reconciliation entry with that id (${reconID}); the mock parks none ` +
+          "because it refuses no alter or delete",
+      );
+    },
+    // ---- YEAR-END CLOSURE (0089).
+    //
+    // ⛔ THE REFUSALS MIRROR THE SERVER'S, INCLUDING THEIR CODES. D116 closed a
+    // defect that existed only because this mock and cored disagreed about the
+    // TEXT of a refusal and nothing compared them; the screens were built
+    // against the mock and shown something else. Both 409s here carry the same
+    // `code` the server sends, because DataScreen switches on the code.
+    async booksClosure(_companyID: string): Promise<BooksClosure> {
+      return mockClosure();
+    },
+    async closeBooks(
+      _companyID: string,
+      closedThrough: string,
+    ): Promise<BooksClosure> {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(closedThrough)) {
+        throw new ApiError(
+          400,
+          "closed_through must be a date as YYYY-MM-DD, and it is the LAST day of the " +
+            "period being closed — for the financial year 2026-27 that is 2027-03-31, " +
+            "never 2027-04-01",
+        );
+      }
+      if (mockClosedThrough !== null && closedThrough <= mockClosedThrough) {
+        throw new ApiError(
+          409,
+          `the books are already closed through a later date (${mockClosedThrough}). ` +
+            "Closing only ever moves the lock FORWARD; to unlock a period that is " +
+            "already closed, re-open the books first — that is a separate, deliberate act",
+          { code: "BOOKS_ALREADY_CLOSED_LATER" },
+        );
+      }
+      mockClosedThrough = closedThrough;
+      mockClosedAt = "2026-09-01T00:00:00Z";
+      mockClosedBy = "mock-owner";
+      return mockClosure();
+    },
+    async reopenBooks(_companyID: string): Promise<BooksClosure> {
+      if (mockClosedThrough === null) {
+        throw new ApiError(409, "no period is closed, so there is nothing to re-open", {
+          code: "NOTHING_CLOSED",
+        });
+      }
+      mockClosedThrough = null;
+      return mockClosure();
+    },
+
+    async resolveReconciliation(_companyID: string, reconID: string) {
+      throw new ApiError(
+        404,
+        `no open reconciliation entry with that id (${reconID}); the mock parks none ` +
+          "because it refuses no alter or delete",
+      );
+    },
+
+    // ---- THE AGENT PLANE (W2, D121 §8) --------------------------------
+    //
+    // ⚠️ THE MOCK HAS NO AGENT, ONLY THE AGENT'S TABLES. It cannot run a loop
+    // (there is no model and no preview here), so a run started against it
+    // either answers 503 AGENT_UNCONFIGURED — the shipped server default — or,
+    // with `agent.model: true`, records a `running` run and its run_started
+    // event and then sits there. What it DOES model faithfully is the decision
+    // contract the inbox is built on: one decision per approval (409), the
+    // 72-hour window (409 APPROVAL_EXPIRED, recorded as expired), ask_back
+    // without a note and an edit beside a reject (422). It never posts a
+    // voucher on approve, because the real server does not either: the commit
+    // is the agent poller's, afterwards.
+    async startAgentRun(_companyID: string, req: StartAgentRunRequest) {
+      const msg = "no agent model is configured on this server (set LLM_PROVIDER and friends)";
+      if (!agentState.model) {
+        throw new ApiError(503, msg, { code: AGENT_UNCONFIGURED, error: msg });
+      }
+      if (!(req.instruction ?? "").trim()) {
+        throw new ApiError(422, "agent: invalid request: an instruction is required");
+      }
+      const now = new Date().toISOString();
+      const run: AgentRun = {
+        id: `mock-run-${agentState.runs.length + 1}`,
+        created_by: "mock-user",
+        agent_id: "khata-agent",
+        channel: "panel",
+        instruction: req.instruction,
+        inputs: req.inputs ?? [],
+        delegation: {
+          acl_keys: req.delegate ?? [],
+          ...(req.max_amount_paise !== undefined ? { max_amount_paise: req.max_amount_paise } : {}),
+          expires_at: now,
+          step_up: false,
+        },
+        status: "running",
+        attempts: 0,
+        created_at: now,
+        updated_at: now,
+      };
+      agentState.runs.unshift(run);
+      agentState.events.set(run.id, [
+        {
+          seq: 1,
+          type: "RUN_STARTED",
+          kind: "run_started",
+          at: now,
+          actor_kind: "user",
+          actor_id: "mock-user",
+          data: { channel: "panel" },
+          hash: "0".repeat(64),
+        },
+      ]);
+      return { run };
+    },
+    async listAgentRuns(_companyID: string, limit?: number) {
+      const n = limit && limit > 0 ? limit : 50;
+      return { runs: agentState.runs.slice(0, n).map((r) => ({ ...r })) };
+    },
+    async getAgentRun(_companyID: string, runID: string) {
+      const run = agentState.runs.find((r) => r.id === runID);
+      if (!run) throw new ApiError(404, "not found");
+      return {
+        run: {
+          ...run,
+          approvals: agentState.approvals.filter((a) => a.run_id === runID).map((a) => ({ ...a })),
+        },
+      };
+    },
+    async agentRunEvents(_companyID: string, runID: string, after?: number) {
+      const run = agentState.runs.find((r) => r.id === runID);
+      if (!run) throw new ApiError(404, "not found");
+      const all = agentState.events.get(runID) ?? [];
+      const events = all.filter((e) => e.seq > (after ?? 0));
+      const last = events[events.length - 1];
+      return {
+        run_id: runID,
+        status: run.status,
+        finished: runFinished(run.status),
+        next_after: last ? last.seq : (after ?? 0),
+        events,
+      };
+    },
+    async cancelAgentRun(_companyID: string, runID: string) {
+      const run = agentState.runs.find((r) => r.id === runID);
+      if (!run) throw new ApiError(404, "not found");
+      if (!runFinished(run.status)) {
+        run.status = "cancelled";
+        run.finished_at = new Date().toISOString();
+      }
+      return { run: { ...run } };
+    },
+    async listAgentApprovals(
+      _companyID: string,
+      query?: { state?: "pending" | "all"; run_id?: string },
+    ) {
+      const rows = agentState.approvals.filter(
+        (a) =>
+          (query?.state !== "pending" || a.state === "pending") &&
+          (!query?.run_id || a.run_id === query.run_id),
+      );
+      return { approvals: rows.map((a) => ({ ...a })) };
+    },
+    async getAgentApproval(_companyID: string, approvalID: string) {
+      const a = agentState.approvals.find((x) => x.id === approvalID);
+      if (!a) throw new ApiError(404, "not found");
+      return { approval: { ...a } };
+    },
+    async decideAgentApproval(
+      _companyID: string,
+      approvalID: string,
+      req: AgentDecisionRequest,
+    ) {
+      const a = agentState.approvals.find((x) => x.id === approvalID);
+      if (!a) throw new ApiError(404, "not found");
+      if (req.decision !== "approve" && req.decision !== "reject" && req.decision !== "ask_back") {
+        throw new ApiError(422, `agent: invalid request: unknown decision ${String(req.decision)}`);
+      }
+      if (req.decision === "ask_back" && !(req.note ?? "").trim()) {
+        throw new ApiError(422, "agent: invalid request: ask_back needs a note");
+      }
+      if (req.edited_body !== undefined && req.decision !== "approve") {
+        throw new ApiError(422, "agent: invalid request: an edited body is only meaningful with approve");
+      }
+      if (a.state !== "pending") {
+        throw new ApiError(409, "this approval has already been decided", {
+          code: "ALREADY_DECIDED",
+          approval: { ...a },
+        });
+      }
+      const now = new Date();
+      const expired = now.getTime() > Date.parse(a.deadline_at);
+      agentState.decisions.push({ approvalID, ...req });
+      a.decision = {
+        id: `mock-decision-${approvalID}`,
+        decision: expired ? "expired" : req.decision,
+        ...(req.edited_body && !expired ? { edited_args: req.edited_body } : {}),
+        ...(req.note && !expired ? { note: req.note } : {}),
+        decided_webauthn: false,
+        decided_at: now.toISOString(),
+      };
+      if (expired) {
+        a.state = "expired";
+        throw new ApiError(
+          409,
+          "the approval window closed before this decision; it has been recorded as expired",
+          { code: "APPROVAL_EXPIRED", approval: { ...a } },
+        );
+      }
+      a.state =
+        req.decision === "approve" ? "approved" : req.decision === "reject" ? "rejected" : "ask_back";
+      return { approval: { ...a } };
+    },
+
+    // ---- W2 breadth ------------------------------------------------------
+    async previewAgentEdit(_companyID: string, approvalID: string, _editedBody: Record<string, unknown>) {
+      // ⚠️ THE MOCK HAS NO HANDLER TO DRY-RUN, so it answers with the approval's
+      // own recorded preview — never an effect computed here (the "no money on
+      // this side" rule). A screen test that needs a refusal seeds one.
+      const a = agentState.approvals.find((x) => x.id === approvalID);
+      if (!a) throw new ApiError(404, "not found");
+      if (a.state !== "pending") {
+        throw new ApiError(409, "this approval has already been decided", { code: "ALREADY_DECIDED" });
+      }
+      return { preview: { status: a.preview?.status ?? 201, effect: a.preview?.effect ?? null } };
+    },
+    async listAgentAutonomy(_companyID: string) {
+      if (!agentState.owner) {
+        throw new ApiError(403, "only an Owner may read or change the agent's autonomy");
+      }
+      return { rows: agentState.autonomy.map((r) => ({ ...r })), default_level: 1, keys: MOCK_AUTONOMY_KEYS.slice() };
+    },
+    async setAgentAutonomy(_companyID: string, req: SetAgentAutonomyRequest) {
+      if (!agentState.owner) {
+        throw new ApiError(403, "only an Owner may read or change the agent's autonomy");
+      }
+      if (!MOCK_AUTONOMY_KEYS.includes(req.acl_key)) {
+        throw new ApiError(422, `agent: invalid request: "${req.acl_key}" is not an action an agent can ever commit`);
+      }
+      if (!Number.isInteger(req.level) || req.level < 0 || req.level > 3) {
+        throw new ApiError(422, "agent: invalid request: level must be 0..3");
+      }
+      const same = (r: AgentAutonomyRow) =>
+        r.acl_key === req.acl_key && (r.user_id ?? "") === (req.user_id ?? "") &&
+        (r.amount_max_paise ?? null) === (req.amount_max_paise ?? null);
+      const now = new Date().toISOString();
+      const existing = agentState.autonomy.find(same);
+      if (existing) {
+        existing.level = req.level;
+        existing.updated_at = now;
+      } else {
+        agentState.autonomy.push({
+          id: `mock-autonomy-${agentState.autonomy.length + 1}`,
+          acl_key: req.acl_key,
+          level: req.level,
+          ...(req.amount_max_paise !== undefined ? { amount_max_paise: req.amount_max_paise } : {}),
+          ...(req.user_id ? { user_id: req.user_id } : {}),
+          set_by: "mock-owner",
+          updated_at: now,
+        });
+      }
+      return { rows: agentState.autonomy.map((r) => ({ ...r })), default_level: 1, keys: MOCK_AUTONOMY_KEYS.slice() };
+    },
+    async verifyAgentRun(_companyID: string, runID: string) {
+      const evs = agentState.events.get(runID) ?? [];
+      return { run_id: runID, events: evs.length, ok: true };
+    },
+    async verifyAgentAnchors(_companyID: string) {
+      return { anchors: 0, ok: true };
+    },
+    async unblockLedger(companyID: string, ledgerID: string) {
+      const l = ensure(companyID).ledgers.find((x) => x.id === ledgerID);
+      if (!l) throw new ApiError(404, "ledger not found");
+      if (!l.blocked) {
+        throw new ApiError(409, "this ledger is not blocked", { code: "NOT_BLOCKED" });
+      }
+      l.blocked = false;
+      l.blockedReason = undefined;
+      return { ledger_id: ledgerID, blocked: false as const };
+    },
+    // ---- THE INSIGHT ENGINE (W4) -------------------------------------------
+    async listInsights(_companyID: string, query?: { state?: InsightState; type?: string }) {
+      const state = query?.state ?? "open";
+      return {
+        insights: insightState.insights
+          .filter((i) => i.state === state && (!query?.type || i.type === query.type))
+          .map((i) => ({ ...i })),
+        types: [],
+        owed: [],
+      };
+    },
+    async getInsight(_companyID: string, insightID: string) {
+      const i = insightState.insights.find((x) => x.id === insightID);
+      if (!i) throw new ApiError(404, "not found");
+      return { ...i };
+    },
+    async verifyInsight(_companyID: string, insightID: string) {
+      if (!insightState.insights.some((x) => x.id === insightID)) throw new ApiError(404, "not found");
+      return { reproduces: true };
+    },
+    async insightFeedback(_companyID: string, insightID: string, verdict: InsightVerdict) {
+      const i = insightState.insights.find((x) => x.id === insightID);
+      if (!i) throw new ApiError(404, "not found");
+      if (verdict !== "useful" && verdict !== "not_useful" && verdict !== "wrong") {
+        throw new ApiError(422, "insights: verdict must be useful, not_useful or wrong");
+      }
+      i.verdicts = { ...i.verdicts, [verdict]: (i.verdicts[verdict] ?? 0) + 1 };
+      if (verdict !== "useful" && i.state === "open") i.state = "dismissed";
+      return { ...i };
+    },
+    async getInsightDigest(_companyID: string, date?: string) {
+      const d = insightState.digests.get(date ?? "today");
+      if (!d) throw new ApiError(404, "not found");
+      return d;
+    },
+    async composeInsightDigest(_companyID: string, date?: string) {
+      const key = date ?? "today";
+      const existing = insightState.digests.get(key);
+      if (existing) return existing;
+      const items = mockDigestItems();
+      const d: InsightDigest = {
+        id: `mock-digest-${key}`, digest_date: key, recipient: "", items,
+        narrative: items.map((it, n) => `${n + 1}. ${it.text}\n`).join(""),
+        narrator: "template", model_id: "", prompt_version: "", narration_rejected: "",
+      };
+      insightState.digests.set(key, d);
+      return d;
+    },
+    async listInsightSuppressions() {
+      return { suppressions: insightState.suppressions.map((s) => ({ ...s })) };
+    },
+    async suppressInsight(_companyID: string, req: SuppressInsightRequest) {
+      if (!req.type || !req.reason.trim()) throw new ApiError(400, "suppress needs a known type, days >= 0 and a reason");
+      const id = `mock-supp-${insightState.suppressions.length + 1}`;
+      insightState.suppressions = insightState.suppressions.filter(
+        (s) => !(s.type === req.type && s.entity_key === (req.entity_key ?? "")),
+      );
+      insightState.suppressions.push({
+        id, type: req.type, entity_key: req.entity_key ?? "", until: null, reason: req.reason,
+        created_by: "mock", created_at: new Date().toISOString(),
+      });
+      return { suppression_id: id };
+    },
+    async unsuppressInsight(_companyID: string, suppressionID: string) {
+      const n = insightState.suppressions.length;
+      insightState.suppressions = insightState.suppressions.filter((s) => s.id !== suppressionID);
+      if (insightState.suppressions.length === n) throw new ApiError(404, "not found");
+    },
+    async runInsightsNow() {
+      return {
+        events: { events: 0, skipped: 0, raised: {} },
+        nightly: { as_of: "", profile_facts: 0, by_type: {}, expired: 0 },
+      };
+    },
   };
+}
+
+// ---------------------------------------------------------------------------
+// The payroll mock's helpers. See MockCompany.employees for why none of them
+// computes a statutory figure.
+// ---------------------------------------------------------------------------
+
+/**
+ * The salary-component vocabulary, mirroring `payroll.ComponentTypes()` and its
+ * s.2(88) classification.
+ *
+ * ⚠️ THIS IS A SECOND COPY OF A LEGAL CLASSIFICATION AND THE RISK IS REAL — it
+ * is here only because a mock has no way to call Go. It is the reason the LIVE
+ * client fetches the vocabulary from the server instead of holding a table like
+ * this one: a form built from a hardcoded list can offer a type the server
+ * refuses, and `is_wages` decides whether PF is contributed at all. If cored's
+ * vocabulary changes, THIS is the copy that goes stale, and the symptom is a
+ * hermetic test that passes while the browser does not.
+ */
+const MOCK_PAYROLL_COMPONENT_TYPES: readonly {
+  code: string;
+  is_wages: boolean;
+  in_deeming_test: boolean;
+}[] = [
+  { code: "BASIC", is_wages: true, in_deeming_test: false },
+  { code: "DA", is_wages: true, in_deeming_test: false },
+  { code: "RETAINING_ALLOWANCE", is_wages: true, in_deeming_test: false },
+  { code: "SPECIAL_ALLOWANCE", is_wages: true, in_deeming_test: false },
+  { code: "OTHER_ALLOWANCE", is_wages: true, in_deeming_test: false },
+  { code: "BONUS", is_wages: false, in_deeming_test: true },
+  { code: "HOUSE_ACCOMMODATION_VALUE", is_wages: false, in_deeming_test: true },
+  { code: "EMPLOYER_PF_CONTRIBUTION", is_wages: false, in_deeming_test: true },
+  { code: "CONVEYANCE_ALLOWANCE", is_wages: false, in_deeming_test: true },
+  { code: "SPECIAL_EXPENSES", is_wages: false, in_deeming_test: true },
+  { code: "HRA", is_wages: false, in_deeming_test: true },
+  { code: "AWARD_OR_SETTLEMENT", is_wages: false, in_deeming_test: true },
+  { code: "OVERTIME_ALLOWANCE", is_wages: false, in_deeming_test: true },
+  { code: "COMMISSION", is_wages: false, in_deeming_test: true },
+  { code: "GRATUITY", is_wages: false, in_deeming_test: false },
+  {
+    code: "RETRENCHMENT_COMPENSATION",
+    is_wages: false,
+    in_deeming_test: false,
+  },
+  { code: "EX_GRATIA", is_wages: false, in_deeming_test: false },
+];
+
+/** What this mock deliberately did not compute, on the payslip that lacks it. */
+const MOCK_PAYROLL_DEFERRALS: readonly PayslipDeferral[] = [
+  {
+    component: "EPF / EPS / ESI / TDS",
+    reason:
+      "This is the in-memory mock client, which implements no statutory engine. " +
+      "Every contribution and tax figure here is 0.0000 as an ABSTENTION, not as a " +
+      "computation — the real figures come from cored's internal/payroll, whose " +
+      "rules carry the wage ceilings, the s.2(88) classification and s.392.",
+    citation: "frontend/src/api/mock.ts — see MockCompany.employees",
+  },
+];
+
+/** Render a decimal-ish string at the storage scale, as every payroll field is. */
+function mockFixed4(value: string): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(4) : "0.0000";
+}
+
+/** One register row: gross from the stored components, everything else zero. */
+function mockRegisterRow(
+  e: EmployeeView,
+  components: readonly SalaryComponentView[],
+): PayrollRegisterRow {
+  const gross = components.reduce((sum, c) => sum + Number(c.amount), 0);
+  return {
+    employee_id: e.id,
+    employee_code: e.code,
+    employee_name: e.name,
+    days_paid: "0.0000",
+    gross: mockFixed4(String(gross)),
+    epf_employee: "0.0000",
+    esi_employee: "0.0000",
+    tds: "0.0000",
+    deductions: "0.0000",
+    net: mockFixed4(String(gross)),
+    epf_employer: "0.0000",
+    eps_employer: "0.0000",
+    esi_employer: "0.0000",
+  };
+}
+
+/** The totals row — a SUM of the rows above and nothing else. */
+function mockRegisterTotals(
+  rows: readonly PayrollRegisterRow[],
+): PayrollRegisterRow {
+  const sum = (pick: (r: PayrollRegisterRow) => string): string =>
+    mockFixed4(String(rows.reduce((t, r) => t + Number(pick(r)), 0)));
+  return {
+    days_paid: sum((r) => r.days_paid),
+    gross: sum((r) => r.gross),
+    epf_employee: sum((r) => r.epf_employee),
+    esi_employee: sum((r) => r.esi_employee),
+    tds: sum((r) => r.tds),
+    deductions: sum((r) => r.deductions),
+    net: sum((r) => r.net),
+    epf_employer: sum((r) => r.epf_employer),
+    eps_employer: sum((r) => r.eps_employer),
+    esi_employer: sum((r) => r.esi_employer),
+  };
+}
+
+/**
+ * A stand-in statutory download: a note, under the real filename, WITH both
+ * disclosure headers.
+ *
+ * The headers are the part that matters. cored sets `X-Statutory-File` and
+ * `X-Statutory-Disclosure` on every one of these routes, and a screen's only job
+ * is to put them in front of the operator — so the mock carries them, and a
+ * screen test that forgets to render the disclosure fails here rather than in
+ * production.
+ */
+function mockStatutoryDownload(
+  c: MockCompany,
+  period: string,
+  what: string,
+  fileName: string,
+): StatutoryFileDownload {
+  const note =
+    `This is the in-memory MOCK client, not cored. No ${what} was produced for ` +
+    `${period} (company ${c.id}): the layout lives in cored's payrollfile package, ` +
+    `record by record, and a second hand-rolled copy here would be unvalidated ` +
+    `bytes a test could pin.`;
+  return {
+    blob: new Blob([note], { type: "text/plain" }),
+    filename: fileName.replace(/\.[^.]+$/, "") + ".zip",
+    statutoryFile: fileName,
+    disclosure:
+      "NOT validator-verified; see the .README.txt inside this archive",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// PER-COMPANY PRINT TEMPLATES (track C) — the mock's override store.
+// ---------------------------------------------------------------------------
+
+function mockPrintTemplateKey(companyID: string, docKind: string): string {
+  return `${companyID} ${docKind}`;
+}
+
+/**
+ * Refuse a document kind the server does not print, with the server's own 400.
+ *
+ * ⛔ THE MOCK MUST NOT BE MORE PERMISSIVE THAN THE BACKEND. A screen developed
+ * against a mock that accepted "invoice" (the plausible wrong answer — everybody
+ * calls it that, and the stored vocabulary spells it "tax-invoice") would pass
+ * every test and 400 in production.
+ */
+function mockPrintTemplateKind(docKind: string): string {
+  if (!printTemplateSurfaceFor(docKind)) {
+    throw new ApiError(
+      400,
+      `unknown document kind ${docKind}: this system prints ` +
+        PRINT_TEMPLATE_KINDS.map((k) => k.doc_kind).join(", "),
+    );
+  }
+  return docKind;
+}
+
+/**
+ * Refuse a field this kind's renderer does not read, when it carries CONTENT.
+ *
+ * ⛔ WHY REFUSING IS THE HONEST BEHAVIOUR. `RenderReport` reads three of the
+ * seven overridable fields. Storing a declaration for the `report` kind would be
+ * accepted, stored and never printed — the operator types a certification, the
+ * screen says saved, and no statement ever carries it. Nothing errors.
+ *
+ * ⚠️ PRESENCE IS NOT CONTENT. A form that submits its whole shape with the unused
+ * boxes empty is behaving correctly and must not be refused; only a typed value
+ * is.
+ */
+function mockPrintTemplateRefuseUnhonoured(
+  docKind: string,
+  req: PrintTemplateRequest,
+): void {
+  const surface = printTemplateSurfaceFor(docKind);
+  if (!surface) return;
+  const honours = (f: PrintTemplateField) => surface.honours.includes(f);
+  const refuse = (name: string): never => {
+    throw new ApiError(
+      400,
+      `the ${docKind} layout does not print ${name}, so this would be stored ` +
+        `and never appear. Fields this document honours: ${surface.honours.join(", ")}`,
+    );
+  };
+  const texts: [PrintTemplateField, string, string | undefined][] = [
+    ["title", "title", req.title],
+    ["declaration", "declaration", req.declaration],
+    ["terms", "terms", req.terms],
+    ["signature_label", "signature_label", req.signature_label],
+  ];
+  for (const [field, name, value] of texts) {
+    if ((value ?? "").trim() !== "" && !honours(field)) refuse(name);
+  }
+  const lines: [PrintTemplateField, string, string[] | undefined][] = [
+    ["header_lines", "header_lines", req.header_lines],
+    ["footer_lines", "footer_lines", req.footer_lines],
+    ["bank_details", "bank_lines", req.bank_lines],
+  ];
+  for (const [field, name, value] of lines) {
+    if ((value?.length ?? 0) > 0 && !honours(field)) refuse(name);
+  }
+  if (req.show_bank_details && !honours("bank_details")) refuse("bank details");
+}
+
+/** The zero value, which is what an ABSENT row reads as. */
+function mockPrintTemplateZero(): PrintTemplateOverrides {
+  return {
+    title: "",
+    header_lines: null,
+    footer_lines: null,
+    declaration: "",
+    terms: "",
+    signature_label: "",
+    show_bank_details: false,
+    bank_lines: null,
+  };
+}
+
+/**
+ * Assemble the response the same way the Go handler does.
+ *
+ * `honours` and `defaults` come from the GENERATED artefact rather than from
+ * anything this file decides — they are the Go renderers' answers, measured by
+ * rendering, so the mock cannot drift from them.
+ */
+function mockPrintTemplateBody(
+  docKind: string,
+  stored: PrintTemplateOverrides | undefined,
+): PrintTemplateResponse {
+  const kind = mockPrintTemplateKind(docKind);
+  const surface = printTemplateSurfaceFor(kind);
+  if (!surface) {
+    throw new ApiError(400, `unknown document kind ${docKind}`);
+  }
+  return {
+    doc_kind: kind,
+    customised: stored !== undefined,
+    honours: surface.honours,
+    defaults: surface.defaults,
+    default_title_is_the_documents_own_name:
+      surface.default_title_is_the_documents_own_name,
+    // Blank everywhere means "the built-in default prints", and that is the
+    // ordinary case for most companies forever.
+    overrides: stored ?? mockPrintTemplateZero(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// T12 — GSTR-9 helpers
+// ---------------------------------------------------------------------------
+
+/** An all-zero tax triple, in the fixed-4 spelling every money value uses. */
+function zeroTax9(): GSTTax {
+  return { camt: "0.0000", samt: "0.0000", iamt: "0.0000" };
+}
+
+/**
+ * The calendar year an Indian financial year STARTS in, or null when [from, to]
+ * is not one.
+ *
+ * ⛔ IT IS STRICT ON PURPOSE, exactly as cored's financialYear() is. There is no
+ * GSTR-9 for an arbitrary window, and a mock that accepted one would let a screen
+ * ship a control the server refuses.
+ */
+function financialYearOf(from: string, to: string): number | null {
+  const m = /^(\d{4})-04-01$/.exec(from);
+  if (!m) return null;
+  const y = Number(m[1]);
+  return to === `${y + 1}-03-31` ? y : null;
+}
+
+/** The inclusive bounds and FP of month `n` (0-based) of the year from April. */
+function monthWindowOf(
+  startYear: number,
+  n: number,
+): { from: string; to: string; fp: string } {
+  // Month arithmetic in UTC so a developer machine's timezone cannot shift a
+  // boundary — a month that starts a day early silently moves vouchers between
+  // periods, which is the one thing this grid must never do.
+  const start = new Date(Date.UTC(startYear, 3 + n, 1));
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const mm = String(start.getUTCMonth() + 1).padStart(2, "0");
+  return { from: iso(start), to: iso(end), fp: `${mm}${start.getUTCFullYear()}` };
+}
+
+/**
+ * The statutory table list, with the statuses cored gives them.
+ *
+ * ⚠️ ELEVEN OF THE FOURTEEN ARE NOT_DERIVED, and the mock says so rather than
+ * emitting empty derived tables: a screen built against a mock where everything
+ * derives would have no rendering for the case that is actually normal.
+ */
+function gstr9Tables(): GSTR9Table[] {
+  const nd = (no: string, title: string, reason: string): GSTR9Table => ({
+    no,
+    title,
+    status: "NOT_DERIVED",
+    reason,
+  });
+  return [
+    {
+      no: "4",
+      title: "Details of advances and outward supplies on which tax is payable",
+      status: "PARTIAL",
+      reason:
+        "The B2B and B2C rows come from the year's twelve GSTR-1 returns and are net of " +
+        "credit and debit notes. Four statutory rows below cannot be produced from these books.",
+      rows: [
+        {
+          label: "4A-4B",
+          title:
+            "Supplies to unregistered and registered persons (B2C and B2B), net of credit and debit notes",
+          txval: "0.0000",
+          tax: zeroTax9(),
+        },
+      ],
+      omitted: [
+        {
+          label: "4C",
+          title: "Exports on payment of tax",
+          reason: "these books carry no export, SEZ or deemed-export marker on a supply.",
+        },
+      ],
+      total_suppressed: true,
+      total_suppressed_reason:
+        "4N totals rows 4A to 4L, and five of them are not derived here. A total over a set " +
+        "with known-missing members is not a total — it is an UNDERSTATEMENT that foots.",
+    },
+    nd(
+      "5",
+      "Outward supplies on which tax is not payable",
+      "these books carry no export, SEZ, deemed-export, nil-rated, exempt or non-GST marker.",
+    ),
+    {
+      no: "6",
+      title: "Details of ITC availed as declared in returns filed during the year",
+      status: "PARTIAL",
+      reason:
+        "6A is the year's GSTR-3B table 4(A). The statutory breakdown below it cannot be reproduced.",
+      rows: [
+        { label: "6A", title: "Total ITC availed as per GSTR-3B table 4(A)", tax: zeroTax9() },
+      ],
+      omitted: [
+        {
+          label: "6B",
+          title: "Inputs, capital goods and input services, separately",
+          reason:
+            "the input / capital-goods / input-services split is not modelled.",
+        },
+      ],
+      total_suppressed: true,
+      total_suppressed_reason:
+        "6J is meant to be ZERO on a correct return. Emitting it from a breakdown that is not " +
+        "derived would print a zero meaning 'nothing was checked' in the one cell whose zero " +
+        "means 'everything ties'.",
+    },
+    nd(
+      "7",
+      "ITC reversed and ineligible ITC",
+      "the twelve GSTR-3Bs behind this year were generated with NO inward statement, so table " +
+        "4(B) is empty in every one of them. A zero here would say the taxpayer reversed nothing.",
+    ),
+    nd(
+      "8",
+      "Other ITC-related information (GSTR-2A comparison)",
+      "the department's own annual GSTR-2A is not held by this build.",
+    ),
+    nd(
+      "9",
+      "Tax paid as declared in returns filed during the year",
+      "there is no electronic cash or credit ledger and no GST challan register here.",
+    ),
+    nd(
+      "10 & 11",
+      "Prior-year supplies declared in the next year's April-September returns",
+      "those returns are outside the window asked for, and amendments are not modelled.",
+    ),
+    nd(
+      "12 & 13",
+      "Prior-year ITC reversed or availed in the next year's April-September returns",
+      "those returns are outside the window asked for, and amendments are not modelled.",
+    ),
+    nd(
+      "14",
+      "Differential tax paid on account of tables 10 and 11",
+      "those returns are outside the window asked for, and what was actually PAID is not known.",
+    ),
+    nd(
+      "15",
+      "Particulars of demands and refunds",
+      "demands, refunds and their status are departmental data that never enter these books.",
+    ),
+    nd(
+      "16",
+      "Composition supplies, deemed supply under s.143, goods sent on approval",
+      "there is no job-work register and no approval-basis dispatch tracking.",
+    ),
+    { no: "17", title: "HSN-wise summary of outward supplies", status: "DERIVED", rows: [] },
+    nd(
+      "18",
+      "HSN-wise summary of inward supplies",
+      "per-line GST detail IS recorded for purchases, but nothing rolls it up today.",
+    ),
+    nd(
+      "19",
+      "Late fee payable and paid",
+      "nothing here records WHEN a return was filed, and late fee is a function of the delay.",
+    ),
+  ];
 }

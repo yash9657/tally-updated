@@ -32,6 +32,8 @@ const MAC_COMPOSED: ReadonlyArray<[combo: string, key: string, code: string]> = 
   ["Alt+Z", "Ω", "KeyZ"], // e-Way Bill
   ["Alt+X", "≈", "KeyX"], // Cancel voucher / Explode BOM
   ["Alt+O", "ø", "KeyO"], // Import bank statement
+  ["Alt+R", "®", "KeyR"], // Reconciliation queue (track D)
+  ["Alt+Q", "œ", "KeyQ"], // Offline outbox (track D)
 ];
 
 describe("comboFromEvent survives a real macOS keyboard", () => {

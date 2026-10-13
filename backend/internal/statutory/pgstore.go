@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/khata/cored/internal/durable"
 )
 
 // PGStore is the Postgres-backed StepStore (migration 0013, table
@@ -20,17 +22,13 @@ import (
 // shape — a non-RLS table reached over a plain pool with no transaction and no
 // GUC (statutory_step carries no RLS by design; see the 0013 header).
 //
-// # Interface note (no context)
+// # Context (D120 F4, done at adoption as it said to be)
 //
-// StepStore's methods predate context plumbing (runner.go:18-23:
-// Load(workflowID) / Append(workflowID, r)), and widening the interface would
-// churn MemStore, Run, GenerateIRNWorkflow and every existing test. This WS
-// deliberately does NOT widen it; the methods therefore use
-// context.Background() internally. Consequence to be aware of: a store call does
-// not observe HTTP request cancellation. That is acceptable and arguably
-// desirable here — abandoning a half-written step record is worse than finishing
-// a sub-millisecond INSERT — but it is the reason a future dedicated refactor
-// (ctx on StepStore) is worth doing.
+// StepStore's methods predated context plumbing, and this header used to record
+// that they called context.Background() internally and that "a future dedicated
+// refactor (ctx on StepStore) is worth doing". W2 did it when it adopted the
+// engine, because doing it afterwards would have cost the same refactor plus
+// every agent call site. A store call now observes the caller's ctx.
 //
 // # JSONB normalization (deliberate, and why it is safe)
 //
@@ -52,12 +50,14 @@ import (
 // # Concurrency
 //
 // Append uses ON CONFLICT DO NOTHING with no row lock, which makes it idempotent
-// but does NOT serialize two processes racing the same step: two statutoryd
-// instances sharing one DSN could both run `generate` and call the real IRP
-// twice, the loser's output being discarded. Single-instance statutoryd is the
-// deployment shape (IMPLEMENTATION_PLAN.md §7 deferral 7 — multi-instance HA /
-// leader election). Do not read this store's idempotency as distributed mutual
-// exclusion.
+// but does NOT by itself serialise two processes racing the same step. What
+// serialises them is TryLock: a per-workflow pg_try_advisory_lock that Run takes
+// before its first Load and holds to the end (durable.AdvisoryLocker). This
+// header used to discharge the race with a deployment assumption ("single-
+// instance statutoryd remains the deployment shape") — D120 §4 measured that the
+// assumption does not carry to a horizontally-scaled process (two pollers ran
+// the money step twice while this table recorded it once), so the exclusion is
+// now a property of the engine, not of how many copies of the binary run.
 //
 // # Stricter than MemStore
 //
@@ -68,13 +68,21 @@ import (
 // resumable — but PGStore is strictly less forgiving.
 type PGStore struct {
 	pool *pgxpool.Pool
+	lock durable.AdvisoryLocker
 }
 
 // NewPGStore constructs a PGStore over an existing pgx pool. The caller owns the
 // pool's lifecycle. The statutory_step table must already exist — statutoryd
 // does NOT run migrations (cored owns all schema); cmd/statutoryd verifies the
 // table on boot and refuses to start otherwise.
-func NewPGStore(pool *pgxpool.Pool) *PGStore { return &PGStore{pool: pool} }
+func NewPGStore(pool *pgxpool.Pool) *PGStore {
+	return &PGStore{pool: pool, lock: durable.AdvisoryLocker{Pool: pool, Namespace: "statutory"}}
+}
+
+// TryLock takes the workflow's advisory lock. See durable.AdvisoryLocker.
+func (s *PGStore) TryLock(ctx context.Context, workflowID string) (func(), bool, error) {
+	return s.lock.TryLock(ctx, workflowID)
+}
 
 // compile-time proof that PGStore satisfies the durable-runner contract.
 var _ StepStore = (*PGStore)(nil)
@@ -82,8 +90,7 @@ var _ StepStore = (*PGStore)(nil)
 // Load returns the workflow's completed step results in append order (ORDER BY
 // the identity column, which is monotonic per insert). An unknown workflow
 // yields an empty slice and no error, matching MemStore.
-func (s *PGStore) Load(workflowID string) ([]StepResult, error) {
-	ctx := context.Background()
+func (s *PGStore) Load(ctx context.Context, workflowID string) ([]StepResult, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT step_name, output
 		FROM statutory_step
@@ -114,8 +121,7 @@ func (s *PGStore) Load(workflowID string) ([]StepResult, error) {
 // is a silent no-op (ON CONFLICT DO NOTHING on the (workflow_id, step_name)
 // primary key) — the same semantics as MemStore's duplicate-name scan, which is
 // what lets a fully-completed workflow be re-Run with zero step executions.
-func (s *PGStore) Append(workflowID string, r StepResult) error {
-	ctx := context.Background()
+func (s *PGStore) Append(ctx context.Context, workflowID string, r StepResult) error {
 	output := r.Output
 	if len(output) == 0 {
 		// JSONB NOT NULL would reject an empty payload with an opaque driver

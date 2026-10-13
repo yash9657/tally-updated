@@ -684,11 +684,29 @@ func TestSeedCompanyDefaultsCreatesMainLocation(t *testing.T) {
 	}
 }
 
-// TestValuationMethodIsWeightedAverageOnly pins the CHECK. v1 ships weighted
-// average only, and the schema says so out loud rather than accepting 'FIFO' and
-// then valuing it as weighted average anyway — which would be a wrong closing
-// value that nothing anywhere reports as an error.
-func TestValuationMethodIsWeightedAverageOnly(t *testing.T) {
+// TestValuationMethodIsAClosedEnumeration pins the CHECK, and it is worth
+// reading WHY it is no longer called ...IsWeightedAverageOnly.
+//
+// Until T9 the column admitted one value, and this test asserted that literally.
+// Migration 0078 widened it to the three methods that now have valuers (FIFO and
+// LIFO landed with lot-queue valuers in internal/inventory), so the LIST moved —
+// and a test that asserts a list is a test that has to be edited every time the
+// product grows, which is exactly how a list-shaped assertion stops meaning
+// anything. So this asserts the PROPERTY that has not moved and must not:
+//
+//	the column is a CLOSED ENUMERATION whose members all have a valuer.
+//
+// ⛔ WHY THAT PROPERTY IS THE ONE WORTH GUARDING. inventory.ValuerFor ERRORS on a
+// method it does not implement rather than falling back to weighted average, so
+// the CHECK and the binary are two halves of one rule. A method in the column
+// with no valuer behind it does not misvalue one item — it takes out the Stock
+// Summary AND the Balance Sheet for the WHOLE COMPANY, every other item
+// included, long after the master was written. The two directions of the pairing
+// (every implemented method is admitted, every admitted method is implemented)
+// are pinned in internal/masters by TestValuationMethodsMatchTheMigration, which
+// can read the Go vocabulary; this test is the database's half of it and stays
+// here with the other schema guards.
+func TestValuationMethodIsAClosedEnumeration(t *testing.T) {
 	skipIfNoDB(t)
 	h := setupHarness(t, 0, 0)
 	ctx := context.Background()
@@ -712,12 +730,35 @@ func TestValuationMethodIsWeightedAverageOnly(t *testing.T) {
 		t.Errorf("a new stock item defaults to valuation_method %q, want WEIGHTED_AVG", method)
 	}
 
-	_, err := h.admin.Exec(ctx, `UPDATE stock_item SET valuation_method = 'FIFO' WHERE id = $1`, item)
-	if err == nil {
-		t.Fatal("an item was set to FIFO, which no valuer implements: its stock would be valued " +
-			"as weighted average while the master claims otherwise")
+	// The three this build implements are ACCEPTED. A CHECK that refused one of
+	// them would make the item form offer a method that fails on save.
+	for _, ok := range []string{"WEIGHTED_AVG", "FIFO", "LIFO"} {
+		if _, err := h.admin.Exec(ctx,
+			`UPDATE stock_item SET valuation_method = $2 WHERE id = $1`, item, ok); err != nil {
+			t.Errorf("valuation_method %q was REFUSED by the database (%v) — this build has a "+
+				"valuer for it, so the costing-method picker would offer it and then fail on save", ok, err)
+		}
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "check constraint") {
-		t.Fatalf("FIFO was refused, but not by the valuation_method CHECK: %v", err)
+
+	// And anything else is REFUSED BY THE DATABASE, not merely by the handler.
+	// ⛔ THE LIST IS NOT THE ASSERTION. These are real TallyPrime costing methods
+	// this build deliberately does not implement, plus the case and whitespace
+	// variants a hand-written UPDATE or an importer would produce; the property is
+	// "no valuer, no row", and the members are only witnesses to it.
+	for _, bad := range []string{
+		"LAST_PURCHASE_COST", "STANDARD_COST", "AT_ZERO_COST", "MONTHLY_AVG",
+		"LIFO_ANNUAL", "fifo", "Fifo", "FIFO ", "", "WEIGHTED AVG",
+	} {
+		_, err := h.admin.Exec(ctx,
+			`UPDATE stock_item SET valuation_method = $2 WHERE id = $1`, item, bad)
+		if err == nil {
+			t.Errorf("an item was set to %q, which no valuer implements: the Stock Summary and "+
+				"the Balance Sheet would fail for this whole company, and nothing else would "+
+				"report an error", bad)
+			continue
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "check constraint") {
+			t.Errorf("%q was refused, but not by the valuation_method CHECK: %v", bad, err)
+		}
 	}
 }

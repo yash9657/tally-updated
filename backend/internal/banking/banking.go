@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/khata/cored/internal/bankstatement"
 	"github.com/khata/cored/internal/platform/db"
 )
 
@@ -92,6 +93,62 @@ func (s *Service) SetBankDate(
 	bankDate string,
 	by string,
 ) error {
+	return s.setBankDate(ctx, companyID, voucherID, ledgerID, legNo, bankDate, by, uuid.Nil)
+}
+
+// SetBankDateFromStatementLine is the SAME write, additionally recording that
+// the clearance came from an imported bank row (T4 slice 2b).
+//
+// ===========================================================================
+// ⭐ MATCHING HAS NO WRITE PATH OF ITS OWN, AND THAT IS THE SLICE'S LOAD-BEARING
+//
+//	DECISION
+//
+// ===========================================================================
+// Accepting a proposed match is not a new kind of event; it is a person
+// asserting a bank date, which is exactly what the manual tick is. So it goes
+// through THIS function, and four properties follow that no parallel route could
+// have been given without remembering to:
+//
+//   - The ACL. Resolving requires `alter bank-reconciliation`, the same
+//     authority as ticking by hand. Matching therefore cannot become a second
+//     way to ACQUIRE that authority — a level refused the tick cannot reconcile
+//     by matching what it may not reconcile by typing.
+//   - The back-dated cutoff. The route carries `bank_date`, peekBankDate reads
+//     it, and storedBankDateForLeg reads the one already there. A new route
+//     would have had a date the PDP could not see, which is byte for byte the
+//     defect auth_middleware.go's bank-reconciliation comment records shipping
+//     once already.
+//   - The WebAuthn step-up, for the same reason: it gates on Action.IsWrite().
+//   - Invariant B-2 — "a resolved match writes a bank_reconciliation row and
+//     NOTHING ELSE records clearance" — becomes structural rather than a
+//     convention, because there is nowhere else for it to write.
+//
+// The match row and the clearance land in ONE transaction (migration 0088's
+// CHECK refuses a matched row without a clearance), so there is no state in
+// which a tick exists that the statement cannot explain.
+func (s *Service) SetBankDateFromStatementLine(
+	ctx context.Context,
+	companyID, voucherID, ledgerID uuid.UUID,
+	legNo int,
+	bankDate string,
+	by string,
+	statementLineID uuid.UUID,
+) error {
+	if statementLineID == uuid.Nil {
+		return fmt.Errorf("banking: a statement line id is required to record a match")
+	}
+	return s.setBankDate(ctx, companyID, voucherID, ledgerID, legNo, bankDate, by, statementLineID)
+}
+
+func (s *Service) setBankDate(
+	ctx context.Context,
+	companyID, voucherID, ledgerID uuid.UUID,
+	legNo int,
+	bankDate string,
+	by string,
+	statementLineID uuid.UUID,
+) error {
 	if err := scope(ctx, companyID); err != nil {
 		return err
 	}
@@ -119,7 +176,13 @@ func (s *Service) SetBankDate(
 		// The bank-group check and the bank_date >= voucher_date check both live
 		// in the 0045 trigger, so they hold for ANY writer — including a future
 		// import path and a by-hand psql fix — not only for this function.
-		_, err = tx.Exec(ctx, `
+		// RETURNING id gives the id of the row that SURVIVED, which on the
+		// DO UPDATE arm is the ORIGINAL row's rather than the one minted above.
+		// The match must point at the row that exists, not at the id we hoped
+		// to use — 0088's FK would refuse the latter, but only after the
+		// clearance had already been written.
+		var reconciliationID uuid.UUID
+		err = tx.QueryRow(ctx, `
 			INSERT INTO bank_reconciliation
 			    (id, company_id, voucher_id, ledger_id, leg_no,
 			     bank_date, cleared_amount, cleared_dr_cr, reconciled_by)
@@ -129,13 +192,27 @@ func (s *Service) SetBankDate(
 			       cleared_amount = EXCLUDED.cleared_amount,
 			       cleared_dr_cr  = EXCLUDED.cleared_dr_cr,
 			       reconciled_by  = EXCLUDED.reconciled_by,
-			       reconciled_at  = now()`,
+			       reconciled_at  = now()
+			RETURNING id`,
 			id, companyID, voucherID, ledgerID, legNo,
-			bankDate, amount, drCr, by)
+			bankDate, amount, drCr, by).Scan(&reconciliationID)
 		if err != nil {
 			return fmt.Errorf("banking: set bank date: %w", err)
 		}
-		return nil
+
+		if statementLineID == uuid.Nil {
+			return nil
+		}
+		// ⛔ THE TIER IS DERIVED AT THE DEFAULT WINDOW, NEVER AT THE CALLER'S.
+		// The window is a SEARCH width the operator may widen to see more
+		// proposals; letting it widen the stored TIER as well would mean a
+		// request parameter could dress a person's judgement up as the
+		// matcher's arithmetic. Under the standard window a leg the matcher
+		// would not have offered is recorded 'manual', which is the honest word
+		// for "a person said so" and is a perfectly good reason to reconcile.
+		return bankstatement.LinkMatch(ctx, tx, companyID, ledgerID,
+			statementLineID, reconciliationID, voucherID, legNo, bankDate, by,
+			bankstatement.DefaultDateWindowDays)
 	})
 }
 

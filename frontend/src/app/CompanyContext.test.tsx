@@ -1,5 +1,11 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import {
+  render,
+  screen,
+  cleanup,
+  waitFor,
+  fireEvent,
+} from "@testing-library/react";
 import {
   COMPANY_STORAGE_KEY,
   CompanyProvider,
@@ -315,5 +321,244 @@ describe("CompanyProvider bootstrap — precedence", () => {
     );
     expect(globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY)).toBe(URL_ID);
     expect(createCompany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * §7.3 C — A `?company=` THAT IS NOT UUID-SHAPED USED TO OPEN SOMEBODY ELSE'S
+ *          BOOKS, SILENTLY.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * `readCompanyIdFromURL` returned `null` for BOTH "no ?company= at all" and
+ * "?company= present but not a uuid", so the bootstrap could not tell the two
+ * apart and went on to read localStorage — opening the previous session's REAL,
+ * POPULATED company. Nothing on screen said the id in the address bar had been
+ * discarded, so every screen answered 200 about the wrong tenant: the same
+ * invisible substitution as the 403 defect above, through a third door.
+ *
+ * ⚠️ THE ASSERTION THAT MATTERS IS "THE STORED COMPANY WAS NOT OPENED", not
+ * "a notice appeared" — a regression must fail on the danger, not on the UI.
+ */
+describe("CompanyProvider bootstrap — a MALFORMED ?company= (§7.3 C)", () => {
+  const GOOD_STORED_ID = "7a3f1c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b";
+
+  /** A client whose getCompany always succeeds, so opening is the easy path. */
+  function hydratingClient() {
+    return bootClient(
+      vi.fn(async (id: string) => ({
+        id,
+        name: "Someone Else Traders",
+        fy_start_date: "2026-04-01",
+        base_currency: "INR",
+        state_code: "29",
+        gstin: "",
+      })) as unknown as CoredClient["getCompany"],
+    );
+  }
+
+  it("does NOT fall through to the stored company, and mints nothing", async () => {
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, GOOD_STORED_ID);
+    globalThis.history.replaceState({}, "", "/?company=demo-co");
+    const { client, createCompany } = hydratingClient();
+
+    renderBootstrap(client);
+    await bootstrapSettled();
+
+    // THE defect: the stored company opened instead, with no notice.
+    expect(screen.getByTestId("active-company").textContent).toBe("none");
+    expect(createCompany).not.toHaveBeenCalled();
+    // The stored id is not accused of anything, so it is left alone.
+    expect(globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY)).toBe(
+      GOOD_STORED_ID,
+    );
+  });
+
+  it("says WHAT was ignored, and that the stored company was not opened instead", async () => {
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, GOOD_STORED_ID);
+    globalThis.history.replaceState({}, "", "/?company=demo-co");
+    const { client } = hydratingClient();
+
+    renderBootstrap(client);
+
+    const notice = await screen.findByTestId("company-refused-notice");
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.getAttribute("data-refused-source")).toBe("url-malformed");
+    // Name the thing that was ignored — the operator has to be able to see the
+    // typo they made.
+    expect(notice.textContent).toContain("demo-co");
+    // And state the substitution that did NOT happen; that is the invisible half.
+    expect(notice.textContent).toMatch(/not been quietly switched/i);
+    // It never claims the server said anything: nothing was sent.
+    expect(notice.textContent).not.toMatch(/403/);
+  });
+
+  it("is NOT sent to the server — there is no id to judge", async () => {
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, GOOD_STORED_ID);
+    globalThis.history.replaceState({}, "", "/?company=demo-co");
+    const getCompany = vi.fn(async () => {
+      throw new Error("must not be called");
+    });
+    const { client } = bootClient(
+      getCompany as unknown as CoredClient["getCompany"],
+    );
+
+    renderBootstrap(client);
+    await screen.findByTestId("company-refused-notice");
+
+    expect(getCompany).not.toHaveBeenCalled();
+  });
+
+  it("an EMPTY ?company= is still 'no preference' and falls through", async () => {
+    // Deliberately NOT malformed: it names nothing, and `App.tsx`'s
+    // readCompanyIdInURL — the other reader of this parameter, which gates D25's
+    // invite adoption — treats an empty value as no preference too. Two readers
+    // disagreeing about one URL is how this class of defect starts.
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, GOOD_STORED_ID);
+    globalThis.history.replaceState({}, "", "/?company=");
+    const { client, createCompany } = hydratingClient();
+
+    renderBootstrap(client);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-company").textContent).toBe(
+        GOOD_STORED_ID,
+      ),
+    );
+    expect(createCompany).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("company-refused-notice")).toBeNull();
+  });
+
+  it("the notice's action drops the parameter and THEN opens the stored company", async () => {
+    // The refusal is not a wedge: dropping `?company=` is a deliberate operator
+    // act on a notice that has already said what was ignored, so reaching the
+    // stored company afterwards is a choice rather than a substitution.
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, GOOD_STORED_ID);
+    globalThis.history.replaceState({}, "", "/?company=demo-co&x=keep");
+    const { client, createCompany } = hydratingClient();
+
+    renderBootstrap(client);
+    await screen.findByTestId("company-refused-notice");
+
+    fireEvent.click(screen.getByTestId("company-refused-forget"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-company").textContent).toBe(
+        GOOD_STORED_ID,
+      ),
+    );
+    // No reload was needed, and only the company parameter was removed.
+    expect(globalThis.location.search).toBe("?x=keep");
+    expect(createCompany).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("company-refused-notice")).toBeNull();
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * §7.3 D — A WELL-FORMED BUT NONEXISTENT `?company=` UUID WEDGED FOR EVER.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The documented recovery valve for a bad id is "400 or 404 → drop it and mint".
+ * ⛔ AGAINST CORED THE 404 ARM IS DEAD CODE: the auth middleware checks
+ * MEMBERSHIP before any handler can look for the row, so a uuid naming a company
+ * that never existed answers **403 "not a member of this company"** — the same
+ * status as someone else's real books, on purpose, so a stranger cannot
+ * enumerate tenants. A URL id is (correctly) not forgotten, so the refusal
+ * repeats on every reload and nothing the operator can do from the keyboard
+ * changes the answer.
+ *
+ * These tests pin BOTH halves: the refusal keeps repeating (it must — minting
+ * over it is the original defect), AND there is now an exit that ends it.
+ */
+describe("CompanyProvider bootstrap — a nonexistent ?company= uuid (§7.3 D)", () => {
+  const DEAD_ID = "deadbeef-0000-4000-8000-000000000000";
+
+  it("does not claim the company EXISTS — a 403 cannot tell the two apart", async () => {
+    globalThis.history.replaceState({}, "", `/?company=${DEAD_ID}`);
+    const { client } = bootClient(refuse(403, "not a member of this company"));
+
+    renderBootstrap(client);
+
+    const notice = await screen.findByTestId("company-refused-notice");
+    expect(notice.getAttribute("data-refused-source")).toBe("url");
+    expect(notice.textContent).toContain(DEAD_ID);
+    // The old wording asserted membership was the reason, so "claim your invite
+    // and reload" read as the whole story. For a dead id that advice can never
+    // come true, and the operator waits for an invite that will never arrive.
+    expect(notice.textContent).toMatch(/no such company exists/i);
+    // And it must say that reloading cannot help, because that is what an
+    // operator tries first.
+    expect(notice.textContent).toMatch(/reload will NOT change this answer/i);
+  });
+
+  it("STILL refuses on a reload — the 400/404 valve genuinely never fires", async () => {
+    // Not a regression to fix by minting: this is the refusal working. It is
+    // pinned so that the exit below is understood as the answer, and so nobody
+    // "solves" the wedge by reintroducing the silent substitution.
+    globalThis.history.replaceState({}, "", `/?company=${DEAD_ID}`);
+    const first = bootClient(refuse(403, "not a member of this company"));
+    const { unmount } = renderBootstrap(first.client);
+    await screen.findByTestId("company-refused-notice");
+    expect(first.createCompany).not.toHaveBeenCalled();
+
+    unmount();
+    cleanup();
+
+    const second = bootClient(refuse(403, "not a member of this company"));
+    renderBootstrap(second.client);
+    await screen.findByTestId("company-refused-notice");
+    expect(second.createCompany).not.toHaveBeenCalled();
+    expect(screen.getByTestId("active-company").textContent).toBe("none");
+  });
+
+  it("the notice's action ENDS the wedge, without a reload", async () => {
+    globalThis.history.replaceState({}, "", `/?company=${DEAD_ID}`);
+    const { client, createCompany } = bootClient(
+      refuse(403, "not a member of this company"),
+    );
+
+    renderBootstrap(client);
+    await screen.findByTestId("company-refused-notice");
+    expect(createCompany).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("company-refused-forget"));
+
+    // Nothing is persisted and the parameter is gone, so this is the ordinary
+    // "no id at all" case — step 4, the only minting path.
+    await waitFor(() => expect(createCompany).toHaveBeenCalledTimes(1));
+    expect(globalThis.location.search).toBe("");
+    expect(screen.queryByTestId("company-refused-notice")).toBeNull();
+  });
+
+  it("the PERSISTED door's action mints too, and its own id is already gone", async () => {
+    // Symmetry: the persisted 403 clears the id on the way in, so its exit is
+    // "carry on" rather than "drop a parameter" — and it must not need a reload
+    // either, which is what the wording used to demand.
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, DEAD_ID);
+    globalThis.history.replaceState({}, "", "/");
+    const { client, createCompany } = bootClient(
+      refuse(403, "not a member of this company"),
+    );
+
+    renderBootstrap(client);
+    const notice = await screen.findByTestId("company-refused-notice");
+    expect(notice.getAttribute("data-refused-source")).toBe("persisted");
+    expect(globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByTestId("company-refused-forget"));
+
+    await waitFor(() => expect(createCompany).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("company-refused-notice")).toBeNull();
+  });
+
+  it("the action does not steal focus, so the shell still sees F3", async () => {
+    // The notice's own advice names F3, and the shell captures keys at the
+    // document. An autofocused button would swallow them.
+    globalThis.history.replaceState({}, "", `/?company=${DEAD_ID}`);
+    const { client } = bootClient(refuse(403, "not a member of this company"));
+
+    renderBootstrap(client);
+    await screen.findByTestId("company-refused-notice");
+
+    expect(document.activeElement).toBe(document.body);
   });
 });

@@ -3,7 +3,7 @@
  * (i.e. ./api) and depend only on the {@link CoredClient} interface plus the
  * request/response types — never on a concrete implementation.
  */
-export type { CoredClient } from "./client";
+export type { CoredClient, RestoreResult } from "./client";
 export { createRestClient } from "./rest";
 export { createMockClient } from "./mock";
 export type { MockClientOptions } from "./mock";
@@ -14,6 +14,9 @@ export {
   setSessionFetch,
   currentSessionFetch,
   ApiError,
+  // ⛔ The transport's "the books never saw this" signal — the ONE error the
+  // offline outbox is allowed to queue on. See http.ts.
+  NetworkError,
   type HttpClient,
   type HttpClientOptions,
 } from "./http";
@@ -82,3 +85,65 @@ export {
   resolveDraftLedgers,
   acceptPurchaseDraft,
 } from "../screens/vouchers/draftAccept";
+
+// The AGENT PLANE (W2, D121 §8): runs, the AG-UI-shaped event stream and the
+// approval inbox. Types plus the pure display helpers the panel and inbox share.
+export type {
+  AgentProvenanceSource,
+  AgentInput,
+  AgentDelegation,
+  AgentRunStatus,
+  AgentRun,
+  AgentEvent,
+  AgentEventsResponse,
+  AgentPosting,
+  AgentEffect,
+  AgentProposalBody,
+  AgentApprovalState,
+  AgentDecisionView,
+  AgentApproval,
+  StartAgentRunRequest,
+  AgentDecisionRequest,
+  AgentRunResponse,
+  AgentRunsResponse,
+  AgentApprovalsResponse,
+  AgentApprovalResponse,
+  AgentVersionWritten,
+  AgentVersionRef,
+  AgentLedgerDelta,
+  AgentStockMove,
+  AgentMasterChange,
+  AgentOrderChange,
+  AgentBankDateChange,
+  AgentEditPreview,
+  AgentEditPreviewResponse,
+  AgentAutonomyRow,
+  AgentAutonomyResponse,
+  SetAgentAutonomyRequest,
+  AgentVerifyRunResponse,
+  AgentVerifyAnchorsResponse,
+  UnblockLedgerResponse,
+} from "./agent";
+export type {
+  Insight,
+  InsightDigest,
+  InsightEvidenceResponse,
+  InsightField,
+  InsightRunResponse,
+  InsightState,
+  InsightSuppression,
+  InsightTypeInfo,
+  InsightUnit,
+  InsightVerdict,
+  InsightsListResponse,
+  DigestItem,
+  SuppressInsightRequest,
+} from "./insights";
+export {
+  AGENT_UNCONFIGURED,
+  approvalEffect,
+  effectOrNull,
+  describeAgentEvent,
+  formatPaise,
+  runFinished,
+} from "./agent";

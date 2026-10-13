@@ -88,6 +88,25 @@ variable "kubernetes_version" {
   default     = "1.31"
 }
 
+variable "cluster_endpoint_public_access" {
+  description = "Expose the EKS API endpoint publicly (to cluster_endpoint_public_access_cidrs only). Off by default: reach the cluster through the VPC (SSM/bastion/VPN)."
+  type        = bool
+  default     = false
+}
+
+variable "cluster_endpoint_public_access_cidrs" {
+  description = "Admin CIDRs allowed to reach a PUBLIC EKS endpoint. Required when cluster_endpoint_public_access is true; 0.0.0.0/0 and ::/0 are refused."
+  type        = list(string)
+  # A never-routed documentation range (RFC 5737), not the module's 0.0.0.0/0,
+  # so turning public access on without naming CIDRs exposes nothing.
+  default = ["192.0.2.0/32"]
+
+  validation {
+    condition     = alltrue([for c in var.cluster_endpoint_public_access_cidrs : c != "0.0.0.0/0" && c != "::/0"])
+    error_message = "The EKS API may not be opened to the whole internet; name the admin CIDRs."
+  }
+}
+
 variable "eks_node_instance_types" {
   description = "Graviton (arm64) instance types for the managed node group. Bottlerocket AMI set on the node group."
   type        = list(string)

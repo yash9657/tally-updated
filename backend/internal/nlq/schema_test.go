@@ -49,9 +49,27 @@ func TestSchemaEnumsMatchDSLConstants(t *testing.T) {
 		string(query.EntityVouchers),
 		string(query.EntityPostings),
 		string(query.EntityOutstandings),
+		string(query.EntityStockMovements),
+		string(query.EntityBankStatementLines),
+		string(query.EntityProfileFacts),
 		"",
 	}
 	assertSet(t, "entity enum", wantEntities, schema.Properties.Entity.Enum)
+
+	// ⛔ AND THE CATALOGUE IS A SECOND ORACLE, BECAUSE THE FIRST ONE DRIFTED.
+	// W3 added three entities to the whitelist; the system prompt picked them
+	// up automatically (it walks query.Catalog()), this test's hand-written
+	// list above did NOT, and so it stayed green while the schema's closed enum
+	// made every new entity schema-INVALID for the model to emit — the prompt
+	// advertised an entity the tool refused. Pinning the enum to Catalog() as
+	// well means a widening of the DSL cannot reach the prompt without reaching
+	// the schema.
+	var fromCatalog []string
+	for _, e := range query.Catalog() {
+		fromCatalog = append(fromCatalog, e.Entity)
+	}
+	fromCatalog = append(fromCatalog, "")
+	assertSet(t, "entity enum vs query.Catalog()", fromCatalog, schema.Properties.Entity.Enum)
 
 	wantFuncs := []string{
 		string(query.AggSum), string(query.AggCount),

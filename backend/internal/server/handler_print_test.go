@@ -1227,6 +1227,25 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 		// printed forms have always shared `outstandingKindParam`, so both directions
 		// printed from one parser long before either had its own name.
 		"bills-payable": true,
+		// ⭐⭐ THE UNADJUSTED-FOREX STATEMENT PRINTS (T8 step 7), AND IT BELONGS IN
+		// `implemented` FOR `bills-payable`'s REASON RATHER THAN AGAINST THE DEFERRED
+		// SET's. Every deferred name below is deferred because its printed form would
+		// be a DIFFERENT DOCUMENT from the screen the slug names. This one is the
+		// AGEING SHEET with one column swapped: the same open-bill universe, the same
+		// party rows, the same base figures, plus the rate each document was raised at
+		// and the rate as on the date.
+		//
+		// ⛔ AND A PERIOD-END EXPOSURE STATEMENT IS A THING PEOPLE PUT ON PAPER, which
+		// is the argument the deferred names cannot make. ⚠️ ITS SUBTITLE CARRIES Q4's
+		// SENTENCE — "THIS DIFFERENCE IS REPORTED AND NOT POSTED" — because paper
+		// outlives the screen it came from and a table of gains and losses on company
+		// letterhead reads as posted unless it says otherwise.
+		//
+		// ⚠️ PRINTING IT IS STILL REFUSED TO THE SEEDED DATA ENTRY LEVEL by migration
+		// 0090's `disallow print report:unadjusted-forex`. Implemented and governable
+		// are different questions, and a report that cannot be displayed but CAN be
+		// printed is a leak with a paper trail.
+		"unadjusted-forex": true,
 	}
 	deferred := 0
 	for _, name := range authz.KnownReportNames {
@@ -1283,8 +1302,39 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 	// lawfully differ from — so the printed version needs to say which of its
 	// numbers are agreed and which are expected. That is a different document from
 	// the screen this slug names.
-	if deferred != 20 {
-		t.Errorf("expected 20 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 21: the twenty above plus the BUDGET VARIANCE (T11, migrations 0085/0086).
+	// Deferred for the same reason and with the same permanence as the order books:
+	// a printed variance statement is not the screen with a border round it.
+	//
+	// ⛔ IT IS THE ONE DEFERRED REPORT WHOSE LAYOUT PROBLEM IS ABOUT WHAT MAY NOT BE
+	// PRINTED AT ALL. The screen legitimately refuses a grand total when a plan
+	// mixes a CLOSING_BALANCE line with a NETT_TRANSACTIONS one — a position plus a
+	// flow is not a quantity — and it says so in a note beside the suppressed
+	// figure. A printed page has no such affordance: a footer is either there or it
+	// is not, and a reader holding paper cannot expand a caveat. So the printed form
+	// needs a layout that either splits the page by basis or states the suppression
+	// in the footer itself, and that is a decision nobody has made.
+	//
+	// The same goes for the UNBUDGETED array, which is deliberately NOT part of the
+	// plan's totals: on screen it is a separate section a reader scrolls to, and on
+	// paper a second table under one heading is exactly how it gets added to the
+	// first. A blank page is better than a variance statement that foots wrongly.
+	// 22: the twenty-one above plus the GSTR-9 ANNUAL RECONCILIATION (T12,
+	// migration 0087), and it is the sharpest case in the set rather than one more
+	// of the same. Every other deferred name is an INTERNAL statement whose printed
+	// form would be a different document from the screen. This one has the SHAPE OF
+	// A FILED STATUTORY RETURN and explicitly is not one: eleven of its fourteen
+	// tables are NOT_DERIVED, table 4's total is suppressed because five of its rows
+	// cannot be produced from these books, and every response carries ten
+	// unconditional disclosures headed `not-filing-ready`.
+	//
+	// ⛔ On screen the disclosures sit beside the figures and cannot be missed. On
+	// paper, an annual return on company stationery with tidy tables and no room for
+	// ten caveats is a document somebody hands to a tax officer. The printed form
+	// needs a layout in which the disclosures come FIRST, and nobody has designed
+	// one. A blank page is better than a statutory return that reads as filed.
+	if deferred != 22 {
+		t.Errorf("expected 22 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1975,6 +2025,52 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:cash-flow",
 		"the forward cash position — what the business expects to collect and pay, week by " +
 			"week, for ninety days, including how much of it rests on a convention nobody agreed to"},
+	// ---- THE BUDGET VARIANCE (migration 0086, T11).
+	//
+	// ⛔ THE ONLY ENTRY IN THIS TABLE WHOSE DISCLOSURE IS NOT IN THE BOOKS AT ALL.
+	// Every other row leaks something a voucher records — what the company earns,
+	// owes, holds, has committed to, or (the anomaly list) what its operator keyed
+	// irregularly. A budget is the one figure in this product that NO VOUCHER
+	// CONTAINS: it is what the owner INTENDS. On paper, beside the actual, it is
+	// the plan, every line the business is failing against, and — through a budget
+	// on a payroll group compared with its actual — the payroll total that the five
+	// payroll entries at the top of this table refuse individually. A refusal that
+	// can be walked around through a second report is not a refusal.
+	{"report:budget-variance",
+		"what the owner PLANNED — the business's own targets — set beside what actually " +
+			"happened, line by line, including the payroll total by inference from a budget " +
+			"on a payroll group"},
+	// T12, migration 0087. ⛔ THE SECOND HALF OF THIS SENTENCE IS THE PART WITHOUT
+	// PRECEDENT IN THE LIST. Every other entry above discloses something about the
+	// company's TRADING. This one additionally discloses where the company's own
+	// FILED RETURNS and its books part company, month by month, with the amount —
+	// which is a statement about the company's exposure rather than its business,
+	// and it is not derivable from anything else in this product.
+	{"report:gstr9",
+		"a whole financial year of outward supply and input credit in one document, plus " +
+			"the months in which this company's filed GSTR-1s and GSTR-3Bs disagree with " +
+			"its own books — i.e. exactly which periods would not survive a departmental " +
+			"look, and by how much"},
+	// ---- THE UNADJUSTED-FOREX REPORT (T8 step 7, migration 0090).
+	//
+	// ⛔⛔ THE ONLY ENTRY IN THIS TABLE WHOSE `disallow print` ROW GUARDS A ROUTE THAT
+	// ACTUALLY RENDERS. Every other row above — the order books, the cost statements,
+	// the forecast plane, the budget variance, the annual return — answers 501 on the
+	// print path, so its refusal protects a page that does not exist and is pure
+	// durability. THIS REPORT PRINTS. One convenient `allow print *` would hand over a
+	// real PDF, not a 501, which makes this row the first in the list with something
+	// immediate behind it.
+	//
+	// ⚠️ AND THE DISCLOSURE HAS A SHAPE NONE OF THE OTHERS DO: it is not what the
+	// company earns, owes, holds or planned, but THE TERMS IT TRANSACTED ON — the rate
+	// on each individual document, to ten decimals — beside its whole unhedged
+	// position as one signed figure. The tds-register entry above leaks WHO the company
+	// trades with; this leaks the PRICES it agreed with the foreign half of them.
+	{"report:unadjusted-forex",
+		"every foreign customer and supplier, what each still owes or is owed in its own " +
+			"currency, the exchange rate each document was raised at, and the company's " +
+			"whole unhedged currency exposure as one signed total — and, unlike every " +
+			"other refusal on this list, as a PDF that really renders"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

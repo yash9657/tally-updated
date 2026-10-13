@@ -106,10 +106,17 @@ func newEdKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 
 const testIssuer = "https://idp.test/realms/tally"
 
+// testAudience is the OIDC client id these tests pretend cored is registered as.
+// EVERY NewJWKSVerifier call site in this file passes it — none passes "" — so no
+// test in this file is silently exempt from the audience check, which is how a
+// security check quietly stops being exercised.
+const testAudience = "cored"
+
 func validClaims(now time.Time, sub string) Claims {
 	return Claims{
 		Subject:   sub,
 		Issuer:    testIssuer,
+		Audience:  Audience{testAudience},
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(time.Hour).Unix(),
 	}
@@ -139,7 +146,7 @@ func TestJWKSVerifierAcceptRejectMatrix(t *testing.T) {
 	js := newJWKSServer(t, doc)
 
 	newVerifier := func() *JWKSVerifier {
-		v := NewJWKSVerifier(js.URL, testIssuer)
+		v := NewJWKSVerifier(js.URL, testIssuer, testAudience)
 		v.Now = func() time.Time { return now }
 		v.MinRefetch = time.Nanosecond // do not throttle inside this matrix
 		return v
@@ -320,7 +327,7 @@ func TestJWKSVerifierFailsClosedWhenEndpointDown(t *testing.T) {
 	url := js.URL
 	js.Close() // the endpoint is now dead; the cache was never populated.
 
-	v := NewJWKSVerifier(url, testIssuer)
+	v := NewJWKSVerifier(url, testIssuer, testAudience)
 	v.MinRefetch = time.Nanosecond
 	now := time.Now()
 	tok, err := SignES256(ecPriv, "ec-1", testIssuer, validClaims(now, "alice"))
@@ -355,7 +362,7 @@ func TestJWKSVerifierRefreshRejectsBadDocuments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			js := newJWKSServer(t, tc.doc)
 			js.serve(tc.doc, tc.status)
-			v := NewJWKSVerifier(js.URL, testIssuer)
+			v := NewJWKSVerifier(js.URL, testIssuer, testAudience)
 			if err := v.Refresh(context.Background()); err == nil {
 				t.Fatal("Refresh must reject this JWKS document")
 			}
@@ -365,14 +372,14 @@ func TestJWKSVerifierRefreshRejectsBadDocuments(t *testing.T) {
 	// Control: a good document DOES refresh, proving the cases above fail for the
 	// right reason (the test is not vacuously green).
 	js := newJWKSServer(t, jwksDocOf(t, okpJWK("ed-1", edPub)))
-	v := NewJWKSVerifier(js.URL, testIssuer)
+	v := NewJWKSVerifier(js.URL, testIssuer, testAudience)
 	if err := v.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh of a valid JWKS: %v", err)
 	}
 }
 
 func TestJWKSVerifierRejectsNonHTTPScheme(t *testing.T) {
-	v := NewJWKSVerifier("file:///etc/passwd", testIssuer)
+	v := NewJWKSVerifier("file:///etc/passwd", testIssuer, testAudience)
 	err := v.Refresh(context.Background())
 	if err == nil {
 		t.Fatal("Refresh must reject a non-http(s) JWKS url")
@@ -387,7 +394,7 @@ func TestJWKSVerifierCachesAndThrottles(t *testing.T) {
 	js := newJWKSServer(t, jwksDocOf(t, ecJWK("ec-1", &ecPriv.PublicKey)))
 
 	clock := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	v := NewJWKSVerifier(js.URL, testIssuer)
+	v := NewJWKSVerifier(js.URL, testIssuer, testAudience)
 	v.Now = func() time.Time { return clock }
 
 	tok, err := SignES256(ecPriv, "ec-1", testIssuer, validClaims(clock, "alice"))
@@ -459,7 +466,7 @@ func TestJWKSVerifierServesStaleCacheWithinCapThenFailsClosed(t *testing.T) {
 	js := newJWKSServer(t, jwksDocOf(t, ecJWK("ec-1", &ecPriv.PublicKey)))
 
 	clock := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	v := NewJWKSVerifier(js.URL, testIssuer)
+	v := NewJWKSVerifier(js.URL, testIssuer, testAudience)
 	v.Now = func() time.Time { return clock }
 	v.MinRefetch = time.Nanosecond
 
@@ -496,7 +503,7 @@ func TestJWKSVerifierServesStaleCacheWithinCapThenFailsClosed(t *testing.T) {
 func TestJWKSVerifierIsATokenVerifier(t *testing.T) {
 	ecPriv := newECKey(t)
 	js := newJWKSServer(t, jwksDocOf(t, ecJWK("ec-1", &ecPriv.PublicKey)))
-	var tv TokenVerifier = NewJWKSVerifier(js.URL, testIssuer)
+	var tv TokenVerifier = NewJWKSVerifier(js.URL, testIssuer, testAudience)
 	tok, err := SignES256(ecPriv, "ec-1", testIssuer, validClaims(time.Now(), "alice"))
 	if err != nil {
 		t.Fatalf("SignES256: %v", err)
@@ -506,4 +513,134 @@ func TestJWKSVerifierIsATokenVerifier(t *testing.T) {
 	if _, err := tv.Verify(ctx, tok); err != nil {
 		t.Fatalf("Verify through the TokenVerifier interface: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// D102 — audience matrix through the full JWKS path
+// ---------------------------------------------------------------------------
+
+// mintRawES256 signs an ARBITRARY claims OBJECT, bypassing the Claims struct.
+//
+// ⛔ THIS HELPER IS LOAD-BEARING, NOT CONVENIENCE. A token minted through Claims
+// can only ever serialise `aud` as an ARRAY, so a test limited to that path could
+// not express the bare-string form, nor `"aud":42`, nor an absent aud — i.e. it
+// could not express any of the shapes a plain-string binding would have
+// mishandled, and would have reported green over the D102 hole.
+func mintRawES256(t *testing.T, priv *ecdsa.PrivateKey, kid string, payload map[string]any) string {
+	t.Helper()
+	hb, err := json.Marshal(jwsHeader{Alg: algES256, Kid: kid, Typ: "JWT"})
+	if err != nil {
+		t.Fatalf("marshal header: %v", err)
+	}
+	pb, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	signingInput := b64.EncodeToString(hb) + "." + b64.EncodeToString(pb)
+	sigPart, err := signES256Raw(priv, []byte(signingInput))
+	if err != nil {
+		t.Fatalf("signES256Raw: %v", err)
+	}
+	return signingInput + "." + sigPart
+}
+
+func TestJWKSVerifierAudienceMatrix(t *testing.T) {
+	ecPriv := newECKey(t)
+	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	js := newJWKSServer(t, jwksDocOf(t, ecJWK("ec-1", &ecPriv.PublicKey)))
+
+	newVerifier := func(audience string) *JWKSVerifier {
+		v := NewJWKSVerifier(js.URL, testIssuer, audience)
+		v.Now = func() time.Time { return now }
+		v.MinRefetch = time.Nanosecond
+		return v
+	}
+
+	// base is a fully valid payload MINUS aud; each case supplies its own aud (or
+	// none), so the ONLY variable across the matrix is the audience claim and an
+	// accept/reject difference cannot be attributed to anything else.
+	base := func() map[string]any {
+		return map[string]any{
+			"sub": "alice",
+			"iss": testIssuer,
+			"iat": now.Unix(),
+			"exp": now.Add(time.Hour).Unix(),
+		}
+	}
+
+	cases := []struct {
+		name    string
+		aud     any // nil => omit the claim entirely
+		omit    bool
+		wantErr error
+	}{
+		{name: "aud as a bare string matching (RFC 7519 single-audience form)", aud: "cored"},
+		{name: "aud as a one-element array matching", aud: []any{"cored"}},
+		{name: "aud among several (the shape Keycloak actually emits)", aud: []any{"account", "cored", "realm-management"}},
+		{name: "aud for a DIFFERENT client in the same realm is rejected", aud: []any{"other-app"}, wantErr: ErrBadAudience},
+		{name: "aud as a bare string for a different client is rejected", aud: "other-app", wantErr: ErrBadAudience},
+		{name: "aud listing several other clients but not this one is rejected", aud: []any{"account", "other-app"}, wantErr: ErrBadAudience},
+		{name: "NO aud claim at all is rejected", omit: true, wantErr: ErrBadAudience},
+		{name: "aud as a number is rejected as malformed", aud: 42, wantErr: ErrMalformedToken},
+		{name: "aud as an object is rejected as malformed", aud: map[string]any{"x": 1}, wantErr: ErrMalformedToken},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := base()
+			if !tc.omit {
+				payload["aud"] = tc.aud
+			}
+			// Correct issuer, correct kid, valid signature, unexpired: every other
+			// gate is deliberately satisfied so the audience is the only thing
+			// that can reject this token.
+			tok := mintRawES256(t, ecPriv, "ec-1", payload)
+			claims, err := newVerifier(testAudience).Verify(context.Background(), tok)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Verify: %v — a token legitimately minted FOR this application was refused, which locks real users out", err)
+				}
+				if !claims.Audience.Contains(testAudience) {
+					t.Fatalf("accepted token parsed aud as %v, which does not contain %q — the check passed for the wrong reason", []string(claims.Audience), testAudience)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Verify ACCEPTED a token whose aud is %v (claims %+v) — a credential minted for ANOTHER CLIENT in the same realm is being honoured as a credential for the books (D102)", tc.aud, claims)
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Verify error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+
+	// ⭐ ANTI-VACUITY ROW. Everything above would still pass if the ARRAY form
+	// were silently DROPPED to an empty audience: every array case would then hit
+	// the "does not contain" branch, and the three accept rows would just look
+	// like ordinary failures someone might "fix" by loosening the check. This row
+	// pins the other direction — the array form must be PARSED, not merely
+	// rejected — by verifying that an array aud round-trips to its exact contents
+	// and that a mismatched verifier reports the REAL list it saw.
+	t.Run("array aud is parsed, not dropped", func(t *testing.T) {
+		payload := base()
+		payload["aud"] = []any{"account", "cored"}
+		tok := mintRawES256(t, ecPriv, "ec-1", payload)
+
+		claims, err := newVerifier(testAudience).Verify(context.Background(), tok)
+		if err != nil {
+			t.Fatalf("Verify: %v", err)
+		}
+		got := []string(claims.Audience)
+		if len(got) != 2 || got[0] != "account" || got[1] != "cored" {
+			t.Fatalf("parsed aud = %v, want [account cored] — an array aud that does not round-trip means the claim is being dropped, and a dropped claim makes the audience check pass vacuously for every real Keycloak token", got)
+		}
+
+		_, err = newVerifier("some-other-app").Verify(context.Background(), tok)
+		if !errors.Is(err, ErrBadAudience) {
+			t.Fatalf("verifier pinned to some-other-app returned %v, want ErrBadAudience", err)
+		}
+		if !strings.Contains(err.Error(), "account") || !strings.Contains(err.Error(), "cored") {
+			t.Fatalf("rejection message %q does not name the audiences actually seen; an empty list here would mean the array was dropped rather than compared", err)
+		}
+	})
 }

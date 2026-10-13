@@ -95,11 +95,104 @@ export interface DoubleEntryLine {
    * rows; the party field names no ledger at all.
    */
   billRefs: readonly DraftBillRef[];
+  /**
+   * ⭐⭐ T8's THREE FOREX VALUES, AND STEP 8 IS WHERE THEY BECAME EDITABLE.
+   *
+   * ⛔⛔ THEY WERE MISSING FROM THIS TYPE AND THAT WAS DEFECT NUMBER NINE — the
+   * one §6.1 of `HANDOFF-T8-STEPS-6-TO-8.md` tells step 8 to go and look for by
+   * asking *"what does an alter through this form omit?"*. It omitted these.
+   *
+   * `postingsFromView` in VoucherScreen.tsx carries the triple for the
+   * SINGLE-ENTRY path and has a long comment saying it is the seventh time that
+   * line has had to be written. `DraftBillRef` carries it for the bill references.
+   * **The DOUBLE-ENTRY grid did not** — so opening a foreign JOURNAL (F7 always
+   * uses this grid), or a foreign Receipt in Double Entry mode, fixing a typo and
+   * saving turned a $1,000 bill into a ₹83,651.23 bill. ⚠️ AND NOTHING REFUSED
+   * IT: the voucher still balances in base, the Balance Sheet does not move by a
+   * paisa, and the only trace is that Outstandings stops showing the bill as
+   * foreign. Measured before it was fixed — see the L39 audit entry.
+   *
+   * ⚠️ ALL THREE OR NONE, KEYED OFF THE CURRENCY. Migration 0080's
+   * `posting_forex_all_or_none` CHECK refuses a two-of-three row, because a
+   * foreign amount with no rate cannot be checked against the base and a rate
+   * with no amount prices nothing. `doubleEntryForexRefusal` turns that into a
+   * sentence the FORM says before any request is made.
+   *
+   * ⚠️ AND `rate` IS A TEN-DECIMAL RATE, NOT MONEY. Never round-trip it through
+   * `parseFixed4` / `formatFixed4` like `amount` above — see api/rate.ts, whose
+   * header explains that a rate through the money helpers becomes a DIFFERENT
+   * rate that round-trips perfectly and prices the bill wrong for ever.
+   *
+   * `currencyCode` is display only and is never sent; the server resolves the id.
+   */
+  currencyId?: string;
+  currencyCode?: string;
+  foreignAmount?: string;
+  rate?: string;
 }
 
 /** A fresh, empty line. Debit first — a Journal is read Dr-then-Cr. */
 export function emptyDoubleEntryLine(): DoubleEntryLine {
   return { ledger: "", side: "DR", amount: "", allocations: [], billRefs: [] };
+}
+
+/**
+ * ⛔ THE ALL-OR-NONE REFUSAL, SAID BY THE FORM BEFORE ANY REQUEST IS MADE.
+ *
+ * Migration 0080's CHECK and `ledger.forexTriple.validate` both refuse a
+ * two-of-three row, and the server's message names which value is missing. This
+ * says the same thing without a round trip — and, more importantly, without
+ * `ensureLedger` having already created every account the operator named, which
+ * is defect D39's shape and the reason every refusal on this form is evaluated
+ * in one expression before anything is resolved.
+ *
+ * ⚠️ IT RETURNS "" FOR A GRID WITH NO CURRENCY ANYWHERE, which is every voucher
+ * in the field today, so this costs a base-currency entry nothing.
+ */
+export function doubleEntryForexRefusal(
+  lines: readonly DoubleEntryLine[],
+): string {
+  for (const [i, l] of keyedLines(lines).entries()) {
+    const cur = (l.currencyId ?? "").trim();
+    const fgn = (l.foreignAmount ?? "").trim();
+    const rate = (l.rate ?? "").trim();
+    const n = i + 1;
+    if (cur === "" && fgn === "" && rate === "") continue;
+    if (cur === "") {
+      return (
+        `Line ${n} names a foreign amount or a rate and no CURRENCY. A foreign ` +
+        `figure needs all three of currency, foreign amount and rate, or none of ` +
+        `them — a line with no currency IS in the company's own currency.`
+      );
+    }
+    if (fgn === "" || Number(fgn) === 0) {
+      return (
+        `Line ${n} names a currency and no FOREIGN AMOUNT. State how much of ` +
+        `that currency the line is for, or clear the currency to key it in the ` +
+        `company's own.`
+      );
+    }
+    if (Number(fgn) < 0) {
+      return (
+        `Line ${n} has a negative foreign amount. Direction is carried by Dr/Cr, ` +
+        `so every amount on a line is unsigned.`
+      );
+    }
+    if (rate === "" || Number(rate) === 0) {
+      return (
+        `Line ${n} names a currency and no EXCHANGE RATE. The rate is how many ` +
+        `of the company's own units ONE unit of that currency is worth, and it ` +
+        `is stored on the voucher for ever — a later rate never restates it.`
+      );
+    }
+    if (Number(rate) < 0) {
+      return (
+        `Line ${n} has a negative exchange rate. A rate is base units per ONE ` +
+        `foreign unit and is always above zero.`
+      );
+    }
+  }
+  return "";
 }
 
 /**
@@ -277,6 +370,15 @@ export function doubleEntryLinesFromView(
     ledger_id: string;
     dr_cr: string;
     amount: string;
+    // ⭐⭐ T8's TRIPLE, READ BACK OFF THE VIEW — AND THIS IS DEFECT NUMBER NINE's
+    // FIX. These four fields were absent from this signature, so an alter through
+    // the Dr/Cr grid rebuilt every row WITHOUT its currency and the server —
+    // which re-states `posting` wholesale from the request body — wrote a rupee
+    // voucher over a foreign one. See DoubleEntryLine's own comment.
+    currency_id?: string;
+    currency?: string;
+    foreign_amount?: string;
+    rate?: string;
   }[],
   allocationsFor: (seq: number) => DraftAllocation[],
   billRefsFor: (ledgerID: string) => DraftBillRef[],
@@ -288,7 +390,7 @@ export function doubleEntryLinesFromView(
   // belong to the LEDGER, not to the row, so the first row carrying it takes
   // them. Same rule as `linesFromPostings`, for the same reason.
   const claimed = new Set<string>();
-  const rows = postings.map((p, seq) => ({
+  const rows: DoubleEntryLine[] = postings.map((p, seq) => ({
     ledger: p.ledger,
     side: (p.dr_cr.toUpperCase().startsWith("D") ? "DR" : "CR") as "DR" | "CR",
     amount: p.amount,
@@ -296,6 +398,19 @@ export function doubleEntryLinesFromView(
     billRefs: claimed.has(p.ledger_id)
       ? []
       : (claimed.add(p.ledger_id), billRefsFor(p.ledger_id)),
+    // ⛔ ALL THREE OR NONE, KEYED OFF THE CURRENCY, exactly as `postingsFromView`
+    // does it: emitting a `rate` beside an absent `currency_id` would 422 a
+    // request that looks complete on this side. ⚠️ And `rate` is passed through
+    // UNTOUCHED — it is a ten-decimal rate and re-formatting it with this file's
+    // money helpers would hand back 83.6512 and reprice the bill.
+    ...(p.currency_id
+      ? {
+          currencyId: p.currency_id,
+          currencyCode: p.currency ?? "",
+          foreignAmount: p.foreign_amount ?? "",
+          rate: p.rate ?? "",
+        }
+      : {}),
   }));
   return rows.length > 0 ? rows : [emptyDoubleEntryLine()];
 }

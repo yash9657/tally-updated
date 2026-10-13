@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -286,4 +287,120 @@ func (s *Service) VoucherTypeID(ctx context.Context, name string) (uuid.UUID, er
 		return uuid.Nil, fmt.Errorf("identity: resolve voucher type %q: %w", name, err)
 	}
 	return id, nil
+}
+
+// ---------------------------------------------------------------------------
+// CLOSING A FINANCIAL YEAR (migration 0089)
+// ---------------------------------------------------------------------------
+
+// ErrClosureMovesBackward reports a close that would UNLOCK part of an
+// already-closed period.
+//
+// ⛔ IT IS ITS OWN ERROR BECAUSE THE CLOSE ROUTE MUST NOT BE A RE-OPEN ROUTE.
+// Closing is routine and closing is safe; re-opening a filed year is the
+// dangerous act and must be a deliberate, separately-named request. If a single
+// endpoint took any date, an operator correcting a typo — 2026-03-31 for
+// 2027-03-31 — would silently unlock twelve months of filed books and get a
+// 200 for it.
+var ErrClosureMovesBackward = errors.New("the books are already closed through a later date")
+
+// ErrNothingClosed reports a re-open at a company with no closed period.
+var ErrNothingClosed = errors.New("no period is closed, so there is nothing to re-open")
+
+// CloseBooks locks the company's books through (and including) `through`.
+//
+// ⚠️ IT ONLY EVER MOVES THE LOCK FORWARD. See ErrClosureMovesBackward.
+func (s *Service) CloseBooks(ctx context.Context, companyID, byUser uuid.UUID, through time.Time) error {
+	scoped, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return db.ErrNoCompany
+	}
+	if scoped != companyID {
+		return fmt.Errorf("identity: context company %s != target company %s", scoped, companyID)
+	}
+	return s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var existing *time.Time
+		switch err := tx.QueryRow(ctx,
+			`SELECT books_closed_through FROM company WHERE id = $1`, companyID).
+			Scan(&existing); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrCompanyNotFound
+		case err != nil:
+			return fmt.Errorf("identity: read closure: %w", err)
+		}
+		// ⛔ THE GUARD IS INSIDE THE TRANSACTION THAT WRITES. Read-then-write
+		// across two transactions is exactly how two administrators closing
+		// different years at the same moment produce the earlier of the two.
+		if existing != nil && !through.After(*existing) {
+			return fmt.Errorf("%w (%s)", ErrClosureMovesBackward,
+				existing.UTC().Format("2006-01-02"))
+		}
+		tag, err := tx.Exec(ctx,
+			`UPDATE company
+			    SET books_closed_through = $2, books_closed_at = now(), books_closed_by = $3
+			  WHERE id = $1`, companyID, through, byUser)
+		if err != nil {
+			return fmt.Errorf("identity: close books: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrCompanyNotFound
+		}
+		return nil
+	})
+}
+
+// ReopenBooks clears the year-end lock entirely.
+//
+// ⛔ IT CLEARS THE LOCK RATHER THAN MOVING IT BACK, and that is deliberate:
+// "re-open the last year" sounds precise and is not, because nothing records
+// which closures were separate acts. Clearing it states plainly what happened —
+// the books are open — and the next close names its own date.
+//
+// ⚠️ books_closed_at / books_closed_by ARE LEFT WHERE THEY ARE. They record
+// what HAPPENED, not what is currently true, and an auditor asking "was this
+// year ever closed, and by whom?" is asking about history.
+func (s *Service) ReopenBooks(ctx context.Context, companyID uuid.UUID) error {
+	scoped, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return db.ErrNoCompany
+	}
+	if scoped != companyID {
+		return fmt.Errorf("identity: context company %s != target company %s", scoped, companyID)
+	}
+	return s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var existing *time.Time
+		switch err := tx.QueryRow(ctx,
+			`SELECT books_closed_through FROM company WHERE id = $1`, companyID).
+			Scan(&existing); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrCompanyNotFound
+		case err != nil:
+			return fmt.Errorf("identity: read closure: %w", err)
+		}
+		if existing == nil {
+			return ErrNothingClosed
+		}
+		_, err := tx.Exec(ctx,
+			`UPDATE company SET books_closed_through = NULL WHERE id = $1`, companyID)
+		if err != nil {
+			return fmt.Errorf("identity: reopen books: %w", err)
+		}
+		return nil
+	})
+}
+
+// BooksClosure reads the year-end lock and who set it.
+func (s *Service) BooksClosure(ctx context.Context, companyID uuid.UUID) (through *time.Time, at *time.Time, by *uuid.UUID, err error) {
+	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		switch err := tx.QueryRow(ctx,
+			`SELECT books_closed_through, books_closed_at, books_closed_by
+			   FROM company WHERE id = $1`, companyID).Scan(&through, &at, &by); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrCompanyNotFound
+		case err != nil:
+			return fmt.Errorf("identity: read closure: %w", err)
+		}
+		return nil
+	})
+	return through, at, by, err
 }

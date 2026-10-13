@@ -170,6 +170,7 @@ export function BillAllocationPicker({
   kind,
   label,
   onChange,
+  forex,
 }: {
   /**
    * The class of voucher being keyed — the AUTHORITY this panel's read is
@@ -193,6 +194,25 @@ export function BillAllocationPicker({
   /** What to call this leg in labels, e.g. the party's name. */
   label: string;
   onChange: (refs: DraftBillRef[]) => void;
+  /**
+   * ⭐⭐ T8 STEP 8 — THE LEG'S OWN CURRENCY AND RATE, INHERITED RATHER THAN KEYED
+   * AGAIN HERE.
+   *
+   * ⛔⛔ THE CURRENCY AND THE RATE ARE FACTS ABOUT THE DOCUMENT AND NOT ABOUT THE
+   * SPLIT, AND KEYING THEM PER REFERENCE WOULD LET THEM DRIFT FROM THE POSTING.
+   * A `bill_allocation` row and the `posting` it belongs to must agree: step 5's
+   * settlement engine reads the AGAINST row's rate and currency, while
+   * Outstandings and the unrealised report net the allocation — so two rows
+   * naming one document at two rates is a voucher that reports two different
+   * exposures for itself. The FOREIGN AMOUNT is a per-bill split, exactly as the
+   * base `amount` already is, so that one IS keyed here.
+   *
+   * ⚠️ `undefined` MEANS THE LEG IS IN THE COMPANY'S OWN CURRENCY, which is every
+   * voucher in the field today, and then nothing below renders. It is not "not
+   * loaded": a base leg has no currency at all (0080's one encoding), so there is
+   * no third state to distinguish.
+   */
+  forex?: { currencyId: string; currencyCode: string; rate: string };
 }) {
   // ⛔ NOT `mode === "settle"`. The list is needed wherever a SETTLEMENT is being
   // keyed, and a settlement is keyed on a raise-mode screen every time a credit
@@ -362,6 +382,32 @@ export function BillAllocationPicker({
               />
             ) : null}
 
+            {/* ⭐⭐ T8 STEP 8 — THE FOREIGN AMOUNT THIS REFERENCE CARRIES.
+                ⛔ ONLY THE AMOUNT. The currency and the rate come from the LEG —
+                see the `forex` prop's comment — because they are facts about the
+                document and keying them per reference would let a
+                `bill_allocation` row disagree with the `posting` it belongs to. */}
+            {forex ? (
+              <input
+                aria-label={`Foreign amount for reference ${i + 1}`}
+                data-testid={`${id}-foreign:${i}`}
+                className="w-24 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                placeholder={forex.currencyCode}
+                value={r.foreignAmount ?? ""}
+                onChange={(e) =>
+                  patch(i, {
+                    foreignAmount: e.target.value,
+                    // ⛔ THE TRIPLE IS COMPLETED FROM THE LEG IN THE SAME EDIT.
+                    // 0080's CHECK refuses a two-of-three row, and a reference
+                    // carrying a foreign amount with no currency would 422 a
+                    // request that looks complete on this side.
+                    currencyId: forex.currencyId,
+                    currencyCode: forex.currencyCode,
+                    rate: forex.rate,
+                  })
+                }
+              />
+            ) : null}
             <button
               type="button"
               data-testid={`${id}-rest:${i}`}
@@ -397,6 +443,44 @@ export function BillAllocationPicker({
                 403, or before the fetch lands, silence is the honest answer. It
                 is a NOTE and not a refusal, because naming an already-settled
                 invoice is exactly what a credit note legitimately does. */}
+            {/* ⭐⭐ §4.3's REQUIREMENT, AND STEP 5's VERIFY DESIGN IS WHY IT IS NOT
+                OPTIONAL. The server DERIVES the realised exchange difference and
+                REFUSES any voucher whose figure it did not derive — so the
+                operator has to be able to see what the bill is carried at in BOTH
+                currencies before they can state a settlement the server will
+                accept. Step 6 put exactly these two fields on this read for this
+                purpose, and §4.3 predicted the two steps would meet here.
+                ⛔ IT IS SHOWN AND NOT COMPUTED-INTO. The base amount stays what
+                the operator keyed (Q2), and the line below states the arithmetic
+                rather than performing it — a form that silently set the base from
+                a rate would be deciding the authoritative figure. */}
+            {(() => {
+              if (!isAgainst) return null;
+              const b = bills.find((x) => x.ref_name === r.refName.trim());
+              if (!b || b.currency_code === "") return null;
+              return (
+                <span
+                  data-testid={`${id}-billforex:${i}`}
+                  className="basis-full text-xs text-tally-field"
+                >
+                  {b.ref_name} is carried at {b.currency_code}{" "}
+                  {b.foreign_pending} / {b.pending} in the books
+                  {b.currency_conflict
+                    ? " ⚠ and is open under TWO currencies — settle it in the one it was raised in, or the exposure and the rupee figure will not close together"
+                    : ""}
+                  .{" "}
+                  {forex
+                    ? "Settling the WHOLE remainder clears exactly that rupee figure; " +
+                      "the difference between what the bank moves and it is the " +
+                      "realised gain or loss, and it needs its own line on the " +
+                      "grid to the forex gain/loss ledger (F11 chooses which). " +
+                      "The server works the figure out itself and refuses any other."
+                    : "This line is in the company's own currency — pick the bill's " +
+                      "currency on the grid above to settle it in that currency, or " +
+                      "the rupee side will clear while the foreign exposure stays open."}
+                </span>
+              );
+            })()}
             {isAgainst &&
             r.refName.trim() !== "" &&
             bills.length > 0 &&

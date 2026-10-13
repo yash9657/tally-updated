@@ -300,6 +300,68 @@ func ComponentTypeFor(s string) (ComponentType, error) {
 	return ct, nil
 }
 
+// ComponentTypes returns the closed vocabulary, in a DETERMINISTIC order: the
+// components that ARE wages under s.2(88) first, then the exclusions in the
+// statute's own clause order (a)-(k).
+//
+// ⛔ IT EXISTS SO NOTHING OUTSIDE THIS PACKAGE HAS TO WRITE THE LIST DOWN AGAIN.
+// A screen offering a salary-component picker needs the vocabulary and the
+// wages/excluded split; the split is a LEGAL classification (the Vivekananda
+// Vidyamandir holding is in it), so a second copy in a client — in another
+// language, updated by somebody else — is the drift that under-contributes PF
+// for the whole of an employee's service with no error anywhere. The order is
+// fixed rather than map order so a picker cannot reshuffle itself between two
+// reads of the same server.
+func ComponentTypes() []ComponentType {
+	return []ComponentType{
+		// Wages: s.2(88)'s residual, which is everything the exclusion list
+		// does not name.
+		ComponentBasic,
+		ComponentDearnessAllowance,
+		ComponentRetainingAllowance,
+		ComponentSpecialAllowance,
+		ComponentOtherAllowance,
+		// Excluded, in clause order (a)-(k).
+		ComponentBonus,
+		ComponentHouseAccommodationValue,
+		ComponentEmployerPFContribution,
+		ComponentConveyanceAllowance,
+		ComponentSpecialExpenses,
+		ComponentHouseRentAllowance,
+		ComponentAwardOrSettlement,
+		ComponentOvertimeAllowance,
+		ComponentCommission,
+		ComponentGratuity,
+		ComponentRetrenchmentCompensation,
+		ComponentExGratia,
+	}
+}
+
+// IsWagesComponent reports whether a component is WAGES under s.2(88) — i.e.
+// whether PF and ESI are contributed on it.
+//
+// It reads the same denylist StatutoryWages reads, so the answer a picker shows
+// and the answer the engine computes cannot disagree. An unknown type is
+// reported as wages, which is the same SAFE direction excludedFromWages takes
+// for anything the statute does not name: over-contributing credits the
+// employee, under-contributing is a shortfall with interest and damages.
+func IsWagesComponent(ct ComponentType) bool {
+	return !excludedFromWages[ct]
+}
+
+// InDeemingTest reports whether a component is one of clauses (a)-(i), the only
+// sum proviso 1 to s.2(88) measures against the one-half floor.
+//
+// A picker that showed only "wages / not wages" would be telling an operator
+// that an excluded component never affects the contribution, and for (a)-(i)
+// that is false: paid above one half of all remuneration, the excess is DEEMED
+// back into wages. (j) gratuity and (k) retrenchment compensation / ex gratia
+// are terminal payments outside the proviso, and reporting them as if they were
+// in it is the bug that fabricated an add-back out of a leaver's gratuity.
+func InDeemingTest(ct ComponentType) bool {
+	return deemingTestClauses[ct]
+}
+
 // AgeBand selects the old regime's basic exemption limit. It has no effect under
 // the new regime, whose exemption does not vary by age.
 type AgeBand string

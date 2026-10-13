@@ -14,12 +14,21 @@ package reporting
 // it lives here beside the Bank Reconciliation Statement it will eventually sit
 // next to.
 //
-// ⚠️ THIS REPORT SAYS NOTHING ABOUT WHAT HAS CLEARED, AND THAT IS NOT AN
-// OVERSIGHT. Matching is slice 2b. A "Status" column here would have exactly
-// one value — blank — for every row, and a blank status column reads as
-// "unmatched" rather than as "matching is not built", which is a different and
-// false statement. The absence is stated in Disclosures instead, which is the
-// same arrangement the TDS register uses for the challan it cannot show.
+// ⚠️ THIS REPORT SAYS NOTHING ABOUT WHAT HAS CLEARED, AND THAT IS STILL NOT AN
+// OVERSIGHT — but the REASON changed when slice 2b shipped on 2026-08-28, and
+// the disclosure changed with it.
+//
+// It used to say "matching is not built". That is now FALSE: Alt+S proposes
+// matches and an accepted one writes a bank_reconciliation row. What remains
+// true is that THIS report does not show match status, and a "Status" column
+// here would need the match data this query does not load — so a row shown here
+// may already be matched, set aside, or untouched, and the report says exactly
+// that rather than leaving silence to read as "none of these matched".
+//
+// ⛔ THE OLD SENTENCE WAS LEFT STANDING BY THE FEATURE WORK AND WAS CAUGHT BY
+// verify:demo, which asserts the disclosure exists. A gate that pins the
+// PRESENCE of a disclosure does not pin its TRUTH — the check now looks for the
+// current sentence, and that is the only reason the lie was short-lived.
 
 import (
 	"context"
@@ -65,6 +74,9 @@ type BankStatementImport struct {
 	// case the dropped-row check never ran. Carried per import, not per report,
 	// because a screen may show one file that walked and one that could not.
 	BalanceWalked bool
+	// BalanceProof is migration 0101's balance_proof — "running", "declared",
+	// "running+declared" — or "" for an import written before W5.
+	BalanceProof string
 }
 
 // ImportedStatement is every line imported for one bank account over a period,
@@ -110,10 +122,14 @@ const importsSQL = `
 	       COALESCE(to_char(i.period_from, 'YYYY-MM-DD'), ''),
 	       COALESCE(to_char(i.period_to, 'YYYY-MM-DD'), ''),
 	       i.line_count,
-	       -- The walk RAN if and only if the file carried balances, which is
-	       -- exactly when we stored one. NULL here is "could not check", never
-	       -- "checked and found nothing".
-	       (i.opening_balance IS NOT NULL)
+	       -- Did the RUNNING-BALANCE walk run? Before 0101 it ran iff an
+	       -- opening balance was stored. ⛔ SINCE 0101 THAT IS NO LONGER TRUE:
+	       -- a statement proved by DECLARED balances stores an opening balance
+	       -- and was never walked, so balance_proof decides whenever it is set,
+	       -- and the 0062 reading is kept only for the rows written before it.
+	       CASE WHEN i.balance_proof IS NULL THEN i.opening_balance IS NOT NULL
+	            ELSE i.balance_proof IN ('running', 'running+declared') END,
+	       COALESCE(i.balance_proof, '')
 	  FROM bank_statement_import i
 	 WHERE i.company_id = $1
 	   AND i.ledger_id  = $2
@@ -171,7 +187,7 @@ func (s *Service) ImportedStatementReport(
 		for rows.Next() {
 			var im BankStatementImport
 			if err := rows.Scan(&im.ID, &im.FileName, &im.ImportedBy, &im.ImportedAt,
-				&im.PeriodFrom, &im.PeriodTo, &im.LineCount, &im.BalanceWalked); err != nil {
+				&im.PeriodFrom, &im.PeriodTo, &im.LineCount, &im.BalanceWalked, &im.BalanceProof); err != nil {
 				return fmt.Errorf("reporting: scan import: %w", err)
 			}
 			out.Imports = append(out.Imports, im)
@@ -217,10 +233,18 @@ func (s *Service) ImportedStatementReport(
 	// ⚠️ THE DISCLOSURES ARE PART OF THE REPORT, not decoration. Each one is a
 	// question the operator would otherwise answer wrongly from silence.
 	out.Disclosures = append(out.Disclosures,
-		"MATCHING IS NOT BUILT YET (T4 slice 2b). These are the bank's own rows; nothing here "+
-			"says whether a row has been matched to a voucher or cleared. Reconciling is still done on the "+
-			"Bank Reconciliation screen by entering a Bank Date against each voucher.")
+		"THIS REPORT SHOWS NO MATCH STATUS (T4 slice 2b). These are the bank's own rows, and a row "+
+			"here may already be matched to a voucher, set aside as matching nothing, or untouched — "+
+			"nothing on this report says which. Matching now works: press Alt+S on the Bank "+
+			"Reconciliation screen. Reconciling by hand, a Bank Date at a time, still works too.")
 	for _, im := range out.Imports {
+		if !im.BalanceWalked && im.BalanceProof == "declared" {
+			out.Disclosures = append(out.Disclosures, fmt.Sprintf(
+				"%q carried no running balance and was proved by its opening and closing balance instead "+
+					"(opening + deposits − withdrawals = closing): one missing or duplicated row would have been "+
+					"refused, two errors of equal and opposite amount would not.", im.FileName))
+			continue
+		}
 		if !im.BalanceWalked {
 			out.Disclosures = append(out.Disclosures, fmt.Sprintf(
 				"%q carried no running balance, so its rows were NOT balance-walked: a row dropped or "+

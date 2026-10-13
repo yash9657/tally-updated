@@ -60,9 +60,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	payrollAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	payrollAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	payrollAdminDSN = testdb.AdminDSNValue()
+	payrollAppDSN   = testdb.AppDSNValue()
 )
 
 // payrollWageMonth is the month every test in this file runs.
@@ -601,4 +601,59 @@ func keysOf(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestUnpostedMonthIsMachineReadableAndLegible is D112's backend half.
+//
+// ⛔ THE 404 BODY HAD NOTHING A SCREEN COULD SWITCH ON, so the register screen
+// rendered the server's sentence verbatim and an ordinary empty month read as a
+// crash:
+//
+//	payrolldb: payroll register for 2026-09: payrolldb: pay run not found:
+//	no live pay run for 2026-09
+//
+// Measured on the wire at badea6f. The package name appears TWICE, the sentinel
+// is wrapped inside its own text, and "you have not run September payroll yet"
+// — an ordinary state on a screen whose whole purpose is a month that may not
+// have been run — is nowhere in it.
+//
+// Two things are asserted, and they are different things:
+//
+//	(1) a MACHINE-READABLE code, so the screen can tell this apart from a real
+//	    failure without matching on prose. `{"error":…,"code":…}` is the house
+//	    two-key shape — see writeDraftAlreadyAccepted, STEPUP_REQUIRED, LOCKED.
+//	(2) a LEGIBLE sentence, because the export routes still show it to a human.
+func TestUnpostedMonthIsMachineReadableAndLegible(t *testing.T) {
+	s := payrollServer(t)
+	companyID, _ := payrollCompany(t, s)
+
+	for name, h := range map[string]http.HandlerFunc{
+		"payroll-pf-ecr":     s.handlePayrollPFECR,
+		"payroll-esi-return": s.handlePayrollESIReturn,
+		"payroll-register":   s.handlePayrollRegister,
+	} {
+		rec := payrollCall(t, h, http.MethodGet, "/"+name+"?month="+payrollWageMonth.String(), companyID, nil)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("GET /%s for a month with no run = %d, want 404 (%s)", name, rec.Code, rec.Body.String())
+		}
+		body := payrollJSON(t, rec)
+
+		code, _ := body["code"].(string)
+		if code != "NO_PAY_RUN" {
+			t.Errorf("GET /%s: 404 body carries code %q, want %q — without it the screen has "+
+				"only the prose to switch on, which is how an empty month came to look like a crash",
+				name, code, "NO_PAY_RUN")
+		}
+
+		msg, _ := body["error"].(string)
+		if strings.Count(msg, "payrolldb:") > 0 {
+			t.Errorf("GET /%s: the message names its own Go package %d time(s): %q",
+				name, strings.Count(msg, "payrolldb:"), msg)
+		}
+		// The control: trimming must not eat the facts. The month is the one
+		// thing the operator needs back.
+		if !strings.Contains(msg, payrollWageMonth.String()) {
+			t.Errorf("GET /%s: the message no longer names the month: %q", name, msg)
+		}
+	}
 }

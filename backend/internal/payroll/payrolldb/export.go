@@ -252,7 +252,7 @@ func (s *Service) statutoryRows(ctx context.Context, m payroll.WageMonth) ([]sta
 			  WHERE wage_month = $1::date AND status <> $2`,
 			m.First().Format(isoDate), StatusReversed).Scan(&runID, &status); {
 		case err == pgx.ErrNoRows:
-			return fmt.Errorf("%w: no live pay run for %s", ErrPayRunNotFound, m)
+			return fmt.Errorf("%w for wage month %s — no payroll has been run for it yet", ErrPayRunNotFound, m)
 		case err != nil:
 			return err
 		}
@@ -291,7 +291,12 @@ func (s *Service) statutoryRows(ctx context.Context, m payroll.WageMonth) ([]sta
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("payrolldb: statutory rows for %s: %w", m, err)
+		// Returned bare for the reason report.go gives at the same spot: the
+		// sentinel already names the month and the missing run.
+		if errors.Is(err, ErrPayRunNotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("statutory rows for %s: %w", m, err)
 	}
 	return out, nil
 }

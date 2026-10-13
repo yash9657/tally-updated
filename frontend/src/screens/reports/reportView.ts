@@ -259,13 +259,75 @@ export function exportRowFor(row: DrillRow): ExportRow {
 /** The default availability: a screen that fetches nothing is always ready. */
 const READY: ReportAvailability = { kind: "ready" };
 
-/** Build the sheet Alt+E writes for a report's visible rows. */
+/**
+ * ⛔⛔ D118 — WHOSE TOTAL IS THIS ROW'S AMOUNT PART OF?
+ *
+ * The label of the nearest enclosing row THAT IS IN THE FILE, per row, or "" at
+ * the top level. It is what makes a statement summable: `SUMIF(Parent,
+ * "Liabilities", Amount)` is the Liabilities row itself, at any depth, without
+ * the reader knowing anything about the tree.
+ *
+ * ⛔ DERIVED HERE AND NOT DECLARED BY THE SCREEN. Declaring it would be a second
+ * copy of the ancestor walk `condense` already does, and the two would drift the
+ * first time a screen re-parented anything.
+ *
+ * ⛔⛔ AND IT IS COMPUTED OVER THE ROWS IN THE FILE — after Ctrl+F, F12 and
+ * Alt+F1 have been applied — NOT over the rows the screen built. That is the only
+ * correct choice and it is also the honest one: `condense` drops drillable rows
+ * deeper than level 1 while KEEPING every non-drillable row and its chain of
+ * ancestors, so a condensed file can contain a group whose children are only
+ * PARTLY present (`Current Assets` holding `Stock-in-Hand` and not its three
+ * siblings, because `Closing Stock` had to be kept). Naming a parent that is not
+ * in the file would be worse than naming the one that is — and the file says
+ * which view produced it, which is how a reader knows a deep sum may be partial.
+ * See docs/design/d118-statement-tree-export.md §3.
+ */
+export function parentLabels(rows: readonly DrillRow[]): string[] {
+  const cells = rows.map(exportRowFor);
+  const label = (i: number) => cells[i]?.[0]?.value ?? "";
+  return rows.map((row, i) => {
+    const depth = row.depth ?? 0;
+    if (depth === 0) return "";
+    for (let j = i - 1; j >= 0; j--) {
+      if ((rows[j]!.depth ?? 0) < depth) return label(j);
+    }
+    // A deeper row with nothing shallower above it: the file has no parent for
+    // it, and inventing one would be a claim. "" is the truthful answer.
+    return "";
+  });
+}
+
+/**
+ * Build the sheet Alt+E writes for a report's visible rows.
+ *
+ * ⛔ THE TWO D118 COLUMNS ARE SPLICED IN TOGETHER, HEADER AND CELL, or not at
+ * all. A screen cannot supply one without the other and cannot get the width
+ * wrong — `toCsv` REFUSES a row whose cell count disagrees with the headers, and
+ * a half-done widening would otherwise file every figure after the gap under the
+ * wrong heading.
+ *
+ * They go immediately AFTER the label, beside the thing they qualify, which is
+ * where D109 put `Level` on the two reports it closed.
+ */
 export function reportSheet(
   title: string,
   headers: readonly string[],
   rows: readonly DrillRow[],
+  opts: { levels?: boolean } = {},
 ): ExportSheet {
-  return { title, headers, rows: rows.map(exportRowFor) };
+  const cells = rows.map(exportRowFor);
+  if (!opts.levels) return { title, headers, rows: cells };
+  const parents = parentLabels(rows);
+  return {
+    title,
+    headers: [headers[0] ?? "", "Level", "Parent", ...headers.slice(1)],
+    rows: cells.map((row, i) => [
+      row[0] ?? textCell(""),
+      textCell(rows[i]!.level ?? ""),
+      textCell(parents[i] ?? ""),
+      ...row.slice(1),
+    ]),
+  };
 }
 
 /**
@@ -284,6 +346,22 @@ export function useReportView(
      */
     availability?: ReportAvailability;
     /**
+     * ⛔ D118 — WRITE THE `Level` AND `Parent` COLUMNS. Set it on a report whose
+     * file contains rows at more than one level: a tree, or a flat report with a
+     * TOTAL row (an unmarked total is the same doubling one row smaller — the
+     * Trial Balance's `Σ Debit` was exactly 2× its own `Total`).
+     *
+     * ⚠️ LEAVE IT OFF ON A FLAT REPORT WITH NO TOTAL ROW. The Day Book and the
+     * drill-down have neither, so the two columns would be one repeated word and
+     * a column of empties — noise in a file whose purpose is to be summed. Both
+     * were checked rather than assumed; see the design memo's §4 table.
+     *
+     * Every row must then carry a `level`. There is a test per opted-in report
+     * asserting none is blank, because a row with no level is a row a
+     * spreadsheet cannot filter out — the defect, one row at a time.
+     */
+    levels?: boolean;
+    /**
      * What to CALL the report in a refusal sentence, when that differs from the
      * export title. `title` becomes the FILE NAME ("Profit-and-Loss.csv"), so
      * the P&L cannot use its screen heading there — and a status line reading
@@ -299,6 +377,7 @@ export function useReportView(
   );
 
   const { title, headers } = meta;
+  const levels = meta.levels ?? false;
   const availability = meta.availability ?? READY;
   const label = meta.label ?? title;
   useExportAction(
@@ -308,8 +387,8 @@ export function useReportView(
       // would otherwise export as a file of zeroes.
       const unavailable = exportUnavailableMessage(label, availability);
       if (unavailable !== null) return unavailable;
-      return reportSheet(title, headers, visible);
-    }, [availability, headers, label, title, visible]),
+      return reportSheet(title, headers, visible, { levels });
+    }, [availability, headers, label, levels, title, visible]),
   );
 
   // Ctrl+P / Alt+P. Registered HERE, in the hook every report screen already

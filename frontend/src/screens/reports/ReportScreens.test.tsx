@@ -11,6 +11,8 @@ import {
   OutstandingsScreen,
   BillsPayableScreen,
   outstandingsScopeLine,
+  onAccountLine,
+  UnadjustedForexScreen,
 } from "./ReportScreens";
 import { createMockClient } from "../../api";
 import type { CoredClient } from "../../api";
@@ -140,6 +142,7 @@ describe("report screens fetch from the live client on mount", () => {
       ],
       slab_totals: [],
       total: "400.0000",
+      on_account_total: "0.0000",
     }));
     renderReport(OutstandingsScreen, { getOutstandings });
     await waitFor(() => expect(getOutstandings).toHaveBeenCalledWith("co-1", {}));
@@ -307,6 +310,10 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               due_date: "2026-05-20",
               overdue_days: 41,
               slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
             {
               ref_name: "INV/0008",
@@ -314,12 +321,17 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               due_date: "2026-07-20",
               overdue_days: 0,
               slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
           ],
         },
       ],
       slab_totals: [],
       total: "11800.0000",
+      on_account_total: "0.0000",
     }));
 
   it("renders each bill with its reference, its due date and its ageing", async () => {
@@ -363,12 +375,17 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               due_date: "",
               overdue_days: 0,
               slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
           ],
         },
       ],
       slab_totals: [],
       total: "1000.0000",
+      on_account_total: "0.0000",
     }));
     renderReport(OutstandingsScreen, { getOutstandings });
     await waitFor(() => expect(screen.getByText("OPEN-1")).toBeTruthy());
@@ -452,5 +469,474 @@ describe("BillsPayableScreen — the door is the authorisation", () => {
     renderReport(OutstandingsScreen, client);
     await waitFor(() => expect(receivable).toHaveBeenCalled());
     expect(payable).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⛔⛔ D106 — THE ON-ACCOUNT ROW MUST NOT READ LIKE A BILL WITH A MISSING DUE DATE.
+ *
+ * The row is the part of a party's balance that names no reference. Rendered
+ * through the ordinary branch it comes out as "no due date recorded" / "no due
+ * date", which invites an operator to go and record one — there is nothing to
+ * record, and the absence IS the fact being reported.
+ *
+ * ⚠️ AND THE SLABS ARE SHORT OF THE TOTAL BY EXACTLY THIS ROW, which is the shape
+ * a reader checks by adding up. Tally leaves that silent; this screen says it.
+ */
+describe("Outstandings states its on-account money (D106)", () => {
+  const withOnAccount = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-08-30",
+      parties: [
+        {
+          ledger_id: "led-acme",
+          ledger: "Acme",
+          group: "Sundry Debtors",
+          pending: "17000.0000",
+          bills: [
+            {
+              ref_name: "INV/0007",
+              pending: "24000.0000",
+              due_date: "2026-05-12",
+              overdue_days: 110,
+              slab: "90-180 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
+            },
+            {
+              ref_name: "On Account",
+              pending: "-7000.0000",
+              due_date: "",
+              overdue_days: 0,
+              slab: "",
+              on_account: true,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "90-180 days", amount: "24000.0000" }],
+      total: "17000.0000",
+      on_account_total: "-7000.0000",
+    }));
+
+  it("says the money is unapplied rather than that a due date is missing", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: withOnAccount() });
+
+    // THE CONTROL FIRST: the real bill still reads as a bill, with its ageing.
+    await waitFor(() => expect(screen.getByText("INV/0007")).toBeTruthy());
+    expect(screen.getByText(/due 2026-05-12/)).toBeTruthy();
+    expect(screen.getByText("110 days overdue")).toBeTruthy();
+
+    // ⛔ AND THE ON-ACCOUNT ROW SAYS WHAT IT IS.
+    expect(screen.getByText("On Account")).toBeTruthy();
+    expect(screen.getByText(/received, not applied to any bill/)).toBeTruthy();
+    expect(screen.getByText("not aged — in no slab")).toBeTruthy();
+    // The wording that would be WRONG here — it invites a correction that cannot
+    // be made, because there is no bill whose due date could be filled in.
+    expect(screen.queryByText(/no due date recorded/)).toBeNull();
+  });
+
+  it("discloses that the slabs are short of the total by exactly that much", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: withOnAccount() });
+    await waitFor(() =>
+      expect(screen.getByTestId("os-on-account")).toBeTruthy(),
+    );
+    const said = screen.getByTestId("os-on-account").textContent ?? "";
+    expect(said).toMatch(/ON ACCOUNT/);
+    expect(said).toMatch(/NOT in any ageing slab/);
+  });
+
+  it("says nothing at all when there is no on-account money", async () => {
+    // ⛔ THE CONTROL ON THE DISCLOSURE ITSELF. A caption about a case that does
+    // not apply is noise, and noise is how a real disclosure stops being read.
+    renderReport(OutstandingsScreen, { getOutstandings: twoBillsNoOnAccount() });
+    await waitFor(() => expect(screen.getByText("INV/0007")).toBeTruthy());
+    expect(screen.queryByTestId("os-on-account")).toBeNull();
+  });
+
+  const twoBillsNoOnAccount = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-08-30",
+      parties: [
+        {
+          ledger_id: "led-acme",
+          ledger: "Acme",
+          group: "Sundry Debtors",
+          pending: "24000.0000",
+          bills: [
+            {
+              ref_name: "INV/0007",
+              pending: "24000.0000",
+              due_date: "2026-05-12",
+              overdue_days: 110,
+              slab: "90-180 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "90-180 days", amount: "24000.0000" }],
+      total: "24000.0000",
+      on_account_total: "0.0000",
+    }));
+});
+
+/**
+ * The sentence, held to its rule directly — cheaper than a rendered screen, and
+ * the reason `onAccountLine` is exported at all.
+ */
+describe("onAccountLine", () => {
+  it("reads money HELD as received-and-unapplied", () => {
+    const said = onAccountLine("-7000.0000");
+    expect(said).toMatch(/received and not yet applied/);
+    expect(said).toMatch(/NOT in any ageing slab/);
+    // ⛔ IT TELLS THE OPERATOR WHAT TO DO. A disclosure that names a problem and
+    // no remedy just teaches people to scroll past it.
+    expect(said).toMatch(/alter the voucher/);
+  });
+
+  it("reads the other direction as an amount with no invoice raised", () => {
+    // ⚠️ THE SIGN IS NOT COSMETIC. A positive on-account figure is money the party
+    // owes that no invoice covers — the opposite bookkeeping situation from an
+    // unapplied receipt, and calling it "received" would be plainly false.
+    expect(onAccountLine("7000.0000")).toMatch(/no invoice has been raised/);
+  });
+});
+
+/**
+ * ⭐⭐ T8 STEP 6 — OUTSTANDINGS SHOWS A FOREIGN BILL AS FOREIGN (Q5).
+ *
+ * Before step 6 `Bill` carried ONE money column and every bill landed in it, so an
+ * exporter with $1,000 outstanding read a rupee figure that was correct, ageing that
+ * was correct, and could not tell from any screen in this product that the debt was
+ * in dollars at all.
+ *
+ * ⚠️ EVERY TEST HERE CARRIES ITS BASE CONTROL. A screen that stamped a currency on
+ * every row, or that rendered the column for nobody, would satisfy half of these on
+ * its own.
+ */
+describe("Outstandings reports the foreign half of a foreign bill", () => {
+  const oneOfEach = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-06-30",
+      parties: [
+        {
+          ledger_id: "led-fx",
+          ledger: "Foreign Exports Ltd",
+          group: "Sundry Debtors",
+          pending: "66920.9840",
+          bills: [
+            {
+              ref_name: "EXP-1",
+              pending: "66920.9840",
+              due_date: "2026-05-20",
+              overdue_days: 41,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "USD",
+              foreign_pending: "800.0000",
+              currency_conflict: false,
+            },
+          ],
+        },
+        {
+          ledger_id: "led-inr",
+          ledger: "Domestic Traders",
+          group: "Sundry Debtors",
+          pending: "30000.0000",
+          bills: [
+            {
+              ref_name: "DOM-1",
+              pending: "30000.0000",
+              due_date: "2026-06-30",
+              overdue_days: 0,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "0-45 days", amount: "96920.9840" }],
+      total: "96920.9840",
+      on_account_total: "0.0000",
+    }));
+
+  it("prints the currency and the foreign amount, and leaves a rupee bill blank", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: oneOfEach() });
+
+    await waitFor(() =>
+      expect(screen.getByText("Foreign Exports Ltd")).toBeTruthy(),
+    );
+
+    // THE SUBJECT: the dollar figure is on the page, named as dollars.
+    expect(screen.getByText("USD 800.00")).toBeTruthy();
+    // ⛔ AND THE RUPEE FIGURE IS STILL THERE AND UNCHANGED. It is the figure that
+    // ties to Sundry Debtors, and the foreign column is beside it, never instead
+    // of it.
+    // ⚠️ getAllByText: this party holds exactly one bill, so the party total and
+    // the bill row carry the same figure — which is the report working correctly.
+    expect(screen.getAllByText("66,920.98").length).toBe(2);
+
+    // ⭐ THE CONTROL: the base bill renders no currency at all. A screen that put
+    // "INR 30,000.00" here would be inventing a currency master that 0080's own
+    // trigger refuses to let exist.
+    expect(screen.getByText("DOM-1")).toBeTruthy();
+    expect(screen.queryByText(/INR/)).toBeNull();
+    expect(screen.queryByText(/^ 0.00$/)).toBeNull();
+
+    // ⚠️ THE GRAND TOTAL IS BASE-ONLY (Q5). Not 96,920.98 + 800.
+    expect(screen.getByTestId("os-total").textContent).toBe("96,920.98");
+  });
+
+  it("marks BOTH rows of a reference that is open under two currencies", async () => {
+    // ⛔ THE CASE STEP 5 DELIBERATELY DOES NOT REFUSE: a rupee receipt allocated
+    // against a dollar bill. The server returns two rows under one bill number,
+    // because netting them would be a sum of two currencies; unmarked, that reads
+    // as a customer who numbered two invoices alike.
+    const conflicted = vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-06-30",
+      parties: [
+        {
+          ledger_id: "led-fx",
+          ledger: "Foreign Exports Ltd",
+          group: "Sundry Debtors",
+          pending: "0.0000",
+          bills: [
+            {
+              ref_name: "EXP-1",
+              pending: "83651.2300",
+              due_date: "2026-05-20",
+              overdue_days: 41,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "USD",
+              foreign_pending: "1000.0000",
+              currency_conflict: true,
+            },
+            {
+              ref_name: "EXP-1",
+              pending: "-83651.2300",
+              due_date: "",
+              overdue_days: 0,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: true,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "0-45 days", amount: "0.0000" }],
+      total: "0.0000",
+      on_account_total: "0.0000",
+    }));
+    renderReport(OutstandingsScreen, { getOutstandings: conflicted });
+
+    await waitFor(() =>
+      expect(screen.getByText("Foreign Exports Ltd")).toBeTruthy(),
+    );
+
+    // ⛔⛔ BOTH ROWS ARE PRESENT AND BOTH ARE MARKED. A row key that ignored the
+    // currency would collide and DrillRows would drop the second row — hiding
+    // exactly the half of the disclosure the marker exists to show.
+    const marked = screen.getAllByText(/EXP-1 ⚠ two currencies/);
+    expect(marked.length).toBe(2);
+    // The dollar exposure that was never settled is on the page.
+    expect(screen.getByText("USD 1,000.00")).toBeTruthy();
+    // And so is the negative rupee row that says a rupee receipt cleared it.
+    expect(screen.getByText("-83,651.23")).toBeTruthy();
+  });
+
+  it("does not mark an ordinary foreign bill (the inverse control)", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: oneOfEach() });
+    await waitFor(() =>
+      expect(screen.getByText("Foreign Exports Ltd")).toBeTruthy(),
+    );
+    // A disclosure that fires on the normal case is noise, and noise is how a real
+    // disclosure stops being read.
+    expect(screen.queryByText(/two currencies/)).toBeNull();
+  });
+});
+
+/**
+ * ⭐⭐ T8 STEP 7 — THE UNADJUSTED-FOREX SCREEN.
+ *
+ * ⛔ TWO OF THESE TESTS ARE THE WHOLE POINT OF THE FILE AND NEITHER IS ABOUT A
+ * LAYOUT: that the RATES survive to the page at ten decimals, and that a bill nobody
+ * can price says so rather than showing a zero. Both are failures that render
+ * perfectly and are wrong for ever.
+ */
+describe("The unadjusted-forex screen", () => {
+  const oneOfEach = () =>
+    vi.fn(async () => ({
+      as_on: "2026-08-31",
+      priced_as_on: "2026-08-31",
+      bills: [
+        {
+          ledger_id: "led-fx",
+          ledger: "Globex LLC",
+          group: "Sundry Debtors",
+          ref_name: "EXP-1",
+          ref_type: "NEW",
+          currency_code: "USD",
+          foreign_pending: "800.0000",
+          book_value: "66920.9840",
+          difference: "3840.0037",
+          bill_rate: "83.6512345678",
+          rate_as_on: "88.4512345678",
+          has_rate_as_on: true,
+        },
+        {
+          ledger_id: "led-eur",
+          ledger: "Bonn Werke GmbH",
+          group: "Sundry Creditors",
+          ref_name: "EUR-1",
+          ref_type: "NEW",
+          currency_code: "EUR",
+          foreign_pending: "1000.0000",
+          book_value: "90000.0000",
+          difference: "0.0000",
+          bill_rate: "90.0000000000",
+          rate_as_on: "0.0000000000",
+          has_rate_as_on: false,
+        },
+      ],
+      total_difference: "3840.0037",
+      unrated_count: 1,
+      posts_nothing: true,
+    }));
+
+  it("renders BOTH rates at ten decimals, not as money", async () => {
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: oneOfEach() });
+    await waitFor(() => expect(screen.getByText(/Globex LLC/)).toBeTruthy());
+
+    // ⛔⛔ THE ASSERTION THIS FILE EXISTS FOR. `formatMoney` on 83.6512345678 prints
+    // "83.65"; it sits happily in a column headed "Bill rate", it round-trips
+    // through its own type perfectly, and it is wrong for ever. A rate is
+    // NUMERIC(19,10) and money is (19,4).
+    expect(screen.getByText("83.6512345678")).toBeTruthy();
+    expect(screen.getByText("88.4512345678")).toBeTruthy();
+    expect(screen.queryByText("83.65")).toBeNull();
+    expect(screen.queryByText("88.45")).toBeNull();
+
+    // The money columns ARE money, so the two conventions are visibly different on
+    // one page — which is the only way a reader can tell them apart.
+    expect(screen.getByText("66,920.98")).toBeTruthy();
+    // ⚠️ getAllByText: the one priced row's difference IS the total, which is the
+    // report working correctly, so the figure legitimately appears twice.
+    expect(screen.getAllByText("3,840.00").length).toBe(2);
+  });
+
+  it("says a bill it cannot price is unpriced, and never shows a zero rate", async () => {
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: oneOfEach() });
+    await waitFor(() => expect(screen.getByText(/Bonn Werke/)).toBeTruthy());
+
+    // ⛔ NOT "0.0000000000", WHICH IS WHAT THE WIRE CARRIES FOR AN ABSENT RATE. A
+    // zero in a rate column reads as a rate that was entered and is zero, and the
+    // empty difference beside it then reads as a position that has not moved —
+    // the opposite of the truth, which is that nobody can value it.
+    expect(screen.getByText("no rate on file")).toBeTruthy();
+    expect(screen.queryByText("0.0000000000")).toBeNull();
+    // And the disclosure that the total is SHORT.
+    expect(screen.getByTestId("uf-unrated").textContent).toMatch(
+      /could NOT be priced/,
+    );
+    // ⭐ THE TOTAL IS THE PRICED ROWS ONLY, and it must not have absorbed a zero
+    // for the unpriced one as though that were a real revaluation of nothing.
+    expect(screen.getByTestId("uf-total").textContent).toBe("3,840.00");
+  });
+
+  it("states that the difference is REPORTED AND NOT POSTED, in those words", async () => {
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: oneOfEach() });
+    await waitFor(() => expect(screen.getByTestId("uf-scope")).toBeTruthy());
+    const scope = screen.getByTestId("uf-scope").textContent ?? "";
+    // Q4 requires the product to say so on the screen and in F11.
+    expect(scope).toMatch(/REPORTED AND NOT POSTED/);
+    expect(scope).toMatch(/no voucher is created/);
+    // ⚠️ AND THAT IT COVERS BOTH SIDES — a reader who assumed receivables only
+    // would read a NETTED total as a receivable figure.
+    expect(scope).toMatch(/receivable AND payable/);
+    // ⛔ AND WHAT THE DATE DID. On this report it does two jobs.
+    expect(scope).toMatch(/priced at the rate as on 2026-08-31/);
+  });
+
+  it("hides the unpriced disclosure when every row could be priced", async () => {
+    // The inverse control: a permanent caption about a case that does not apply is
+    // noise, and noise is how a real disclosure stops being read.
+    const allPriced = vi.fn(async () => {
+      const base = await oneOfEach()();
+      return {
+        ...base,
+        bills: [base.bills[0]!],
+        unrated_count: 0,
+      };
+    });
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: allPriced });
+    await waitFor(() => expect(screen.getByText(/Globex LLC/)).toBeTruthy());
+    expect(screen.queryByTestId("uf-unrated")).toBeNull();
+  });
+
+  it("says NO DATE LIMIT when the caller named no date (D86)", async () => {
+    const unbounded = vi.fn(async () => {
+      const base = await oneOfEach()();
+      // ⛔ EMPTY IS AN ANSWER, NOT A MISSING FIELD. `priced_as_on` stays populated,
+      // because an unbounded report is still priced against SOME day and a
+      // revaluation with no rate date is a number with no reference.
+      return { ...base, as_on: "" };
+    });
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: unbounded });
+    await waitFor(() => expect(screen.getByTestId("uf-scope")).toBeTruthy());
+    const scope = screen.getByTestId("uf-scope").textContent ?? "";
+    expect(scope).toMatch(/NO DATE LIMIT/);
+    expect(scope).toMatch(/priced at the rate as on 2026-08-31/);
+  });
+
+  it("marks an ADVANCE as one, because it is revalued and is not a bill", async () => {
+    const withAdvance = vi.fn(async () => {
+      const base = await oneOfEach()();
+      return {
+        ...base,
+        bills: [
+          {
+            ...base.bills[0]!,
+            ref_name: "ADV-1",
+            ref_type: "ADVANCE",
+            foreign_pending: "-100.0000",
+            book_value: "-8365.1200",
+            difference: "-480.0035",
+          },
+        ],
+        total_difference: "-480.0035",
+        unrated_count: 0,
+      };
+    });
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: withAdvance });
+    await waitFor(() => expect(screen.getByText(/ADV-1/)).toBeTruthy());
+    // ⭐ AN ADVANCE **IS** REVALUED — it is a named reference with one rate on one
+    // document and a real book value — but it is not money owed on an invoice, and a
+    // row reading "ADV-1" beside a negative exposure invites the reader to think a
+    // customer is overpaid on a bill. The label says which it is.
+    expect(screen.getByText(/ADV-1 \(advance\)/)).toBeTruthy();
+    expect(screen.getByTestId("uf-total").textContent).toBe("-480.00");
   });
 });

@@ -86,7 +86,7 @@ func setupParty(t *testing.T) *partyEnv {
 	}
 	_ = adminConn.Close(ctx)
 
-	pool, err := db.New(ctx, testdb.AppDSN)
+	pool, err := db.New(ctx, testdb.AppDSNValue())
 	if err != nil {
 		t.Fatalf("app pool: %v", err)
 	}

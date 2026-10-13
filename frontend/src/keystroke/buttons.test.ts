@@ -58,6 +58,16 @@ const keymap = resolveKeymap("tallyprime");
 const SCREEN_PATHS: { screen: NavSnapshot["screen"]; events: Ev[] }[] = [
   { screen: "gateway", events: [] },
   { screen: "voucher", events: [{ type: "KEY", combo: "F8" }] },
+  // W2 — the APPROVAL INBOX by its Gateway door, with a proposal HIGHLIGHTED:
+  // the bar's "Enter Open to edit" must drill, and it can only drill a row.
+  {
+    screen: "approval-inbox",
+    events: [
+      { type: "SELECT", menuItem: "Approval Inbox" },
+      { type: "KEY", combo: "Enter" },
+      { type: "SELECT", menuItem: "proposal:payment:single:appr-1" },
+    ],
+  },
   {
     screen: "report",
     events: [
@@ -171,6 +181,17 @@ describe("no advertised button is decorative", () => {
           // export it deliberately does NOT move the stack: an operator who
           // prints an invoice is still on that invoice.
           "print",
+          // Alt+M e-mails the document (B2). Screen-owned for exactly the reason
+          // `print` is — it asks the same `resolvePrintTarget` what the document on
+          // this screen is, then saves the server's PDF and opens the operator's
+          // own mail client on a draft. It does not move the stack: an operator
+          // e-mailing an invoice is still on that invoice.
+          //
+          // ⚠️ IT IS ON EVERY BAR THAT CARRIES Ctrl+P AND NO OTHER, which is the
+          // same invariant `usePrintAction` enforces by registering both keys from
+          // one hook — so this entry appears here in the same change the bar items
+          // did, and neither can be added without the other going red.
+          "emailDocument",
           // F4 on the reconciliation screen picks the bank account
           // (RESEARCH.md:879). The screen owns the picker, because which ledgers
           // are BANK ledgers is an ltree ancestry fact in the database, not
@@ -221,6 +242,12 @@ describe("no advertised button is decorative", () => {
           // AppShell.
           "orderRegister",
           "date",
+          // W2. Ctrl+K toggles the SHELL's side panel, which is not a frame, and
+          // Alt+X / Alt+B on the approval inbox record a decision about the
+          // highlighted proposal — none of the three moves the stack, by design.
+          "agentPanel",
+          "rejectApproval",
+          "askBackApproval",
         ].includes(action?.kind ?? "");
         expect(
           sideEffect || acts(events, combo),
@@ -352,18 +379,26 @@ describe("no documented TallyPrime key is silently dead", () => {
   });
 
   it("keys for features this build lacks say so, with a reason", () => {
-    // ⚠️ THE EXAMPLES IN THIS LOOP HAVE NOW BEEN REPLACED TWICE, and that is the
-    // point of the test rather than a nuisance: Alt+F7 was the original stand-in
-    // and the stock vouchers got built, then Ctrl+F8 replaced it and ORDER
-    // PROCESSING got built. Each time, this assertion is what forced the keymap's
-    // "not built yet" note to be corrected instead of left to rot into a lie that
-    // sends an operator looking for a feature they already have.
+    // ⚠️ THE EXAMPLES IN THIS LOOP HAVE NOW BEEN REPLACED THREE TIMES, and that
+    // is the point of the test rather than a nuisance: Alt+F7 was the original
+    // stand-in and the stock vouchers got built, then Ctrl+F8 replaced it and
+    // ORDER PROCESSING got built, and now Ctrl+F4 has gone the same way — PAYROLL
+    // got built. Each time, this assertion is what forced the keymap's "not built
+    // yet" note to be corrected instead of left to rot into a lie that sends an
+    // operator looking for a feature they already have.
     //
-    // What is left here is genuinely absent: the payroll voucher (Ctrl+F4) has no
-    // screen, F10's "Other Vouchers" PICKER does not exist (every voucher it would
-    // list has its own working key, which is what its note now says), and shutting
-    // a company (Ctrl+F3) is not built.
-    for (const combo of ["Ctrl+F4", "F10", "Ctrl+F3"]) {
+    // ⛔ CTRL+F4 WAS THE STALEST OF THE THREE WHEN IT WENT. Its note said "the
+    // payroll module is not built yet" while `internal/payroll` held the engine,
+    // the statutory rates, both reports and three statutory file emitters, EIGHT
+    // routes were mounted and PDP-mapped, and every one of them was tested. What
+    // was missing was a SCREEN — and this loop cannot tell those apart, which is
+    // worth knowing about the guarantee it gives: it catches a note that
+    // contradicts the KEYMAP, not one that contradicts the server.
+    //
+    // What is left here is genuinely absent: F10's "Other Vouchers" PICKER does
+    // not exist (every voucher it would list has its own working key, which is
+    // what its note now says), and shutting a company (Ctrl+F3) is not built.
+    for (const combo of ["F10", "Ctrl+F3"]) {
       const action = resolveAction(keymap, "gateway", combo);
       expect(action?.kind).toBe("unavailable");
       if (action?.kind === "unavailable") {
@@ -371,6 +406,20 @@ describe("no documented TallyPrime key is silently dead", () => {
         expect(action.note.length).toBeGreaterThan(20);
       }
     }
+  });
+
+  it("Ctrl+F4 opens the pay run, and it is LABELLED", () => {
+    // The other half of the row above: a key that stops being `unavailable` must
+    // become something real, not merely stop refusing. An unlabelled action reads
+    // as a blank line in the F1 Help catalog and in the status line, which is the
+    // same silent failure in a different place.
+    const action = resolveAction(keymap, "gateway", "Ctrl+F4");
+    expect(action?.kind).toBe("payRun");
+    expect(actionLabel(action!).length).toBeGreaterThan(0);
+    // ⛔ AND IT MUST NOT SAY "VOUCHER". A pay run has no particulars to key — its
+    // lines are computed from the masters for a whole wage month — so an operator
+    // told "Payroll voucher" would be looking for a form that does not exist.
+    expect(actionLabel(action!).toLowerCase()).not.toContain("voucher");
   });
 
   it("the F1 Help catalog covers every bound key for the screen", () => {

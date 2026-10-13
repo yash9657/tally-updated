@@ -19,6 +19,7 @@ package server
 
 import (
 	"context"
+	"github.com/khata/cored/internal/platform/testdb"
 	"os"
 	"testing"
 	"time"
@@ -31,9 +32,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	challengeAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	challengeAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	challengeAdminDSN = testdb.AdminDSNValue()
+	challengeAppDSN   = testdb.AppDSNValue()
 )
 
 // testClock is a manually advanced clock so TTL expiry is proven deterministically

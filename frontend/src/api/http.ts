@@ -12,6 +12,43 @@
  * The wrapper does NOT parse money fields — they stay strings end to end.
  */
 
+/**
+ * ⛔⛔ THE REQUEST NEVER GOT AN ANSWER. This is the ONLY error in this app that
+ * means the books did not see the write, and it exists so that the offline
+ * outbox can be certain of that before it promises an operator their voucher is
+ * safe.
+ *
+ * ⛔ WHY IT IS THROWN HERE AND NOWHERE ELSE. The queue-or-refuse decision on the
+ * voucher accept path used to be expressible only as "not an {@link ApiError}",
+ * and that is a decision by EXCLUSION — every programming error in the response
+ * handling (a null deref in a `.then`, a builder that throws a TypeError) also
+ * fails that test, and would have been queued as a network problem. The operator
+ * would then be told their invoice is safely queued because the CLIENT crashed.
+ * Only the transport knows a transport failure happened, so only the transport
+ * raises this, and the decision becomes positive: `instanceof NetworkError`.
+ *
+ * ⛔ IT WRAPS THE `fetch` CALL ONLY — NEVER THE BODY READ. Once `fetch` resolves
+ * there is a status, so the server answered and the books may have applied the
+ * write; a body that dies mid-read is NOT this. That boundary is the whole
+ * meaning of the type: "no answer was produced", not "something went wrong".
+ *
+ * ⚠️ AND THE RESIDUAL AMBIGUITY, STATED RATHER THAN HIDDEN: a connection reset
+ * AFTER the server committed but BEFORE the response was read also lands here.
+ * The client cannot distinguish that from a request that never arrived — nothing
+ * on the wire can. See `shouldQueueOffline` for what is done about it and what
+ * is merely disclosed.
+ */
+export class NetworkError extends Error {
+  /** The original `fetch` rejection (a TypeError in every browser). */
+  readonly cause: unknown;
+  constructor(what: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`could not reach the server (${what}): ${detail}`);
+    this.name = "NetworkError";
+    this.cause = cause;
+  }
+}
+
 /** A typed transport / protocol error from the backend. */
 export class ApiError extends Error {
   readonly status: number;
@@ -85,10 +122,30 @@ export interface HttpClient {
    * client that replaced either message with a guess of its own would either leak
    * what the 404 protects or hide why nothing printed.
    */
-  getBlob(
-    path: string,
-    query?: QueryParams,
-  ): Promise<{ blob: Blob; filename: string | null }>;
+  getBlob(path: string, query?: QueryParams): Promise<BlobResponse>;
+}
+
+/**
+ * A binary response: the bytes, the download name, and a reader for any
+ * RESPONSE HEADER the caller needs.
+ *
+ * ⛔ `header` EXISTS BECAUSE SOME BODIES ARE NOT SELF-DESCRIBING. The three
+ * statutory payroll files are served as a ZIP whose two entries are the file and
+ * its disclosure sidecar, and the server states what is inside on the response
+ * itself — `X-Statutory-File` names the file the portal will be given, and
+ * `X-Statutory-Disclosure` says that nothing in it has been through the FVU, the
+ * EPFO portal or the ESIC portal. A client that could not read those would have
+ * to either unzip the archive (separating the file from its disclosure, which is
+ * the one thing the zip exists to prevent) or invent the sentence itself.
+ *
+ * It is a LOOKUP and not the `Headers` object so that the shape stays trivially
+ * fakeable in a test without constructing a DOM Headers.
+ */
+export interface BlobResponse {
+  blob: Blob;
+  filename: string | null;
+  /** Case-insensitive response header lookup; null when absent. */
+  header(name: string): string | null;
 }
 
 /**
@@ -183,11 +240,17 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
     const headers: Record<string, string> = { ...baseHeaders };
     if (init.contentType) headers["Content-Type"] = init.contentType;
 
-    const res = await doFetch(url, {
-      method,
-      headers,
-      body: init.body,
-    });
+    // ⛔ THE ONE `await` THAT MEANS "THE BOOKS NEVER SAW THIS". See NetworkError.
+    let res: Response;
+    try {
+      res = await doFetch(url, {
+        method,
+        headers,
+        body: init.body,
+      });
+    } catch (cause: unknown) {
+      throw new NetworkError(`${method} ${path}`, cause);
+    }
 
     const text = await res.text();
     let parsed: unknown = undefined;
@@ -251,7 +314,14 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
     },
     async getBlob(path: string, query?: QueryParams) {
       const url = `${baseUrl}${path}${buildQuery(query)}`;
-      const res = await doFetch(url, { method: "GET", headers: { ...baseHeaders } });
+      // Same boundary as `request` — a download that could not reach the server
+      // is a transport failure, not a 0-byte document.
+      let res: Response;
+      try {
+        res = await doFetch(url, { method: "GET", headers: { ...baseHeaders } });
+      } catch (cause: unknown) {
+        throw new NetworkError(`GET ${path}`, cause);
+      }
 
       if (!res.ok) {
         // The body is JSON here even though the success body is not. Read it as
@@ -278,6 +348,7 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
       return {
         blob: await res.blob(),
         filename: filenameFromDisposition(res.headers.get("Content-Disposition")),
+        header: (name: string) => res.headers.get(name),
       };
     },
   };

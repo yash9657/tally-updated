@@ -17,9 +17,15 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+// The DSNs honour ADMIN_DATABASE_URL / DATABASE_URL (the names the Makefile
+// already exports) so a lane can run this package against its OWN database.
+// Every test here calls migrations.Apply, so a hardcoded DSN meant that merely
+// running the query tests with a new migration on disk migrated the shared
+// development database — a side effect nobody asked for, invisible until
+// another checkout found a table its branch does not know about.
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }

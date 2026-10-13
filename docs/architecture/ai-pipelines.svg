@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 928" width="1200" height="928" role="img" aria-labelledby="title desc">
+  <title id="title">Tally AI pipelines</title>
+  <desc id="desc">Three pipelines inside cored. A: the durable, human-gated agent run, whose steps are decide, tool, gate, await and exec, recorded in a hash-chained intent log. B: natural-language questions translated by an LLM into a closed typed DSL, compiled deterministically and executed in a read-only RLS-scoped transaction. C: insights from real-time and nightly detectors, ranked into a morning digest whose narration is checked for number provenance before it is shown.</desc>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/>
+    </marker>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #475569; }
+      .lane { font-size: 15px; font-weight: 700; }
+      .lanes { font-size: 12.5px; fill: #475569; }
+      .h { font-size: 13px; font-weight: 700; }
+      .t { font-size: 12.5px; }
+      .s { font-size: 12px; fill: #475569; }
+      .m { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .edge { stroke: #334155; stroke-width: 1.6; fill: none; }
+      .llm { stroke: #7c3aed; stroke-width: 1.6; fill: none; stroke-dasharray: 5 3; }
+      .box { fill: #f1f5f9; stroke: #475569; stroke-width: 1.3; }
+      .gate { fill: #fef2f2; stroke: #b91c1c; stroke-width: 1.4; }
+      .model { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.4; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="928" rx="16" fill="#ffffff"/>
+  <text class="h1" x="28" y="40">AI pipelines inside cored</text>
+  <text class="sub" x="28" y="62">The model proposes, deterministic Go decides. Purple = a model call (internal/llm); red = a human or policy gate.</text>
+
+  <!-- ===================== Lane A ===================== -->
+  <rect x="20" y="80" width="1160" height="300" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text class="lane" x="36" y="104">A · Agent run — durable, human-gated</text>
+  <text class="lanes" x="330" y="104">internal/agent on internal/durable · POST /agent/runs (in-app) or MCP tools/call</text>
+
+  <rect x="36" y="128" width="150" height="74" rx="8" class="box"/>
+  <text class="h" x="48" y="150">start</text>
+  <text class="s" x="48" y="169">delegation snapshot,</text>
+  <text class="s" x="48" y="185">context sources</text>
+
+  <rect x="214" y="128" width="170" height="74" rx="8" class="model"/>
+  <text class="h" x="226" y="150">decide:k</text>
+  <text class="s" x="226" y="169">one structured decision:</text>
+  <text class="s" x="226" y="185">tool + args (JSON)</text>
+
+  <rect x="412" y="128" width="218" height="74" rx="8" class="box"/>
+  <text class="h" x="424" y="150">tool:k (read / preview)</text>
+  <text class="s" x="424" y="169">actions.search/read/preview,</text>
+  <text class="s" x="424" y="185">query_books, profiles</text>
+
+  <rect x="658" y="128" width="160" height="74" rx="8" class="gate"/>
+  <text class="h" x="670" y="150">gate:k (commit)</text>
+  <text class="s" x="670" y="169">rights, autonomy,</text>
+  <text class="s" x="670" y="185">provenance rule</text>
+
+  <rect x="846" y="128" width="150" height="74" rx="8" class="gate"/>
+  <text class="h" x="858" y="150">await:k</text>
+  <text class="s" x="858" y="169">approval inbox;</text>
+  <text class="s" x="858" y="185">parks for days</text>
+
+  <rect x="1024" y="128" width="140" height="74" rx="8" class="box"/>
+  <text class="h" x="1036" y="150">exec:k → finish</text>
+  <text class="s" x="1036" y="169">real handler,</text>
+  <text class="s" x="1036" y="185">idempotency key</text>
+
+  <line class="edge" x1="186" y1="165" x2="212" y2="165" marker-end="url(#arr)"/>
+  <line class="edge" x1="384" y1="165" x2="410" y2="165" marker-end="url(#arr)"/>
+  <line class="edge" x1="630" y1="165" x2="656" y2="165" marker-end="url(#arr)"/>
+  <line class="edge" x1="818" y1="165" x2="844" y2="165" marker-end="url(#arr)"/>
+  <line class="edge" x1="996" y1="165" x2="1022" y2="165" marker-end="url(#arr)"/>
+  <!-- loop tool -> decide -->
+  <path class="edge" d="M520,202 V222 H299 V204" marker-end="url(#arr)"/>
+  <text class="s" x="340" y="238">result back to the model (untrusted text is tainted)</text>
+
+  <rect x="36" y="252" width="1128" height="56" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+  <text class="t" x="48" y="273"><tspan font-weight="700">Every write</tspan> is dispatched through the real chi router in process, as the human, after the same PDP. A commit replays the</text>
+  <text class="t" x="48" y="293">recorded preview body (or the approver's edit), never a fresh model output. Amounts come from Go-derived postings, in paise.</text>
+
+  <rect x="36" y="318" width="552" height="50" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+  <text class="t" x="48" y="338"><tspan font-weight="700">Durable:</tspan> next step = pure function of recorded steps; per-run</text>
+  <text class="t" x="48" y="356">advisory lock; parked runs re-invoked by the poller / cron tick.</text>
+  <rect x="612" y="318" width="552" height="50" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.2"/>
+  <text class="t" x="624" y="338"><tspan font-weight="700">Intent log:</tspan> one append-only row per event, BLAKE3-chained per</text>
+  <text class="t" x="624" y="356">run; daily anchor commits to every run head. No prompt text stored.</text>
+
+  <!-- ===================== Lane B ===================== -->
+  <rect x="20" y="398" width="1160" height="196" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text class="lane" x="36" y="422">B · Ask the books — NL to rows, no SQL from the model</text>
+  <text class="lanes" x="478" y="422">POST /v1/companies/{id}/query · also the agent's query_books tool</text>
+
+  <rect x="36" y="442" width="150" height="74" rx="8" class="box"/>
+  <text class="h" x="48" y="464">question (NL)</text>
+  <text class="s" x="48" y="483">or a typed DSL</text>
+  <text class="s" x="48" y="499">posted directly</text>
+
+  <rect x="214" y="442" width="200" height="74" rx="8" class="model"/>
+  <text class="h" x="226" y="464">nlq.Translator</text>
+  <text class="s" x="226" y="483">forced tool-use → JSON;</text>
+  <text class="s" x="226" y="499">shape-checked only</text>
+
+  <rect x="442" y="442" width="176" height="74" rx="8" class="box"/>
+  <text class="h" x="454" y="464">query.Query DSL</text>
+  <text class="s" x="454" y="483">closed entities, metrics,</text>
+  <text class="s" x="454" y="499">filters, periods</text>
+
+  <rect x="646" y="442" width="230" height="74" rx="8" class="gate"/>
+  <text class="h" x="658" y="464">deterministic compiler</text>
+  <text class="s" x="658" y="483">whitelist → fixed FROM/JOIN;</text>
+  <text class="s" x="658" y="499">every value a $N parameter</text>
+
+  <rect x="904" y="442" width="260" height="74" rx="8" class="box"/>
+  <text class="h" x="916" y="464">RunInReadOnlyTx</text>
+  <text class="s" x="916" y="483">company GUC → RLS; READ ONLY;</text>
+  <text class="s" x="916" y="499">rows + the DSL shown in the UI</text>
+
+  <line class="edge" x1="186" y1="479" x2="212" y2="479" marker-end="url(#arr)"/>
+  <line class="edge" x1="414" y1="479" x2="440" y2="479" marker-end="url(#arr)"/>
+  <line class="edge" x1="618" y1="479" x2="644" y2="479" marker-end="url(#arr)"/>
+  <line class="edge" x1="876" y1="479" x2="902" y2="479" marker-end="url(#arr)"/>
+
+  <text class="s" x="48" y="544">No provider configured → deterministic FakeTranslator (keyword match). Upstream failure → 503 "retry or POST a typed dsl";</text>
+  <text class="s" x="48" y="562">untranslatable question → 422. Per-tenant monthly token budget (LLM_BUDGET_TOKENS_PER_MONTH) is reserved before every call.</text>
+  <text class="s" x="48" y="580">Built and tested, not yet on a serving route: Tier B guarded SQL over published views as agent_ro (internal/tierb).</text>
+
+  <!-- ===================== Lane C ===================== -->
+  <rect x="20" y="612" width="1160" height="296" rx="12" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+  <text class="lane" x="36" y="636">C · Insights → morning digest</text>
+  <text class="lanes" x="262" y="636">internal/insights · driven by the insight poller, or /internal/cron/tick on Lambda</text>
+
+  <!-- realtime row -->
+  <text class="h" x="36" y="664" fill="#475569">REAL TIME</text>
+  <rect x="36" y="672" width="150" height="58" rx="8" class="box"/>
+  <text class="h" x="48" y="694">voucher commit</text>
+  <text class="s" x="48" y="713">any channel</text>
+
+  <rect x="214" y="672" width="230" height="58" rx="8" class="box"/>
+  <text class="h" x="226" y="694">trigger (migration 0102)</text>
+  <text class="s" x="226" y="713">insight_voucher_event, same txn</text>
+
+  <rect x="472" y="672" width="250" height="58" rx="8" class="box"/>
+  <text class="h" x="484" y="694">EventsOnce · own txn</text>
+  <text class="s" x="484" y="713">real-time detectors, SKIP LOCKED</text>
+
+  <line class="edge" x1="186" y1="701" x2="212" y2="701" marker-end="url(#arr)"/>
+  <line class="edge" x1="444" y1="701" x2="470" y2="701" marker-end="url(#arr)"/>
+
+  <!-- nightly row -->
+  <text class="h" x="36" y="756" fill="#475569">NIGHTLY · after 02:00 IST, once per company per business day</text>
+  <rect x="36" y="764" width="408" height="64" rx="8" class="box"/>
+  <text class="h" x="48" y="786">NightlyOnce · ONE transaction</text>
+  <text class="s" x="48" y="805">profile.Refresh → nightly detectors → revalidate open</text>
+  <text class="s" x="48" y="821">insights → insight_run row (UNIQUE = idempotent)</text>
+
+  <line class="edge" x1="444" y1="796" x2="470" y2="796" marker-end="url(#arr)"/>
+  <rect x="472" y="764" width="250" height="64" rx="8" class="box"/>
+  <text class="h" x="484" y="786">insights table</text>
+  <text class="s" x="484" y="805">evidence-backed; one per fingerprint</text>
+  <text class="s" x="484" y="821">open → dismissed / superseded / expired</text>
+  <line class="edge" x1="597" y1="730" x2="597" y2="762" marker-end="url(#arr)"/>
+
+  <rect x="750" y="672" width="194" height="74" rx="8" class="box"/>
+  <text class="h" x="762" y="694">rank · ≤ 5 items</text>
+  <text class="s" x="762" y="713">impact × p_real × action-</text>
+  <text class="s" x="762" y="729">ability × novelty × affinity</text>
+  <path class="edge" d="M722,796 H736 V709 H748" marker-end="url(#arr)"/>
+
+  <rect x="972" y="672" width="192" height="74" rx="8" class="model"/>
+  <text class="h" x="984" y="694">narrate digest</text>
+  <text class="s" x="984" y="713">model sees keys + labels</text>
+  <text class="s" x="984" y="729">only; writes {{placeholders}}</text>
+  <line class="edge" x1="944" y1="709" x2="970" y2="709" marker-end="url(#arr)"/>
+
+  <rect x="750" y="764" width="414" height="64" rx="8" class="gate"/>
+  <text class="h" x="762" y="786">number-provenance check (Go)</text>
+  <text class="s" x="762" y="805">reject any digit / number word from the model; render from payload;</text>
+  <text class="s" x="762" y="821">re-check every rendered figure. Any failure → deterministic template.</text>
+  <line class="edge" x1="1068" y1="746" x2="1068" y2="762" marker-end="url(#arr)"/>
+
+  <text class="s" x="48" y="858">Detectors never run inside the voucher transaction, so a slow or broken detector can delay an insight but never block a posting.</text>
+  <text class="s" x="48" y="876">Output: GET /insights/digest. Owner feedback updates p_real (Beta posterior per tenant and type); suppressions mute types.</text>
+  <text class="s" x="48" y="894">Retrieval store (internal/embed: pg_trgm + pgvector halfvec(1024) HNSW, rank fusion) is built and tested, not yet wired in.</text>
+</svg>

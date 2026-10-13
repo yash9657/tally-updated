@@ -7,10 +7,17 @@ import {
   useCompanyID,
   useHomeStateCode,
 } from "../app/CompanyContext";
-import { useRegisterScreenAction } from "../app/ScreenActions";
+import { screenHandled, useRegisterScreenAction } from "../app/ScreenActions";
 import { usePrintAction } from "./usePrint";
 import { useLoadedVoucher } from "../app/LoadedVoucher";
 import { useLoadedDraft } from "../app/LoadedDraft";
+import { useLoadedProposal, type LoadedProposal } from "../app/LoadedProposal";
+import { editedFrom, viewFromApproval } from "./vouchers/agentProposal";
+import {
+  AgentProposalPanel,
+  assertStillAsShown,
+  decisionErrorText,
+} from "./AgentProposalPanel";
 import {
   acceptVoucher,
   deleteLoadedVoucher,
@@ -74,6 +81,7 @@ import {
 } from "./vouchers/taxDeduction";
 import {
   doubleEntryLinesFromView,
+  doubleEntryForexRefusal,
   doubleEntryRefusal,
   emptyDoubleEntryLine,
   keyedLines,
@@ -96,6 +104,17 @@ import {
 import { StockVoucherScreen } from "./vouchers/StockVoucherScreen";
 import { defaultGodownOf, isStockVoucherType } from "./vouchers/stockVoucher";
 import { acceptPurchaseDraft, ApiError } from "../api";
+// ⛔ THE RATE HELPERS, NEVER THE MONEY ONES. `api/rate.ts`'s header states why at
+// length: `parseFixed4` TRUNCATES the fifth decimal onward, so a rate put through
+// the money pair silently becomes a different rate that round-trips perfectly and
+// prices the bill wrong for ever.
+import { normaliseRate } from "../api/rate";
+import { VOUCHER_CLASS_LABELS } from "../api/types";
+import {
+  QueuedOfflineSignal,
+  queuedStatus,
+  useOfflineFallback,
+} from "../offline/useOfflineFallback";
 import type {
   DayBookEntry,
   FieldConfidence,
@@ -167,11 +186,34 @@ function today(): string {
  * GET endpoint returns canonical "D"/"C" dr_cr which we pass through verbatim.
  */
 function postingsFromView(view: VoucherView): PostingRequest[] {
-  return view.postings.map((p) => ({
-    ledger_id: p.ledger_id,
-    dr_cr: p.dr_cr,
-    amount: p.amount,
-  }));
+  return view.postings.map((p) => {
+    const req: PostingRequest = {
+      ledger_id: p.ledger_id,
+      dr_cr: p.dr_cr,
+      amount: p.amount,
+    };
+    // ⛔⛔ T8's THREE VALUES ARE CARRIED BACK, AND THIS IS THE SEVENTH TIME
+    // THIS EXACT LINE HAS HAD TO BE WRITTEN. An alter RE-STATES: the server
+    // rewrites `posting` from the request body, so a rebuild that lists three
+    // fields by hand silently drops everything added after it was written.
+    // Here that turns a $1,000 bill into a ₹83,651.23 bill on a narration
+    // edit — and NOTHING refuses it, because the voucher still balances in
+    // base and the Balance Sheet does not move by a paisa.
+    //
+    // ⚠️ ALL THREE OR NONE, keyed off the currency: the server's all-or-none
+    // CHECK refuses a partial triple, so a `rate` emitted beside an absent
+    // `currency_id` would 422 a request that looks complete on this side.
+    //
+    // ⚠️ AND `rate` IS PASSED THROUGH UNTOUCHED. It is a ten-decimal rate, not
+    // money; re-formatting it with the fixed-4 helpers this file uses for
+    // `amount` would hand back 83.6512 and reprice the bill.
+    if (p.currency_id) {
+      req.currency_id = p.currency_id;
+      req.foreign_amount = p.foreign_amount ?? "";
+      req.rate = p.rate ?? "";
+    }
+    return req;
+  });
 }
 
 /** The form state a voucher frame edits. */
@@ -354,6 +396,37 @@ function emptyForm(): VoucherForm {
     // A fresh voucher was hydrated from nothing, so nothing was ambiguous.
     gstLegsAmbiguous: false,
   };
+}
+
+/**
+ * ⛔⛔ THE FORM FOR THE **NEXT** VOUCHER IN A BULK-ENTRY RUN (D108).
+ *
+ * `navMachine`'s accept reducer has always replaced a saved CREATE frame with a
+ * fresh one — *"Ctrl+A accepts the voucher and re-opens a fresh form for bulk
+ * entry"* — and `corpora/keystroke/voucher-ctrl-a-accepts.json` specifies the
+ * same thing: Ctrl+A *"returns to a fresh voucher entry screen"*. But the form
+ * is React COMPONENT state, and replacing the frame OBJECT never remounted the
+ * component, so every keyed value survived. The frame was fresh; the form was
+ * not — and a second Ctrl+A, with nothing re-keyed, posted the whole voucher
+ * again. Driven in a browser 2026-08-31: one sale keyed, **Sales No. 4 AND
+ * No. 5**, the customer billed twice and the GST output liability doubled.
+ * There is no delete path in this product; the recovery is a hand-keyed credit
+ * note, after somebody notices.
+ *
+ * ⭐ THE DATE SURVIVES, AND THAT IS A DECISION. `emptyForm()` resets it to
+ * today(), which is right for Alt+X (a cancelled voucher has no date) and wrong
+ * here: Tally keeps the date for the next voucher in a run, and a shopkeeper
+ * keying Monday's invoices on Wednesday would otherwise re-type the date on
+ * every one of them. That is why this is a VARIANT and not an edit to
+ * `emptyForm()`, whose other two call sites want today().
+ *
+ * ⚠️ THE ENTRY MODE SURVIVES TOO, and needs nothing here — it lives in
+ * `ctx.entryModeByType` (navMachine) precisely because a fresh frame carries no
+ * config, after a run of double-entry payments was silently reverted to single
+ * entry after EVERY save. Do not re-break it by moving it onto the form.
+ */
+function nextVoucherForm(prev: VoucherForm): VoucherForm {
+  return { ...emptyForm(), date: prev.date };
 }
 
 /**
@@ -1544,6 +1617,23 @@ function AccountingVoucherScreen({
   const isDraftMode =
     type === "purchase" && !isAlter && loadedDraft != null;
 
+  // AGENT PROPOSAL MODE (W2): this create screen is REVIEWING an agent's
+  // proposal. The form is prefilled from the approval's previewed postings, and
+  // Ctrl+A records an APPROVAL — with the operator's edited body when they
+  // changed anything — instead of posting. See app/LoadedProposal.tsx.
+  //
+  // ⛔ LIVE ONLY WHILE THE FRAME NAMES THIS APPROVAL (`detailOf`, set by the
+  // machine's proposalFrame). The slot outlives the frame; the frame does not
+  // outlive an Esc, so a later plain F5 is plain F5 again.
+  const { loaded: loadedProposal, setLoaded: setLoadedProposal } =
+    useLoadedProposal();
+  const isProposalMode =
+    !isAlter &&
+    !isDraftMode &&
+    loadedProposal != null &&
+    loadedProposal.key.voucherType === type &&
+    snapshot.detailOf === loadedProposal.approval.id;
+
   // SINGLE vs DOUBLE entry (Ctrl+H). Undefined config means "the class default",
   // so Payment / Receipt / Contra open in SINGLE entry the way a Tally operator
   // expects, and a class that has no single form (Journal, and the GST vouchers)
@@ -1569,6 +1659,44 @@ function AccountingVoucherScreen({
    * chart is the only way the picker can know a row is bill-by-bill.
    */
   const [chart, setChart] = useState<LedgerListItem[]>([]);
+  /**
+   * ⭐⭐ T8 STEP 8 — THE COMPANY'S FOREIGN CURRENCIES, for the Dr/Cr grid's
+   * currency picker.
+   *
+   * ⛔ AN EMPTY LIST IS THE NORMAL CASE AND MUST STAY CHEAP AND SILENT. Every
+   * company that has never defined a currency — which is every company in the
+   * field today — gets `[]`, and `DoubleEntryPanel` then renders the grid exactly
+   * as it did before step 8. So a failure here is DELIBERATELY NOT surfaced the
+   * way `partiesError` is: an empty currency list and an unreadable one produce
+   * the same form, because in both cases the operator can key a rupee voucher and
+   * nothing they can see is missing. ⚠️ A currency they DID define and cannot
+   * pick is the case worth a message, and it is not distinguishable here without
+   * asking the server a second time — so it is left, named, rather than reported
+   * with a sentence that would also fire for the base-currency majority.
+   */
+  const [currencies, setCurrencies] = useState<{ id: string; code: string }[]>(
+    [],
+  );
+  useEffect(() => {
+    let live = true;
+    client
+      .listCurrencies(companyID)
+      .then((res) => {
+        if (!live) return;
+        setCurrencies(
+          res.currencies
+            .map((c) => ({ id: c.id, code: c.code }))
+            .sort((a, b) => a.code.localeCompare(b.code)),
+        );
+      })
+      .catch(() => {
+        // See the state's own comment: silent by design, not by omission.
+        if (live) setCurrencies([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID]);
   useEffect(() => {
     let live = true;
     client
@@ -1669,6 +1797,11 @@ function AccountingVoucherScreen({
   const loadedEntry = isAlter ? (loaded?.entry ?? null) : null;
   const loadedVoucherID = loadedEntry?.voucher_id ?? null;
   const seedRef = useRef<string | null>(null);
+  /** The loaded voucher's head version, stamped by the hydration below. */
+  const loadedVersion = useRef(0);
+
+  // ⛔ THE QUEUE-OR-REFUSE JUDGEMENT. One hook, shared with StockVoucherScreen.
+  const queueOrRethrow = useOfflineFallback();
   const draftSeedRef = useRef<string | null>(null);
   const [form, setForm] = useState<VoucherForm>(emptyForm);
   /**
@@ -1721,6 +1854,20 @@ function AccountingVoucherScreen({
   } | null>(null);
   // Guard against a double-submit while an accept is in flight.
   const inFlight = useRef(false);
+  /**
+   * ⛔ BUMPED ON EVERY CLEAR OF THE FORM, AND USED AS A `key` ON THE PARTY
+   * PICKER SO THE PICKER IS REMOUNTED (D108).
+   *
+   * `SelectionList` is a type-ahead that owns its `query`, and once the operator
+   * has TYPED into it a `typed` ref stops it re-seeding from the `value` prop —
+   * deliberately, so selecting a party cannot fight the keystroke that caused
+   * it. The consequence here is that clearing `form.party` underneath it leaves
+   * the previous customer's name VISIBLE in the box while the form beneath is
+   * empty, so the operator keys the next invoice believing it is addressed to
+   * somebody it is not. Remounting is the honest reset, and it is also what the
+   * pre-existing clears (Alt+X, a class change) always needed and never had.
+   */
+  const [formGen, setFormGen] = useState(0);
 
   // =========================================================================
   // ⛔⛔ RESET THE FORM WHEN A **CREATE** FRAME CHANGES CLASS.
@@ -1771,13 +1918,14 @@ function AccountingVoucherScreen({
   useEffect(() => {
     if (formClassRef.current === type) return;
     formClassRef.current = type;
-    if (loadedVoucherID || isDraftMode) return; // a hydration owns the form
+    if (loadedVoucherID || isDraftMode || isProposalMode) return; // a hydration owns the form
     setForm(emptyForm());
     setStatus(null);
     setSavedNo(null);
     setSavedVoucherID(null);
     setTaxResult(null);
-  }, [type, loadedVoucherID, isDraftMode]);
+    setFormGen((g) => g + 1);
+  }, [type, loadedVoucherID, isDraftMode, isProposalMode]);
 
   // Hydrate the alter form from the GET endpoint when a new voucher is drilled.
   //
@@ -1796,6 +1944,11 @@ function AccountingVoucherScreen({
       .then((view) => {
         if (cancelled) return;
         seedRef.current = loadedVoucherID;
+        // ⛔ THE HEAD VERSION IS THE ONLY HONEST `base_version` FOR A QUEUED
+        // ALTER — see useOfflineFallback. An ALTER queued at base 0 parks as a
+        // CONFLICT every time, which reports this client's ignorance as if the
+        // server had moved on.
+        loadedVersion.current = view.version_no;
         setForm(formFromView(view));
       })
       .catch((err: unknown) => {
@@ -1827,6 +1980,34 @@ function AccountingVoucherScreen({
       setForm(seeded);
     }
   }, [draftID, loadedDraft]);
+
+  // Seed the form from an AGENT PROPOSAL (W2), once per approval — the same
+  // guard shape as the draft seed above, so a re-render never clobbers an edit.
+  //
+  // ⛔ THROUGH `formFromView`, THE ALTER HYDRATION, not through a new mapping —
+  // see screens/vouchers/agentProposal.ts for why that is the decision. The
+  // number is blanked: this is a create, and the server allocates it when the
+  // agent commits.
+  //
+  // ⚠️ `setFormGen` REMOUNTS THE ACCOUNT PICKER, for the reason formGen exists
+  // (D108): SelectionList re-seeds from `value` only until something is typed,
+  // and the seeded account must be visible, not just present in the form.
+  const proposalSeedRef = useRef<string | null>(null);
+  const proposalSeedFormRef = useRef<VoucherForm | null>(null);
+  const proposalID = isProposalMode ? loadedProposal.approval.id : null;
+  useEffect(() => {
+    if (!proposalID || proposalSeedRef.current === proposalID || !loadedProposal) {
+      return;
+    }
+    proposalSeedRef.current = proposalID;
+    const seeded: VoucherForm = {
+      ...formFromView(viewFromApproval(loadedProposal.approval, type)),
+      voucherNo: "",
+    };
+    proposalSeedFormRef.current = seeded;
+    setForm(seeded);
+    setFormGen((g) => g + 1);
+  }, [proposalID, loadedProposal, type]);
 
   // Keep the latest form/ctx in refs so the registered action handlers (stable
   // across renders) always read current state without re-registering.
@@ -2023,6 +2204,12 @@ function AccountingVoucherScreen({
       return resolveMasters(
         doubleEntryRefusal(f.drCrLines) ||
           doubleEntryRowRefusal(rows) ||
+          // ⛔ T8's ALL-OR-NONE RULE IS PART OF THE SAME GATE EXPRESSION, for the
+          // reason this comment block already gives about D39: the server and a
+          // DB CHECK both refuse a two-of-three triple, and refusing it AFTER
+          // `ensureLedger` has created every account the operator named costs
+          // them the form and leaves masters behind.
+          doubleEntryForexRefusal(f.drCrLines) ||
           // ⛔ THE STATUTORY BLOCK IS PART OF THE SAME GATE (D3). A half-keyed
           // deduction is refused by the server AFTER `ensureLedger` has created
           // every named account — which is D39's shape exactly, and the reason
@@ -2047,11 +2234,31 @@ function AccountingVoucherScreen({
             // right group rather than to infer one from a keystroke.
             groupName: l.side === "DR" ? "Indirect Expenses" : "Indirect Incomes",
           });
-          postings.push({
+          const posting: PostingRequest = {
             ledger_id: id,
             dr_cr: l.side,
             amount: normalizeMoney(l.amount),
-          });
+          };
+          // ⭐⭐ T8's TRIPLE, SENT FROM THE GRID — the other half of defect number
+          // nine. `doubleEntryLinesFromView` now READS it off the view; without
+          // this it would be read and then dropped, which is the same round trip
+          // with one more place to look.
+          //
+          // ⛔ ALL THREE OR NONE, KEYED OFF THE CURRENCY (0080's CHECK), and
+          // `doubleEntryForexRefusal` in the gate above has already refused a
+          // two-of-three row with a sentence naming which value is missing.
+          //
+          // ⚠️ `rate` IS NOT PUT THROUGH `normalizeMoney`. It is a ten-decimal
+          // rate; the fixed-4 helper this line uses for `amount` would hand back
+          // 83.6512 and reprice the bill. ⭐ `normaliseRate` PADS the operator's
+          // "83.65" to the stored "83.6500000000" instead, so re-opening the
+          // voucher does not report a spurious edit on a field nobody touched.
+          if ((l.currencyId ?? "") !== "") {
+            posting.currency_id = l.currencyId;
+            posting.foreign_amount = normalizeMoney(l.foreignAmount ?? "");
+            posting.rate = normaliseRate(l.rate ?? "");
+          }
+          postings.push(posting);
         }
 
         const req: VoucherRequest = {
@@ -2508,6 +2715,9 @@ function AccountingVoucherScreen({
   // current draft without re-registering. null when not in draft mode.
   const draftBodyRef = useRef<VoucherDraftBody | null>(null);
   draftBodyRef.current = isDraftMode ? loadedDraft.draft.body : null;
+  // Likewise the proposal under review, or null outside proposal mode.
+  const proposalRef = useRef<LoadedProposal | null>(null);
+  proposalRef.current = isProposalMode ? loadedProposal : null;
 
   const onAccept = useCallback(() => {
     if (inFlight.current) return;
@@ -2561,6 +2771,18 @@ function AccountingVoucherScreen({
           setStatus("Saved");
           setLoadedDraft(null);
           draftSeedFormRef.current = null;
+          // ⛔⛔ AND THE FORM IS CLEARED — D108's third door, and the one with
+          // the least cover. `setLoadedDraft(null)` above takes this screen OUT
+          // of draft mode while the form still holds everything the OCR
+          // prefilled, so a second Ctrl+A does not reach `acceptPurchaseDraft`
+          // at all: it falls into the ORDINARY voucher path, with no draft id,
+          // past the durable accept memo, past assertNotAlreadyOnTheBooks and
+          // past the posting claim — every one of the four layers draftAccept.ts
+          // builds against exactly this. The 2026-08-07 audit measured the
+          // duplicate here before those layers existed and it was never
+          // registered separately; it is the same defect.
+          setForm(nextVoucherForm(formRef.current));
+          setFormGen((g) => g + 1);
         })
         .catch((err: unknown) => {
           setStatus(
@@ -2598,6 +2820,83 @@ function AccountingVoucherScreen({
                 // are built by StockVoucherScreen. Left on the verbatim path.
                 Promise.resolve(buildPlainRequest(f));
     // =====================================================================
+    // ⛔⛔ AGENT PROPOSAL MODE (W2): Ctrl+A RECORDS AN APPROVAL AND POSTS NOTHING.
+    // =====================================================================
+    // The body is built by THE SAME builder an ordinary Ctrl+A on this form
+    // uses — the refusals, the master gate, the single-entry orientation all
+    // apply — and then, instead of acceptVoucher, it is compared with what the
+    // agent previewed: unchanged ⇒ `approve` (the server commits the recorded
+    // preview, byte for byte); changed ⇒ `approve` with `edited_body` (the
+    // server commits THIS body, through the same validators).
+    //
+    // ⛔ IT MUST NEVER FALL THROUGH TO acceptVoucher. A direct post leaves the
+    // approval PENDING, and the moment anybody approves it in the inbox the same
+    // payment is on the books twice — once by the human here, once by the
+    // agent's commit — with nothing on either voucher saying so. The test
+    // `VoucherScreen.agentProposal.test.tsx` asserts no voucher is created.
+    //
+    // ⛔ AND IT RETURNS `screenHandled`, SO THE MACHINE DOES NOT MOVE. The accept
+    // reducer would replace this frame with a fresh one — dropping `detailOf`,
+    // i.e. leaving proposal mode — before the decision answered; a refused
+    // decision (409 already decided, 403 not your authority) would then leave
+    // the proposal's figures in an ORDINARY form whose next Ctrl+A posts them.
+    // Staying on the frame keeps a failed approval retryable, and a successful
+    // one clears the form itself below.
+    //
+    // ⚠️ NEVER QUEUED OFFLINE. A decision is not a voucher: queueOrRethrow's
+    // outbox replays voucher posts, and a transport failure here is shown as the
+    // error it is.
+    const proposal = proposalRef.current;
+    if (proposal) {
+      const proposed = proposal.approval.args?.body ?? {};
+      // The server must still hold the proposal this screen was prefilled
+      // from — see assertStillAsShown — BEFORE the builder runs, because the
+      // builder may create a ledger the operator typed and a stale proposal is
+      // no reason to leave one behind.
+      assertStillAsShown(client, companyID, proposal.approval)
+        .then(() => buildRequest())
+        .then((req) => {
+          const edited = editedFrom(req, proposed);
+          const body = req as unknown as Record<string, unknown>;
+          // ⛔ AN EDIT IS PREVIEWED BY THE SERVER BEFORE IT IS APPROVED (W2
+          // breadth). The real handler dry-runs YOUR body; a body its validators
+          // refuse comes back 422 EDIT_REFUSED with their sentence, and nothing
+          // is decided — the proposal stays open on this form to fix. (The
+          // decision re-previews it too and records the effect; this read is so
+          // the refusal lands HERE, before a decision exists.)
+          const check = edited
+            ? client.previewAgentEdit(companyID, proposal.approval.id, body)
+            : Promise.resolve(null);
+          return check
+            .then(() =>
+              client.decideAgentApproval(
+                companyID,
+                proposal.approval.id,
+                edited ? { decision: "approve", edited_body: body } : { decision: "approve" },
+              ),
+            )
+            .then(() => edited);
+        })
+        .then((edited) => {
+          setStatus(
+            edited
+              ? "Approved WITH YOUR EDIT — the agent commits your version on its next poll (its validators still apply). Nothing is posted by this screen; see Ctrl+K for the commit."
+              : "Approved as previewed — the agent commits it on its next poll. Nothing is posted by this screen; see Ctrl+K for the commit.",
+          );
+          setLoadedProposal(null);
+          proposalSeedFormRef.current = null;
+          setForm(nextVoucherForm(formRef.current));
+          setFormGen((g) => g + 1);
+        })
+        .catch((err: unknown) => {
+          setStatus(`Error: ${decisionErrorText(err)}`);
+        })
+        .finally(() => {
+          inFlight.current = false;
+        });
+      return screenHandled("Sending the approval…");
+    }
+    // =====================================================================
     // ⛔⛔ THE CHART AS IT STOOD BEFORE THIS ACCEPT — D81's HALF, AND IT MUST BE
     // READ BEFORE THE BUILDER RUNS.
     // =====================================================================
@@ -2629,7 +2928,29 @@ function AccountingVoucherScreen({
       .then((known) =>
         buildRequest().then((req) =>
           acceptVoucher(client, companyID, ctx, req).catch((err: unknown) =>
-            discloseOrphanedMasters(client, companyID, req, known, err),
+            // ⛔⛔ THE QUEUE-OR-REFUSE JUDGEMENT SITS INSIDE THIS CATCH AND NOT
+            // THE OUTER ONE, and the reason is the chain above it. `buildRequest`
+            // creates ledgers on demand; a transport failure THERE means the
+            // ledger ids in this body do not exist on the server, and queueing it
+            // would store an intent that can only ever come back "no such
+            // ledger". Only a failure of the post itself is queueable.
+            //
+            // ⚠️ AND IT RUNS BEFORE `discloseOrphanedMasters`, DELIBERATELY. That
+            // disclosure names masters this accept created and then ABANDONED — but
+            // a QUEUED voucher has not abandoned them: it will commit with those
+            // very ids. Disclosing them as orphans would tell the operator to go
+            // and delete the ledgers their queued invoice depends on.
+            queueOrRethrow(err, {
+              cls: VOUCHER_CLASS_LABELS[voucherClassForType(ctx.type)],
+              req,
+              ...(ctx.mode === "alter" && ctx.voucherID
+                ? { alter: { targetID: ctx.voucherID, baseVersion: loadedVersion.current } }
+                : {}),
+            }).catch((queueErr: unknown) =>
+              queueErr instanceof QueuedOfflineSignal
+                ? Promise.reject(queueErr)
+                : discloseOrphanedMasters(client, companyID, req, known, queueErr),
+            ),
           ),
         ),
       )
@@ -2639,14 +2960,52 @@ function AccountingVoucherScreen({
         // Display the server-derived split (never the JS-computed one).
         setTaxResult({ cgst: res.cgst, sgst: res.sgst, igst: res.igst });
         setStatus("Saved");
+        // ⛔⛔ THE CLEAR (D108), AND IT IS **CREATE ONLY**.
+        //
+        // What is dropped is what the operator KEYED; what is kept is what the
+        // SERVER answered — `savedNo`, `savedVoucherID`, `taxResult`, `status`.
+        // The header then reads `Saved · No: 5` over a blank, ready form, which
+        // is both a true confirmation and the invitation to key the next one.
+        // Clearing the receipt too would leave the operator with LESS
+        // confirmation than the defect gave them, which is worse.
+        //
+        // ⛔ ON AN **ALTER**, NOTHING IS CLEARED. D89 deliberately leaves an
+        // alter frame in place so a second Ctrl+A re-PUTs the same voucher_id
+        // (harmless); blanking the form there would empty a voucher the operator
+        // still has open, on a screen headed "(Alteration)".
+        //
+        // ⛔ AND IT READS THE **CAPTURED** `ctx`, NOT `ctxRef.current`. The
+        // machine may have replaced the frame long before this promise resolved
+        // — that is the whole reason `ctx` is taken synchronously above — so a
+        // mode re-read here would be the mode of whatever frame is on screen
+        // NOW, not the one this request was built for.
+        if (ctx.mode !== "alter") {
+          setForm(nextVoucherForm(formRef.current));
+          setFormGen((g) => g + 1);
+        }
       })
       .catch((err: unknown) => {
+        // ⛔ NOT AN ERROR: the voucher is queued on this machine. Checked BEFORE
+        // the generic line because QueuedOfflineSignal is an Error subclass and
+        // would otherwise render as "Error: …", which tells the operator the work
+        // they were just promised was kept has failed.
+        //
+        // ⛔ AND `savedNo` / `savedVoucherID` / `taxResult` STAY UNSET. A
+        // provisional number is not a voucher number, and a queued intent has no
+        // server-derived tax split — Ctrl+P and Alt+M read exactly those fields,
+        // so setting them would offer to print and e-mail a document that does
+        // not exist.
+        if (err instanceof QueuedOfflineSignal) {
+          setStatus(queuedStatus(err));
+          return;
+        }
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => {
         inFlight.current = false;
       });
   }, [
+    queueOrRethrow,
     buildGstRequest,
     buildItemRequest,
     buildPlainRequest,
@@ -2657,6 +3016,7 @@ function AccountingVoucherScreen({
     client,
     companyID,
     setLoadedDraft,
+    setLoadedProposal,
   ]);
 
   // Alt+D Delete (alter mode only): tombstone the loaded voucher, then clear the
@@ -2683,11 +3043,25 @@ function AccountingVoucherScreen({
     if (ctxRef.current.voucherID) {
       return "A saved voucher cannot be cancelled in this build — Alt+D deletes it (appends a delete version; nothing is erased).";
     }
+    // ⛔ Alt+X ON A PROPOSAL LEAVES PROPOSAL MODE, AND SAYS WHAT IT DID NOT DO.
+    // A cleared form still in proposal mode would make the next Ctrl+A an
+    // "approve with this edit" of whatever is keyed next. Cancelling here is NOT
+    // a rejection — that is Alt+X on the inbox, where the operator can see which
+    // proposal they are refusing.
+    if (proposalRef.current) {
+      setLoadedProposal(null);
+      proposalSeedFormRef.current = null;
+      setForm(emptyForm());
+      setStatus(null);
+      setFormGen((g) => g + 1);
+      return "Proposal set aside — the form is cleared and nothing was decided; it is still pending in the Approval Inbox.";
+    }
     setForm(emptyForm());
     setStatus(null);
     setSavedNo(null);
     setSavedVoucherID(null);
     setTaxResult(null);
+    setFormGen((g) => g + 1);
     return "Voucher cancelled — the form is cleared.";
   }, []);
 
@@ -2728,7 +3102,20 @@ function AccountingVoucherScreen({
   // credit-note/debit-note were added and rendered the raw slug
   // ("credit-note Voucher") in the header.
   const title = cfg.title;
-  const displayNo = savedNo ?? form.voucherNo;
+  /**
+   * ⛔ THE NUMBER OF THE VOUCHER **ON THE FORM**, WHICH IS NOT THE NUMBER OF THE
+   * ONE JUST SAVED (D108).
+   *
+   * This read `savedNo ?? form.voucherNo`, which was harmless only while a
+   * successful create left its own voucher on screen. Now that the form clears,
+   * the same expression would print the previous invoice's number in the "No."
+   * row of the blank invoice the operator is about to key. A create that has not
+   * been saved has no number — "auto" — and an alter carries the loaded one,
+   * hydrated by formFromView. The number the server assigned is the HEADER's
+   * job, beside "Saved", where it is a receipt rather than a claim about the
+   * form.
+   */
+  const displayNo = form.voucherNo;
 
   // Draft-mode edit affordances: whether the draft's shape is rebuildable
   // (single-line, non-RCM, non-exempt), and which OCR-confidence chips to drop
@@ -2843,13 +3230,31 @@ function AccountingVoucherScreen({
           {title} Voucher{isAlter ? " (Alteration)" : ""}
         </h1>
         <div className="flex items-center gap-3">
+          {/*
+            ⛔⛔ THERE IS NO `snapshot.saved` FALLBACK HERE ANY MORE — D107.
+            It rendered the word "Saved" off the MACHINE's flag, whose own
+            declaration says what it is: *"True once this voucher frame has been
+            accepted at least once (Ctrl+A)"*. That is a fact about a KEYPRESS.
+            The reducer that sets it is pure and can never learn whether the
+            write succeeded, or even whether one was attempted — a refusal this
+            screen makes client-side sends nothing at all. Measured 2026-08-31:
+            an EMPTY Purchase voucher went `Purchase Voucher` -> **Saved** ->
+            `Error: Party A/c Name is required`, and a receipt awaiting WebAuthn
+            step-up sat reading **Saved** beside "Confirm the passkey prompt"
+            while its POST answered 403 and nothing was written.
+
+            ⭐ WHAT IT WAS FOR: a frame reset after a REAL save still had to read
+            "Saved" once `status` was cleared. `savedNo` carries that fact
+            honestly — it is set ONLY from a VoucherResponse — and it is rendered
+            immediately below, so the branch is redundant rather than
+            load-bearing. `ScreenFrame.saved` itself STAYS: it is a legitimate
+            machine fact and both keystroke.test.ts and
+            corpora/keystroke/voucher-ctrl-a-accepts.json pin it. What changed is
+            that the SCREEN stopped rendering it as a claim about the books.
+          */}
           {status ? (
             <span className="text-tally-active" role="status">
               {status}
-            </span>
-          ) : snapshot.saved ? (
-            <span className="text-tally-active" role="status">
-              Saved
             </span>
           ) : null}
           {savedNo ? (
@@ -2861,6 +3266,20 @@ function AccountingVoucherScreen({
       </header>
 
       <p className="mb-2 text-xs text-tally-field">{cfg.hint}</p>
+
+      {/* ABOVE THE FORM, not below it: the reasons a human is being asked are
+          what the operator must read before touching a figure, and the
+          ledger-effect diff is what the approval will commit if they touch
+          none. See AgentProposalPanel. */}
+      {isProposalMode ? (
+        <AgentProposalPanel
+          approval={loadedProposal.approval}
+          edited={
+            proposalSeedFormRef.current !== null &&
+            JSON.stringify(proposalSeedFormRef.current) !== JSON.stringify(form)
+          }
+        />
+      ) : null}
 
       <div className="bg-tally-panel p-3">
         {/*
@@ -2898,6 +3317,9 @@ function AccountingVoucherScreen({
           className={fieldActive("party-ledger") ? "" : "opacity-70"}
         >
           <SelectionList
+            // ⛔ THE REMOUNT. See `formGen` — without it a cleared form keeps
+            // showing the last party the operator TYPED.
+            key={`party-${formGen}`}
             label={cfg.partyLabel}
             options={partyNames}
             onSelect={handleSelectParty}
@@ -3021,6 +3443,7 @@ function AccountingVoucherScreen({
             parties={partyNames}
             ledgerByName={ledgerByName}
             kindForGroup={kindForGroup}
+            currencies={currencies}
           />
           {/* ⛔ THE STATUTORY BLOCK (register row D3), and it is HERE and not on
               the single-entry form because withholding splits the payment three

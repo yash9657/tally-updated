@@ -1,9 +1,11 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
+import { useRegisterScreenAction } from "../../app/ScreenActions";
+import { SelectionList } from "../SelectionList";
 import { formatMoney } from "./money";
 import { ApiError } from "../../api";
-import type { StockSummaryResponse } from "../../api";
+import type { StockSummaryResponse, ValuationMethodOption } from "../../api";
 import { usePrintAction } from "../usePrint";
 import { useExportAction } from "../../export/useExportAction";
 import {
@@ -56,8 +58,106 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
   usePrintAction();
 
   const [data, setData] = useState<StockSummaryResponse | null>(null);
-  const [error, setError] = useState<{ status: number; message: string } | null>(
-    null,
+  const [error, setError] = useState<{
+    status: number;
+    message: string;
+  } | null>(null);
+  // ---- Alt+V: THE COSTING METHOD (T9).
+  //
+  // ⛔ WHY THE SWITCH LIVES ON THIS SCREEN AND NOT ON A MASTER FORM. The method
+  // can be chosen when an item is created (Alt+C > Stock Item), but every item
+  // created before T9 — which is every item in every existing company — could
+  // otherwise never be switched from a keyboard at all, and "the route exists
+  // and nothing calls it" is the shape this repo has shipped three times. This
+  // is also the honest place for it: the operator is looking at the very figure
+  // that is about to change, and the report redraws under the panel when it does.
+  //
+  // ⚠️ `reload` is what makes that redraw real. Without it the panel would report
+  // a success over a table still showing the OLD basis, which is the same class
+  // of lie as answering a write with the request body.
+  const [switching, setSwitching] = useState(false);
+  const [reload, setReload] = useState(0);
+  const [methods, setMethods] = useState<ValuationMethodOption[] | null>(null);
+  const [pickedItem, setPickedItem] = useState<string>("");
+  const [switchStatus, setSwitchStatus] = useState<string>("");
+
+  useRegisterScreenAction(
+    "setValuationMethod",
+    useCallback((): string => {
+      if (error) {
+        return error.status === 403
+          ? "Your security level may not open the Stock Summary, so there is no item here to re-value."
+          : `Stock Summary unavailable${error.status ? ` (${error.status})` : ""}, so there is nothing to re-value. ${error.message}`;
+      }
+      if (data === null) return "Stock Summary is still loading.";
+      if (data.items.length === 0) {
+        return "No stock has moved in this company yet, so there is no item to re-value. A costing method only changes figures that exist.";
+      }
+      setSwitchStatus("");
+      setPickedItem(
+        data.items.length === 1 ? data.items[0]!.stock_item_id : "",
+      );
+      setSwitching(true);
+      return "Choose the item whose costing method you want to change.";
+    }, [data, error]),
+  );
+
+  // The vocabulary is SERVED, so it is fetched — never hardcoded here. A picker
+  // built from a client-side list can offer a method the server refuses, and the
+  // operator would meet that refusal after choosing it.
+  useEffect(() => {
+    if (!switching || methods !== null) return;
+    let live = true;
+    client
+      .inventoryVocabulary(companyID)
+      .then((v) => {
+        if (live) setMethods(v.valuation_methods);
+      })
+      .catch((e: unknown) => {
+        if (live) {
+          setSwitchStatus(
+            `The costing methods could not be read from the server, so nothing is offered rather than a guessed list. ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID, switching, methods]);
+
+  const applyMethod = useCallback(
+    (method: string) => {
+      const item = data?.items.find((i) => i.stock_item_id === pickedItem);
+      if (!item) {
+        setSwitchStatus("Choose an item first.");
+        return;
+      }
+      setSwitchStatus(`Re-valuing ${item.item} on the ${method} basis…`);
+      client
+        .setStockItemValuationMethod(companyID, item.stock_item_id, {
+          valuation_method: method,
+        })
+        .then((res) => {
+          // The STORED method, from the answer — not the one that was asked for.
+          setSwitchStatus(
+            `${res.name} is now valued at ${res.valuation_method}. ${res.restates}`,
+          );
+          setSwitching(false);
+          setReload((n) => n + 1);
+        })
+        .catch((e: unknown) => {
+          const status = e instanceof ApiError ? e.status : 0;
+          const message = e instanceof Error ? e.message : String(e);
+          setSwitchStatus(
+            status === 409
+              ? `${item.item} is already valued at ${method}, so nothing was changed.`
+              : status === 403
+                ? `Refused: ${message} Changing a costing method re-values periods that may be CLOSED, so it is a write like any other — the back-dated cutoff and your security level both apply.`
+                : `Not changed (${status || "no status"}): ${message}`,
+          );
+        });
+    },
+    [client, companyID, data, pickedItem],
   );
 
   // Alt+E. Registered for exactly the reason Ctrl+P above is: this screen does
@@ -76,7 +176,8 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
           ? "Your security level may not open the Stock Summary, so there is nothing to export."
           : `Stock Summary unavailable${error.status ? ` (${error.status})` : ""}, so there is nothing to export. ${error.message}`;
       }
-      if (data === null) return "Stock Summary is still loading — nothing to export yet.";
+      if (data === null)
+        return "Stock Summary is still loading — nothing to export yet.";
       if (stockSummaryIsEmpty(data)) {
         return "No stock movements in this company yet, so the Stock Summary has nothing to export.";
       }
@@ -104,13 +205,16 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
         setError(
           e instanceof ApiError
             ? { status: e.status, message: e.message }
-            : { status: 0, message: e instanceof Error ? e.message : String(e) },
+            : {
+                status: 0,
+                message: e instanceof Error ? e.message : String(e),
+              },
         );
       });
     return () => {
       live = false;
     };
-  }, [client, companyID, asOn]);
+  }, [client, companyID, asOn, reload]);
 
   return (
     <section className="flex h-full flex-col overflow-auto bg-tally-bg p-4 font-mono text-tally-field">
@@ -119,6 +223,46 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
         {stockSummaryScopeLine(asOn, data?.as_on)} · valued by replaying the
         movement ledger — no stock value is stored.
       </p>
+
+      {/* ⛔ THE SCREEN ADVERTISES Alt+V ITSELF. The button bar and the hint strip
+          are per SCREEN KIND ("report"), so neither can name a key that is
+          meaningful on this report and inert on the other twelve — and a key
+          nothing mentions is a feature nobody finds. This line is the surface
+          that can be specific. */}
+      <p className="mt-1 text-xs" data-testid="stock-summary-basis-hint">
+        Alt+V changes an item&rsquo;s costing method (Avg. Cost / FIFO / LIFO).
+        The Basis column says which one every figure on that line was derived on
+        — and changing it re-values the item&rsquo;s WHOLE history, including
+        periods already reported.
+      </p>
+
+      {switching ? (
+        <ValuationSwitchPanel
+          items={
+            data?.items.map((i) => ({
+              id: i.stock_item_id,
+              name: i.item,
+              method: i.valuation_method,
+            })) ?? []
+          }
+          methods={methods}
+          picked={pickedItem}
+          onPickItem={setPickedItem}
+          onPickMethod={applyMethod}
+          onCancel={() => {
+            setSwitching(false);
+          }}
+          status={switchStatus}
+        />
+      ) : switchStatus ? (
+        <p
+          className="mt-2 text-xs text-tally-active"
+          role="status"
+          data-testid="stock-valuation-status"
+        >
+          {switchStatus}
+        </p>
+      ) : null}
 
       <div className="mt-3 bg-tally-panel p-3">
         {error ? (
@@ -132,7 +276,10 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
             this report fills in.
           </p>
         ) : (
-          <StockRows data={data} />
+          <>
+            <StockGroupSubtotals data={data} />
+            <StockRows data={data} />
+          </>
         )}
       </div>
     </section>
@@ -337,7 +484,56 @@ function StockSummaryError({
  */
 const STOCK_SUMMARY_HEADERS = [
   "Item / Location",
+  // ⛔⛔ D109 — THE LEVEL, AND IT IS NOT DECORATION. This report is TWO LEVELS
+  // deep: an item total, then that item's godown/batch positions, which hold
+  // the same money a second time. On screen they are told apart by CSS and by
+  // nothing else (the item `td` is `font-bold text-tally-title`, the position
+  // `td` is `pl-4`), and CSS does not survive Alt+E — so the exported file
+  // offered a money column in which every amount appeared TWICE with nothing in
+  // the file saying so. Measured 2026-08-31: four data rows summing to
+  // 177,037.0908 against the file's own Stock-in-Hand row of 88,518.5454,
+  // a ratio of exactly 2.000000.
+  //
+  // ⭐ THE DUPLICATION IS THE REPORT AND IS NOT THE DEFECT. Both levels are
+  // facts and the screen shows both on purpose; what was missing is the
+  // DECLARATION. With this column a spreadsheet sums `Level = "Item"` (or
+  // `= "Location"`) and gets the stated total to the paisa, which is the one
+  // thing this file exists to let somebody do.
+  //
+  // ⚠️ A COLUMN AND NOT AN INDENT OR A PREFIX ON THE LABEL. An indent survives
+  // to the eye and not to SUM(), and `Basis` — the weak discriminator that
+  // happens to be filled on an item row and empty on a position row — is
+  // declared nowhere, is not in the money column, and no SUM respects it.
+  // See docs/design/d109-two-level-export.md for the three options and why
+  // this one.
+  "Level",
+  // ⛔ D118 — WHOSE TOTAL THIS ROW'S MONEY IS PART OF: the item, on a location
+  // row, and empty on an item total. `Level` alone answers "which rows may I
+  // sum"; this answers "which rows make up THIS one", so a reader can check a
+  // single item's locations against its own line rather than only the file
+  // against its footer.
+  //
+  // ⚠️ IT IS HERE FOR CONSISTENCY AS MUCH AS FOR ITS OWN SAKE. Outstandings —
+  // the other report D109 closed — gained the same pair from the shared export
+  // layer, and two reports of identical shape carrying different columns is the
+  // drift that made D109 possible in the first place. This sheet has its own
+  // builder (Alt+E on this screen does not go through `useReportView`), so the
+  // column is written here rather than inherited.
+  "Parent",
   "Unit",
+  // ⛔ THE BASIS IS A COLUMN, NOT A CAPTION (T9). Costing method is a property
+  // of the ITEM, so one company's Stock Summary can mix WEIGHTED_AVG, FIFO and
+  // LIFO — and two item totals on the same page then mean different things.
+  // Every figure here is a REPLAY through one of those valuers and none of them
+  // is stored, so a value printed without its basis cannot be reproduced or
+  // compared with the line above it.
+  //
+  // ⚠️ IT IS THE THIRD COLUMN AND NOT THE LAST, deliberately: `Closing Value`
+  // must stay last, because both this table's footer and the export's footer put
+  // the one total the server states in the FINAL cell (colSpan / slice(1, -1)).
+  // Appending a column after it would silently file the company's closing stock
+  // under "Basis".
+  "Basis",
   "Opening Qty",
   "Opening Value",
   "Inward Qty",
@@ -345,9 +541,37 @@ const STOCK_SUMMARY_HEADERS = [
   "Outward Qty",
   "Outward Value (at cost)",
   "Closing Qty",
+  // T10 — the closing quantity RESTATED in the unit's base unit ("48.0000" for
+  // four boxes of twelve). ⛔ ITS OWN COLUMN AND NOT PARENTHESES INSIDE
+  // "Closing Qty": the screen can afford "4.0000 (= 48.0000 Nos)" in one cell
+  // and a spreadsheet cannot — a numeric column with prose in it is a column
+  // nobody can sum, and this file's whole purpose is to be summed. It is BEFORE
+  // Closing Value because that one must stay LAST (both footers put the one
+  // total the server states in the final cell).
+  "Closing Qty (base unit)",
   "Rate",
   "Closing Value",
 ] as const;
+
+/**
+ * THE SCREEN'S columns: the export's, MINUS the Level column.
+ *
+ * ⛔ THE ASYMMETRY IS THE POINT AND IT IS DELIBERATE (D109, D118). The `Level`
+ * and `Parent` columns exist because CSS does not survive Alt+E; on screen the
+ * CSS is still there and still says it — the item row is
+ * `font-bold text-tally-title`, the position row is indented, and it sits
+ * directly under the item it belongs to — so headings repeating what the eye
+ * already reads are noise on the one surface that never had the defect.
+ *
+ * ⚠️ IT IS DERIVED FROM THE EXPORT LIST RATHER THAN COPIED, so a column added
+ * to the report appears in both places from ONE edit. Only the two export-only
+ * columns are subtracted, and if either name is ever changed the filter below
+ * stops matching and the screen grows a column — loudly, in a rendered table,
+ * rather than quietly under a wrong heading.
+ */
+const STOCK_SUMMARY_SCREEN_HEADERS = STOCK_SUMMARY_HEADERS.filter(
+  (h) => h !== "Level" && h !== "Parent",
+);
 
 /** The item tree: one block per stock item, with its per-location positions. */
 function StockRows({ data }: { data: StockSummaryResponse }) {
@@ -355,8 +579,8 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
     <table className="w-full text-sm" data-testid="stock-summary-table">
       <thead>
         <tr className="text-left text-xs text-tally-title">
-          {STOCK_SUMMARY_HEADERS.map((h, i) => (
-            <th key={h} className={i < 2 ? "pr-3" : "pr-3 text-right"}>
+          {STOCK_SUMMARY_SCREEN_HEADERS.map((h, i) => (
+            <th key={h} className={i < 3 ? "pr-3" : "pr-3 text-right"}>
               {h}
             </th>
           ))}
@@ -368,18 +592,44 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
             <tr data-testid={`stock-item:${it.item}`}>
               <td className="pr-3 font-bold text-tally-title">{it.item}</td>
               <td className="pr-3">{it.unit}</td>
+              <td className="pr-3" data-testid={`stock-basis:${it.item}`}>
+                {it.valuation_method}
+              </td>
               <td className="pr-3 text-right">{it.opening_qty}</td>
-              <td className="pr-3 text-right">{formatMoney(it.opening_value)}</td>
+              <td className="pr-3 text-right">
+                {formatMoney(it.opening_value)}
+              </td>
               <td className="pr-3 text-right">{it.inward_qty}</td>
-              <td className="pr-3 text-right">{formatMoney(it.inward_value)}</td>
+              <td className="pr-3 text-right">
+                {formatMoney(it.inward_value)}
+              </td>
               <td className="pr-3 text-right">{it.outward_qty}</td>
-              <td className="pr-3 text-right">{formatMoney(it.outward_value)}</td>
+              <td className="pr-3 text-right">
+                {formatMoney(it.outward_value)}
+              </td>
               <td className="pr-3 text-right">{it.closing_qty}</td>
+              {/* ⛔ THE RESTATEMENT IS ITS OWN COLUMN, BESIDE THE STORED FIGURE
+                  AND NEVER INSTEAD OF IT (T10). The quantity that was keyed is
+                  the one in the item's own unit; the base-unit figure is DERIVED
+                  by the server. A screen that showed only "48 Nos" for four
+                  boxes would disagree with the invoice about what was entered.
+                  A simple unit renders an em dash: there is no base to restate
+                  into, and a zero would be a claim about the goods. */}
+              <td
+                className="pr-3 text-right"
+                data-testid={`stock-base-qty:${it.item}`}
+              >
+                {it.base_unit && it.base_qty
+                  ? `${it.base_qty} ${it.base_unit}`
+                  : "—"}
+              </td>
               {/* No rate on an item total: two godowns of the same item carry
                   two different average costs, and the average of the averages
                   is not the average. */}
               <td className="pr-3 text-right">—</td>
-              <td className="pr-3 text-right">{formatMoney(it.closing_value)}</td>
+              <td className="pr-3 text-right">
+                {formatMoney(it.closing_value)}
+              </td>
             </tr>
             {it.positions.map((row) => (
               <tr
@@ -392,15 +642,33 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
                   {row.batch ? ` · ${row.batch}` : ""}
                 </td>
                 <td className="pr-3">{row.unit}</td>
+                {/* The basis belongs to the ITEM and is stated on its line; a
+                    position cannot carry a different one, so repeating it on
+                    every location would be noise that implies it could. */}
+                <td className="pr-3" />
                 <td className="pr-3 text-right">{row.opening_qty}</td>
-                <td className="pr-3 text-right">{formatMoney(row.opening_value)}</td>
+                <td className="pr-3 text-right">
+                  {formatMoney(row.opening_value)}
+                </td>
                 <td className="pr-3 text-right">{row.inward_qty}</td>
-                <td className="pr-3 text-right">{formatMoney(row.inward_value)}</td>
+                <td className="pr-3 text-right">
+                  {formatMoney(row.inward_value)}
+                </td>
                 <td className="pr-3 text-right">{row.outward_qty}</td>
-                <td className="pr-3 text-right">{formatMoney(row.outward_value)}</td>
+                <td className="pr-3 text-right">
+                  {formatMoney(row.outward_value)}
+                </td>
                 <td className="pr-3 text-right">{row.closing_qty}</td>
-                <td className="pr-3 text-right">{formatMoney(row.closing_rate)}</td>
-                <td className="pr-3 text-right">{formatMoney(row.closing_value)}</td>
+                {/* Empty: the restatement belongs to the ITEM (one unit, one
+                    conversion), and repeating it per location would imply a
+                    location could have a conversion of its own. */}
+                <td className="pr-3" />
+                <td className="pr-3 text-right">
+                  {formatMoney(row.closing_rate)}
+                </td>
+                <td className="pr-3 text-right">
+                  {formatMoney(row.closing_value)}
+                </td>
               </tr>
             ))}
           </Fragment>
@@ -411,7 +679,7 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
               are left blank rather than summed here — the response carries no
               such totals, and a client-side fold would be this screen asserting
               a figure the server never derived. */}
-          <td className="pr-3" colSpan={STOCK_SUMMARY_HEADERS.length - 1}>
+          <td className="pr-3" colSpan={STOCK_SUMMARY_SCREEN_HEADERS.length - 1}>
             Stock-in-Hand
           </td>
           <td className="pr-3 text-right" data-testid="stock-total-value">
@@ -448,22 +716,36 @@ export function stockSummarySheet(
         // average. The screen shows an em dash; the file leaves it EMPTY rather
         // than exporting a punctuation mark into a numeric column.
         rate: null,
+        level: "Item",
+        // An item total is nobody's child. "" and not the stock group: this
+        // report does not show groups, and naming one would promise a row that
+        // is not in the file.
+        parent: "",
       }),
     );
     for (const pos of it.positions) {
       rows.push(
         stockSummaryRow(
           `${pos.godown || "(no location)"}${pos.batch ? ` \u00b7 ${pos.batch}` : ""}`,
-          pos,
-          { rate: pos.closing_rate },
+          { ...pos, valuation_method: "", base_unit: "", base_qty: "" },
+          // ⛔ "Location" AND NOT "Godown"/"Batch": the label cell already
+          // carries both (a batch is appended to its godown), and a level whose
+          // vocabulary depends on the row's contents is not something a
+          // spreadsheet filter can be written against once.
+          { rate: pos.closing_rate, level: "Location", parent: it.item },
         ),
       );
     }
   }
   // The footer states the ONE total the server states (see the table's footer).
+  // ⚠️ IT DECLARES ITS LEVEL TOO ("Total"), because a spreadsheet filtering on
+  // the Level column must be able to EXCLUDE it: a total row swept into a sum
+  // of item rows is the same doubling one row smaller.
   rows.push([
     textCell("Stock-in-Hand"),
-    ...STOCK_SUMMARY_HEADERS.slice(1, -1).map(() => textCell("")),
+    textCell("Total"),
+    textCell(""),
+    ...STOCK_SUMMARY_HEADERS.slice(3, -1).map(() => textCell("")),
     moneyCell(data.total_value),
   ]);
   return {
@@ -493,6 +775,9 @@ function stockSummaryRow(
   label: string,
   f: {
     unit: string;
+    valuation_method?: string;
+    base_unit?: string;
+    base_qty?: string;
     opening_qty: string;
     opening_value: string;
     inward_qty: string;
@@ -502,11 +787,21 @@ function stockSummaryRow(
     closing_qty: string;
     closing_value: string;
   },
-  opts: { rate: string | null },
+  opts: { rate: string | null; level: "Item" | "Location"; parent: string },
 ): ExportRow {
   return [
     textCell(label),
+    // D109 — WHICH OF THE TWO LEVELS THIS ROW IS. It is the second cell so that
+    // it sits beside the label it qualifies, and it is passed in rather than
+    // inferred from `f`: the position row is built by SPREADING the item row's
+    // shape, so any inference here ("no valuation_method means a position")
+    // would be re-deriving the caller's own fact from a field that exists for
+    // another reason.
+    textCell(opts.level),
+    textCell(opts.parent),
     textCell(f.unit),
+    // The basis, on item lines only — the same rule the table follows.
+    textCell(f.valuation_method ?? ""),
     exactCell(f.opening_qty),
     moneyCell(f.opening_value),
     exactCell(f.inward_qty),
@@ -514,7 +809,185 @@ function stockSummaryRow(
     exactCell(f.outward_qty),
     moneyCell(f.outward_value),
     exactCell(f.closing_qty),
+    // Empty for a simple unit AND for every position line (the restatement is a
+    // property of the ITEM, stated on its own line), rather than "0.0000":
+    // a zero in a quantity column is a claim about the goods.
+    f.base_qty && f.base_unit ? exactCell(f.base_qty) : textCell(""),
     opts.rate === null ? textCell("") : moneyCell(opts.rate),
     moneyCell(f.closing_value),
   ];
+}
+
+/**
+ * Alt+V — CHANGE AN ITEM'S COSTING METHOD.
+ *
+ * Two picks and no Ctrl+A: the item, then the method, and choosing the method
+ * IS the commit. That is deliberate — there is no draft here to accept, and an
+ * intermediate "accept" step would leave the operator holding a form whose only
+ * content is a choice they have already made.
+ *
+ * ⛔ IT STATES THE CONSEQUENCE BEFORE THE CHOICE, NOT AFTER IT. Nothing about
+ * this switch is stored, so the item's WHOLE history is re-valued — a period
+ * that has been printed, read and filed will come back a different number. An
+ * operator who learns that from the confirmation has already done it.
+ */
+function ValuationSwitchPanel({
+  items,
+  methods,
+  picked,
+  onPickItem,
+  onPickMethod,
+  onCancel,
+  status,
+}: {
+  items: readonly { id: string; name: string; method: string }[];
+  methods: readonly ValuationMethodOption[] | null;
+  picked: string;
+  onPickItem: (id: string) => void;
+  onPickMethod: (method: string) => void;
+  onCancel: () => void;
+  status: string;
+}) {
+  const item = items.find((i) => i.id === picked);
+  return (
+    <div
+      className="mt-3 border border-tally-field/50 bg-tally-panel p-3 text-sm"
+      data-testid="stock-valuation-panel"
+    >
+      <p className="text-tally-title">Costing method</p>
+      <p className="mt-1 text-xs">
+        Stock value is never stored — it is derived by replaying the movement
+        ledger through a valuer. So changing the method changes no data and
+        every figure: this item&rsquo;s closing stock, its cost of goods sold,
+        and the Balance Sheet and Profit &amp; Loss of every period it has
+        traded in. Switching back reproduces the earlier figures exactly.
+      </p>
+
+      {item ? (
+        <p className="mt-2 text-xs" data-testid="stock-valuation-item">
+          {item.name} — currently {item.method}
+        </p>
+      ) : (
+        <div className="mt-2">
+          <SelectionList
+            label="Item"
+            options={items.map((i) => i.name)}
+            autoFocus
+            onSelect={(name) => {
+              const hit = items.find((i) => i.name === name);
+              if (hit) onPickItem(hit.id);
+            }}
+          />
+        </div>
+      )}
+
+      {item ? (
+        methods === null ? (
+          <p className="mt-2 text-xs" data-testid="stock-valuation-loading">
+            Reading the costing methods this server offers…
+          </p>
+        ) : (
+          <div className="mt-2">
+            <SelectionList
+              label="New method"
+              options={methods.map((m) => m.method)}
+              autoFocus
+              value={item.method}
+              onSelect={onPickMethod}
+            />
+            <ul className="mt-2 space-y-1 text-xs">
+              {methods.map((m) => (
+                <li
+                  key={m.method}
+                  data-testid={`stock-valuation-option:${m.method}`}
+                >
+                  <span className="text-tally-title">{m.method}</span> (
+                  {m.label}) — {m.basis}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )
+      ) : null}
+
+      {status ? (
+        <p
+          className="mt-2 text-xs text-tally-active"
+          role="status"
+          data-testid="stock-valuation-status"
+        >
+          {status}
+        </p>
+      ) : null}
+      <p className="mt-2 text-xs">
+        <button
+          type="button"
+          className="underline"
+          onClick={onCancel}
+          data-testid="stock-valuation-cancel"
+        >
+          Esc to cancel
+        </button>
+      </p>
+    </div>
+  );
+}
+
+/**
+ * THE STOCK GROUP SUBTOTALS (T10) — one line per group, in tree order, above the
+ * item table.
+ *
+ * ⛔⛔ IT PRINTS "NO TOTAL" AND SAYS WHY. The group figures DO NOT SUM to the
+ * company's closing stock: an item counts in every ancestor of its group, which
+ * is exactly what makes a branch total worth reading ("Provisions" includes
+ * "Provisions > Grains") and exactly what makes adding the column up wrong. A
+ * table of numbers with no total invites the reader to add them, so the reason is
+ * stated where they would otherwise do it.
+ *
+ * ⚠️ A COMPANY WITH NO GROUPS RENDERS NOTHING AT ALL — not an empty box, not a
+ * heading. Every item that predates T10 is ungrouped, so the one-bucket case
+ * (just "(ungrouped)") is a table that says nothing the item list does not, and
+ * a heading over it would imply a feature is missing rather than unused.
+ */
+function StockGroupSubtotals({ data }: { data: StockSummaryResponse }) {
+  const grouped = data.groups.filter((g) => g.group !== "");
+  if (grouped.length === 0) return null;
+  return (
+    <table className="mb-4 w-full text-sm" data-testid="stock-group-subtotals">
+      <thead>
+        <tr className="text-left text-xs text-tally-title">
+          <th className="pr-3">Stock group</th>
+          <th className="pr-3 text-right">Items</th>
+          <th className="pr-3 text-right">Closing Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.groups.map((g) => (
+          <tr
+            key={g.group || "(ungrouped)"}
+            data-testid={`stock-group:${g.group}`}
+          >
+            <td className="pr-3">
+              {/* The indent IS the hierarchy, and `depth` comes from the server
+                  (an ltree path) rather than from anything this screen derives. */}
+              <span style={{ paddingLeft: `${String(g.depth)}rem` }}>
+                {g.group === "" ? "(ungrouped)" : g.group}
+              </span>
+            </td>
+            <td className="pr-3 text-right">{g.item_count}</td>
+            <td className="pr-3 text-right">{formatMoney(g.closing_value)}</td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={3} className="pt-1 text-xs">
+            No total: an item counts in EVERY group above it, so these lines
+            overlap and adding them up double-counts every nested branch. The
+            company&rsquo;s closing stock is the Stock-in-Hand line below.
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  );
 }

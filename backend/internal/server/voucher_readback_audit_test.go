@@ -1393,3 +1393,177 @@ func TestReadBackAudit_AnAlterOmittingTDSIsACCEPTEDAndDeletesIt(t *testing.T) {
 			"silent, and D88 would be a different (easier) defect: %v", after["postings"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// T8 — THE SEVENTH TABLE-SHAPED FIELD IN THIS CLASS, AND THE FIRST WHERE THE
+// LOSS IS A VALUE RATHER THAN A ROW.
+// ---------------------------------------------------------------------------
+
+// TestReadBackAudit_ForeignCurrencySurvivesAnAlter asks this file's question of
+// T8's three values: does a body REBUILT FROM THE GET send them back?
+//
+// ⛔⛔ WHY THIS ONE IS WORSE THAN THE SIX ABOVE IT. Every earlier entry in this
+// class loses ROWS — a split, a link, a GST line — and a row that vanishes at
+// least leaves a report that stops adding up. This one loses three VALUES off a
+// row that survives: the posting is still there, the base amount is still
+// right, the voucher still balances, the Balance Sheet does not move by a
+// paisa, and `verify:demo` stays green. A $1,000 bill has simply become a
+// ₹83,651.23 bill — it leaves the unadjusted-forex report, and when it is
+// settled at a different rate it realises no gain, because as far as the books
+// are concerned it was never foreign.
+//
+// ⚠️ AND THE RATE IS THE VALUE MOST AT RISK, NOT THE CURRENCY. A GET that hands
+// back `"rate": "83.6512"` — four decimals, because money is fixed-4 in every
+// other field of this same body — produces an alter that RE-PRICES the bill,
+// and every assertion about the currency still passes. So this test pins the
+// tenth decimal specifically.
+//
+// NO SQL, like everything else in this file: the currency is created over HTTP,
+// the voucher is posted over HTTP, and the oracle is the GET body itself.
+func TestReadBackAudit_ForeignCurrencySurvivesAnAlter(t *testing.T) {
+	srv := newServer(t)
+	f := newReadbackFixture(t, srv)
+
+	crec, cbody := doRaw(t, srv, http.MethodPost, f.base+"/currencies", f.ownerTok,
+		map[string]any{
+			"code": "USD", "symbol": "$", "formal_name": "US Dollars",
+			"created_by": f.subject,
+		})
+	if crec.Code != http.StatusCreated {
+		t.Fatalf("create currency = %d (%s)", crec.Code, crec.Body.String())
+	}
+	usd, _ := cbody["currency_id"].(string)
+	if usd == "" {
+		t.Fatalf("currency came back with no id: %s", crec.Body.String())
+	}
+
+	// A $1,000 import at 83.6512345678. ⚠️ The base figure is NOT foreign × rate
+	// rounded — it is what the operator keyed, because Q2 makes base
+	// authoritative and stored. Only the creditor leg is foreign: what the
+	// company owes is dollars, what the purchase cost is rupees.
+	post := map[string]any{
+		"voucher_no": "IMP-1", "voucher_date": "2025-06-10",
+		"party_ledger_id": f.creditor, "party": "Readback Supplier",
+		"created_by": f.subject,
+		"postings": []any{
+			map[string]any{"ledger_id": f.purchase, "dr_cr": "D", "amount": "83651.23"},
+			map[string]any{
+				"ledger_id": f.creditor, "dr_cr": "C", "amount": "83651.23",
+				"currency_id": usd, "foreign_amount": "1000.00", "rate": "83.6512345678",
+			},
+		},
+		"bill_allocations": []any{
+			map[string]any{
+				"ledger_id": f.creditor, "ref_name": "IMP-1", "ref_type": "NEW",
+				"dr_cr": "C", "amount": "83651.23", "due_date": "2025-07-10",
+				"currency_id": usd, "foreign_amount": "1000.00", "rate": "83.6512345678",
+			},
+		},
+	}
+	prec, pbody := doRaw(t, srv, http.MethodPost, f.base+"/vouchers/purchase", f.ownerTok, post)
+	if prec.Code != http.StatusCreated {
+		t.Fatalf("post foreign purchase = %d (%s)", prec.Code, prec.Body.String())
+	}
+	voucherID, _ := pbody["voucher_id"].(string)
+
+	// ---- what the GET hands a form ----------------------------------------
+	forexOf := func(t *testing.T, view map[string]any, key string, stage string) map[string]any {
+		t.Helper()
+		rows, _ := view[key].([]any)
+		for _, r := range rows {
+			m, _ := r.(map[string]any)
+			if m == nil {
+				continue
+			}
+			if cid, _ := m["currency_id"].(string); cid != "" {
+				return m
+			}
+		}
+		t.Fatalf("%s: no row in %q carries a currency_id at all, so a form rebuilt "+
+			"from this body cannot send one back. body=%v", stage, key, view[key])
+		return nil
+	}
+	assertTriple := func(t *testing.T, row map[string]any, stage string) {
+		t.Helper()
+		if got, _ := row["currency_id"].(string); got != usd {
+			t.Errorf("%s: THE CURRENCY is %q, want %q", stage, got, usd)
+		}
+		if got, _ := row["foreign_amount"].(string); got != "1000.0000" {
+			t.Errorf("%s: THE FOREIGN AMOUNT is %q, want \"1000.0000\"", stage, got)
+		}
+		if got, _ := row["rate"].(string); got != "83.6512345678" {
+			t.Errorf("%s: THE RATE is %q, want \"83.6512345678\" — 83.6512 is what a "+
+				"rate becomes when this body formats it as money, and a form that "+
+				"echoes it back RE-PRICES the bill", stage, got)
+		}
+		if got, _ := row["amount"].(string); got != "83651.2300" {
+			t.Errorf("%s: THE BASE AMOUNT is %q, want \"83651.2300\" — base is "+
+				"authoritative and is never re-derived from foreign × rate", stage, got)
+		}
+	}
+
+	grec, view := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.ownerTok, nil)
+	if grec.Code != http.StatusOK {
+		t.Fatalf("get voucher = %d (%s)", grec.Code, grec.Body.String())
+	}
+	assertTriple(t, forexOf(t, view, "postings", "the GET"), "the GET's posting")
+	assertTriple(t, forexOf(t, view, "bill_allocations", "the GET"), "the GET's bill allocation")
+
+	// ---- the ordinary round trip: change the narration, save --------------
+	body := rebuild(view, "voucher_no", "voucher_date", "party_ledger_id", "party",
+		"postings", "bill_allocations")
+	body["narration"] = "corrected the narration and nothing else"
+	if code, resp := f.put(t, srv, "purchase", voucherID, body); code != http.StatusOK {
+		t.Fatalf("alter rebuilt from the GET = %d (%s)", code, resp)
+	}
+
+	arec, after := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.ownerTok, nil)
+	if arec.Code != http.StatusOK {
+		t.Fatalf("get after alter = %d (%s)", arec.Code, arec.Body.String())
+	}
+	assertTriple(t, forexOf(t, after, "postings", "after the alter"),
+		"the posting AFTER an alter rebuilt from the GET")
+	assertTriple(t, forexOf(t, after, "bill_allocations", "after the alter"),
+		"the bill allocation AFTER an alter rebuilt from the GET")
+
+	// ---- THE INVERSE CONTROL (§9.3) ---------------------------------------
+	//
+	// Without it, "it survived" is equally consistent with the values being
+	// immune to an alter. This shows they are destructible: the same PUT, with
+	// the three keys stripped from each posting, is ACCEPTED — no 422, no
+	// warning — and the foreign bill quietly becomes a rupee bill.
+	strip := func(key string) []any {
+		rows, _ := view[key].([]any)
+		out := make([]any, 0, len(rows))
+		for _, r := range rows {
+			m, _ := r.(map[string]any)
+			c := map[string]any{}
+			for k, v := range m {
+				if k == "currency_id" || k == "foreign_amount" || k == "rate" || k == "currency" {
+					continue
+				}
+				c[k] = v
+			}
+			out = append(out, c)
+		}
+		return out
+	}
+	control := rebuild(view, "voucher_no", "voucher_date", "party_ledger_id", "party")
+	control["postings"] = strip("postings")
+	control["bill_allocations"] = strip("bill_allocations")
+	if code, resp := f.put(t, srv, "purchase", voucherID, control); code != http.StatusOK {
+		t.Fatalf("control: a PUT that omits the currency is a legal request and must "+
+			"be accepted (the operator may be correcting a voucher that was never "+
+			"foreign); got %d (%s)", code, resp)
+	}
+	_, gone := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.ownerTok, nil)
+	rows, _ := gone["postings"].([]any)
+	for _, r := range rows {
+		m, _ := r.(map[string]any)
+		if cid, _ := m["currency_id"].(string); cid != "" {
+			t.Fatalf("CONTROL FAILED: a PUT that omitted the three values left the "+
+				"currency in place, so this test cannot tell a working projection "+
+				"from data that is simply immune to an alter. row=%v", m)
+		}
+	}
+}

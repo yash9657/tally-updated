@@ -48,7 +48,17 @@ func TestNormalisedMasterNameIndexesExist(t *testing.T) {
 		t.Skip("db tests skipped")
 	}
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
+	// ⚠️ HONOURS ADMIN_DATABASE_URL (the Makefile's name). This test APPLIES
+	// every migration on disk, so a hardcoded DSN meant that running the
+	// migrations package from a branch with a new, unmerged migration
+	// migrated the SHARED development database with it — measured in the W3
+	// lane on 2026-09-28 (0096 landed in `tally` and had to be dropped by
+	// hand), and the same happened to two other lanes' numbers.
+	dsn := "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
+	if v := os.Getenv("ADMIN_DATABASE_URL"); v != "" {
+		dsn = v
+	}
+	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Skipf("admin postgres unavailable: %v", err)
 	}

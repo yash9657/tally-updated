@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/khata/cored/internal/platform/tenant"
 )
 
 // requireDB skips when the admin database is unreachable or CORED_SKIP_DB is
@@ -35,96 +37,18 @@ func newCompanyID(t *testing.T) uuid.UUID {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Classification — the anti-rot test
+// 1. Classification — the anti-rot test LIVES IN internal/platform/tenant
 // ---------------------------------------------------------------------------
-
-// TestEveryTableIsClassifiedForTeardown is the test that makes the two
-// hand-maintained registries in plan.go trustworthy.
 //
-// Every base table in `public` must be classified as exactly one of: enumerated
-// by its company_id column, listed in specialTenancy, or listed in
-// notTenantScoped. A migration that adds a tenant table with a company_id is
-// picked up automatically and this test stays green. A migration that adds a
-// tenant table whose tenancy is encoded some other way — as statutory_step's
-// "irn:<companyID>:<voucherID>" primary key is — makes this test RED, by name,
-// on the day it lands. That is the only moment at which somebody still knows how
-// that table's tenancy works.
+// TestEveryTableIsClassifiedForTeardown used to be here. It moved with the
+// registries it makes complete, to internal/platform/tenant/census_test.go
+// (TestEveryTableIsClassified) — a completeness test that lives apart from the
+// thing it makes complete is one refactor away from being vacuous.
 //
-// A hardcoded 31-table teardown list cannot do this: it goes stale silently, and
-// silence is the whole problem.
-func TestEveryTableIsClassifiedForTeardown(t *testing.T) {
-	requireDB(t)
-	ctx := context.Background()
-
-	pool, err := adminPool(ctx)
-	if err != nil {
-		t.Fatalf("admin pool: %v", err)
-	}
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	defer conn.Release()
-
-	census, err := queryBaseTables(ctx, conn)
-	if err != nil {
-		t.Fatalf("census: %v", err)
-	}
-	if len(census) == 0 {
-		t.Fatal("census returned no tables — the check would be vacuous; is this the right database?")
-	}
-	scopedTables, err := queryScopedTables(ctx, conn)
-	if err != nil {
-		t.Fatalf("scoped tables: %v", err)
-	}
-
-	inCensus := map[string]bool{}
-	for _, tbl := range census {
-		inCensus[tbl] = true
-	}
-
-	for _, tbl := range census {
-		var classes []string
-		if _, ok := scopedTables[tbl]; ok {
-			classes = append(classes, "company_id column")
-		}
-		if _, ok := specialTenancy[tbl]; ok {
-			classes = append(classes, "specialTenancy")
-		}
-		if _, ok := notTenantScoped[tbl]; ok {
-			classes = append(classes, "notTenantScoped")
-		}
-		switch len(classes) {
-		case 1:
-			// classified exactly once: good.
-		case 0:
-			t.Errorf("table %q is UNCLASSIFIED for teardown: it has no company_id column and appears in "+
-				"neither specialTenancy nor notTenantScoped in internal/platform/testdb/plan.go. "+
-				"Until it is classified, either its rows leak on every test run or a deliberate omission "+
-				"is undocumented. Add it to one of the two registries, with the reason.", tbl)
-		default:
-			t.Errorf("table %q is classified %d ways (%s); exactly one classification is required, "+
-				"or the delete plan and the residue check will disagree about it",
-				tbl, len(classes), strings.Join(classes, " + "))
-		}
-	}
-
-	// A registry entry naming a table that no longer exists is rot in the other
-	// direction: it silently narrows the census check.
-	for tbl := range specialTenancy {
-		if !inCensus[tbl] {
-			t.Errorf("specialTenancy names %q, which is not a base table in public — remove the stale entry", tbl)
-		}
-	}
-	for tbl := range notTenantScoped {
-		if !inCensus[tbl] {
-			t.Errorf("notTenantScoped names %q, which is not a base table in public — remove the stale entry", tbl)
-		}
-	}
-
-	t.Logf("classified %d base tables: %d by company_id, %d specialTenancy, %d notTenantScoped",
-		len(census), len(scopedTables), len(specialTenancy), len(notTenantScoped))
-}
+// It is still the OTHER HALF of this file's guarantee and the Drop comment still
+// names it: the residue check below is generated from the same plan the deletes
+// came from, so it structurally cannot see a table that is missing from the plan
+// entirely. The classification test is what sees that one.
 
 // ---------------------------------------------------------------------------
 // The fixture: one row in EVERY table the plan touches
@@ -134,6 +58,12 @@ type fixtureRow struct {
 	Table string
 	SQL   string
 	Args  []any
+}
+
+// optionalFixtureTables are fixture tables a migration creates only when the
+// cluster supports them, each with the reason.
+var optionalFixtureTables = map[string]string{
+	"emb_vector": "0098 creates it only where pgvector is installed (emb_enable_vectors)",
 }
 
 // buildFixture returns one INSERT per table in the delete plan.
@@ -146,18 +76,20 @@ type fixtureRow struct {
 func buildFixture(cid uuid.UUID) []fixtureRow {
 	id := func() uuid.UUID { return uuid.New() }
 	var (
-		groupID   = id()
-		levelID   = id()
-		userID    = id()
-		unitID    = id()
-		itemID    = id()
-		godownID  = id()
-		batchID   = id()
-		ledgerID  = id()
-		vtypeID   = id()
-		voucherID = id()
-		versionID = id()
-		plistID   = id()
+		groupID = id()
+		levelID = id()
+		userID  = id()
+		unitID  = id()
+		itemID  = id()
+		// T10 — the stock group the item below belongs to (migration 0079).
+		stockGroupID = id()
+		godownID     = id()
+		batchID      = id()
+		ledgerID     = id()
+		vtypeID      = id()
+		voucherID    = id()
+		versionID    = id()
+		plistID      = id()
 
 		// Captured (rather than inlined as id()) because
 		// posting_cost_allocation below has to hang off this exact posting.
@@ -166,6 +98,13 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// T2 — the two cost axes and a centre on one of them (migration 0040).
 		costCategoryID = id()
 		costCentreID   = id()
+
+		// T11 — a budget and one line on it (migration 0085). Captured because the
+		// line has to hang off this exact budget.
+		budgetID = id()
+
+		// W3 wave 2 — the vector row hangs off this exact document.
+		embDocID = id()
 
 		// T3 — a purchase order, its line, and the link from the stock_movement
 		// below (migrations 0042 and 0043).
@@ -183,12 +122,28 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// T6 — the challan the allocation below hangs off (migration 0069).
 		challanID = id()
 
+		// T8 — the currency the rate below is quoted for (migration 0080).
+		currencyID = id()
+
+		// W2 — the agent run and approval the agent_* children hang off.
+		agentRunID      = id()
+		agentApprovalID = id()
+		// W6 — the MCP grant the fixture session hangs off.
+		mcpGrantID = id()
+
+		// W4 — the insight the feedback row hangs off.
+		insightID = id()
+
 		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
 		statementID = id()
 		inwardDocID = id()
 
 		// T4 slice 2a — the imported bank statement (migration 0062).
 		bankImportID = id()
+		// Slice 2b (migration 0088) links a statement LINE to the clearance it
+		// produced, so both ends need ids the match row can name.
+		bankReconID = id()
+		bankLineID  = id()
 
 		// Track 3 — payroll.
 		employeeID = id()
@@ -229,8 +184,20 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			[]any{userID, cid, levelID}},
 		{"unit", `INSERT INTO unit (id, company_id, symbol) VALUES ($1, $2, 'Nos')`,
 			[]any{unitID, cid}},
-		{"stock_item", `INSERT INTO stock_item (id, company_id, name, unit_id) VALUES ($1, $2, 'Fixture Item', $3)`,
-			[]any{itemID, cid, unitID}},
+		// T10 — the item hierarchy (migration 0079). Seeded ABOVE stock_item
+		// because the item below hangs off it, and the plan's order is the order
+		// these run in.
+		{"stock_group", `INSERT INTO stock_group (id, company_id, name, path)
+			VALUES ($1, $2, 'Fixture Stock Group', 'fixturestockgroup'::ltree)`,
+			[]any{stockGroupID, cid}},
+		// ⚠️ THE ITEM CARRIES THE GROUP, and it does so on purpose: an item with a
+		// NULL stock_group_id would seed a row in both tables while leaving the FK
+		// between them unexercised, so a teardown that deleted the groups BEFORE
+		// the items would still pass. It is the reference that has to be present
+		// for the delete ORDER to be tested at all.
+		{"stock_item", `INSERT INTO stock_item (id, company_id, name, unit_id, stock_group_id)
+			VALUES ($1, $2, 'Fixture Item', $3, $4)`,
+			[]any{itemID, cid, unitID, stockGroupID}},
 		{"godown", `INSERT INTO godown (id, company_id, name) VALUES ($1, $2, 'Fixture Godown')`,
 			[]any{godownID, cid}},
 		{"stock_batch", `INSERT INTO stock_batch (id, company_id, stock_item_id, name)
@@ -259,6 +226,12 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"voucher_head", `INSERT INTO voucher_head (company_id, voucher_id, current_version_id, version_no, op, voucher_date)
 			VALUES ($1, $2, $3, 1, 'CREATE', DATE '2024-05-01')`,
 			[]any{cid, voucherID, versionID}},
+		// W5 — migration 0100. Hangs off THIS voucher (its company-scoped FK), and
+		// the teardown must get past the table's no-mutate trigger to delete it.
+		{"voucher_idempotency", `INSERT INTO voucher_idempotency
+			(company_id, idempotency_key, request_sha256, voucher_id, result)
+			VALUES ($1, 'fixture-key-0001', repeat('a', 64), $2, '{}'::jsonb)`,
+			[]any{cid, voucherID}},
 		{"posting", `INSERT INTO posting (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
 			VALUES ($1, $2, $3, $4, 'D', 100)`,
 			[]any{postingID, cid, versionID, ledgerID}},
@@ -287,6 +260,26 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			(id, company_id, posting_id, cost_category_id, cost_centre_id, amount)
 			VALUES ($1, $2, $3, $4, $5, 100)`,
 			[]any{id(), cid, postingID, costCategoryID, costCentreID}},
+		// T11 — budgets (migration 0085). The head and one line, which is all the
+		// teardown needs to exercise: budget_line cascades from budget, so both
+		// tables must hold a row or the plan's entry for one of them is never
+		// touched.
+		//
+		// ⚠️ THE LINE TARGETS A LEDGER AND IS ON NETT_TRANSACTIONS, deliberately.
+		// A COST_CENTRE line would be legal too, but 0085's
+		// budget_line_cost_centre_is_transactional pins the basis for those, and a
+		// fixture that quietly relied on that constraint being satisfied would be
+		// one more thing to get wrong here. The amount is positive, as
+		// budget_line_amount_positive requires -- a fixture row that would be
+		// ILLEGAL in production is a teardown test standing on data the write path
+		// could never create, the argument posting_cost_allocation records above.
+		{"budget", `INSERT INTO budget (id, company_id, name, from_date, to_date, created_by)
+			VALUES ($1, $2, 'Fixture Plan', DATE '2024-04-01', DATE '2025-03-31', 'testdb')`,
+			[]any{budgetID, cid}},
+		{"budget_line", `INSERT INTO budget_line
+			(id, company_id, budget_id, dimension, ledger_id, basis, dr_cr, amount)
+			VALUES ($1, $2, $3, 'LEDGER', $4, 'NETT_TRANSACTIONS', 'D', 500)`,
+			[]any{id(), cid, budgetID, ledgerID}},
 		{"voucher_gst_line", `INSERT INTO voucher_gst_line
 			(id, company_id, voucher_version_id, line_no, hsn, taxable_value, gst_rate_pct, cgst, sgst, igst)
 			VALUES ($1, $2, $3, 1, '1234', 100, 18, 9, 9, 0)`,
@@ -381,7 +374,7 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"bank_reconciliation", `INSERT INTO bank_reconciliation
 			(id, company_id, voucher_id, ledger_id, leg_no, bank_date, cleared_amount, cleared_dr_cr, reconciled_by)
 			VALUES ($1, $2, $3, $4, 0, DATE '2024-05-03', 100, 'D', 'testdb')`,
-			[]any{id(), cid, voucherID, ledgerID}},
+			[]any{bankReconID, cid, voucherID, ledgerID}},
 
 		// ------------------------------------------------------------------
 		// Migration 0062 — T4 slice 2a, the imported bank statement.
@@ -407,7 +400,27 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			 amount, dr_cr, raw, line_hash, occurrence)
 			VALUES ($1, $2, $3, $4, 2, DATE '2024-05-03', 'FIXTURE CREDIT',
 			        100, 'D', '{}'::jsonb, 'fixture-hash-' || $5, 0)`,
-			[]any{id(), cid, bankImportID, ledgerID, cidText}},
+			[]any{bankLineID, cid, bankImportID, ledgerID, cidText}},
+
+		// ------------------------------------------------------------------
+		// Migration 0088 — T4 slice 2b, one RESOLVED match.
+		//
+		// It must come after BOTH bank_statement_line and bank_reconciliation:
+		// its two three-column FKs point at each, and they carry the LEDGER as
+		// well as the id, so a match whose line and clearance belong to
+		// different bank accounts is refused by the database rather than by the
+		// service remembering to look.
+		//
+		// 'matched' with a reconciliation_id is the arm that exercises 0088's
+		// clearance_matches_status CHECK in the direction a real row takes; the
+		// set-aside arm (status 'set-aside', reconciliation_id NULL) is covered
+		// by the service tests rather than here, because one fixture row per
+		// table is what this census needs.
+		// ------------------------------------------------------------------
+		{"bank_statement_match", `INSERT INTO bank_statement_match
+			(id, company_id, line_id, ledger_id, status, reconciliation_id, tier, matched_by)
+			VALUES ($1, $2, $3, $4, 'matched', $5, 'exact', 'testdb')`,
+			[]any{id(), cid, bankLineID, ledgerID, bankReconID}},
 
 		// ------------------------------------------------------------------
 		// Migration 0047 — T5, one raised e-way bill.
@@ -604,6 +617,165 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			VALUES ($1, $2, $3, 1, 'BASIC', 'BASIC', 'NA', 'EARNING', 20000)`,
 			[]any{id(), cid, payslipID}},
 
+		// T8 — multi-currency (migration 0080).
+		//
+		// ⚠️ 'USD' RATHER THAN THE COMPANY'S OWN BASE CURRENCY, and that is not
+		// arbitrary: currency_not_base refuses a master for the base currency,
+		// because a base-currency amount is encoded by currency_id IS NULL and a
+		// row here would be a second encoding of it. The trigger does not fire
+		// under session_replication_role = replica (see the company row above),
+		// so this fixture would not be stopped by it — which is exactly why the
+		// row is written the way real code must write it rather than the way the
+		// fixture could get away with.
+		{"currency", `INSERT INTO currency (id, company_id, code, symbol, formal_name, decimal_places)
+			VALUES ($1, $2, 'USD', '$', 'US Dollars', 2)`,
+			[]any{currencyID, cid}},
+		{"currency_rate", `INSERT INTO currency_rate
+			(id, company_id, currency_id, effective_date, rate)
+			VALUES ($1, $2, $3, DATE '2024-04-01', 83.6500000000)`,
+			[]any{id(), cid, currencyID}},
+		// The key IS the company (mirrors company_tds_profile). The gain/loss
+		// ledger is left NULL: "not chosen" is a real state the settlement path
+		// must refuse on, so the fixture seeds the state that actually ships.
+		{"company_forex_settings", `INSERT INTO company_forex_settings (company_id)
+			VALUES ($1)`,
+			[]any{cid}},
+
+		// W0 — the per-tenant LLM token budget (migration 0091).
+		//
+		// ⚠️ POSITION: LAST AMONG THE UUID-company_id ROWS, AND IT MAY GO
+		// ANYWHERE. This table has no foreign key at all — not even to
+		// `company` — so unlike stock_group-before-stock_item above, nothing
+		// about the delete ORDER is exercised by where it sits. It is placed at
+		// the end of the ordinary rows so the two SPECIAL tenancy rows below
+		// (TEXT company_id, and no company_id at all) stay adjacent to each
+		// other and to the comments that explain them.
+		//
+		// The values are the shape internal/llm's PGBudget actually writes:
+		// period_start is the FIRST of a month (llm_token_budget_period_is_month_start
+		// refuses anything else), the limit is positive, and
+		// cached_prompt_tokens <= prompt_tokens.
+		{"llm_token_budget", `INSERT INTO llm_token_budget
+			(id, company_id, period_start, feature, limit_tokens, reserved_tokens,
+			 prompt_tokens, cached_prompt_tokens, completion_tokens, calls, released)
+			VALUES ($1, $2, DATE '2026-09-01', 'fixture.feature', 1000000, 0, 1200, 800, 300, 4, 1)`,
+			[]any{id(), cid}},
+
+		// W3 — the entity facts, edges and tenant card (migration 0096). No
+		// foreign keys, so, like llm_token_budget, their position exercises
+		// nothing about delete ORDER. The values satisfy every named CHECK
+		// (exactly one of value_num/value_text, a known unit/source/kind, the
+		// tenant row with no entity_id, a token estimate under the 1500 cap).
+		// ⚠️ The teardown can delete them only because replica mode disarms
+		// w3_only_supersede — tally_app has no DELETE grant on any of the
+		// three, by design.
+		{"entity_facts", `INSERT INTO entity_facts
+			(id, company_id, entity_kind, entity_key, entity_name, fact_key, value_num, unit,
+			 source, job, job_version, valid_from)
+			VALUES ($1, $2, 'tenant', 'tenant', 'company', 'receivables_total', 100, 'inr',
+			        'computed', 'tenant.runrate', 'fixture', DATE '2026-03-31')`,
+			[]any{id(), cid}},
+		{"entity_edges", `INSERT INTO entity_edges
+			(id, company_id, src_kind, src_key, src_name, dst_kind, dst_key, dst_name, edge_kind,
+			 weight, source, job, job_version, valid_from)
+			VALUES ($1, $2, 'party', 's', 'Supplier', 'item', 'i', 'Item', 'supplies_item',
+			        10, 'computed', 'party.supplier', 'fixture', DATE '2026-03-31')`,
+			[]any{id(), cid}},
+		{"tenant_profile", `INSERT INTO tenant_profile
+			(id, company_id, version, as_of, body, body_json, token_estimate, job_version)
+			VALUES ($1, $2, 1, DATE '2026-03-31', 'fixture card', '{}'::jsonb, 4, 'fixture')`,
+			[]any{id(), cid}},
+		// W2 — the agent plane (migrations 0092–0094). Parents before
+		// children in the order the FKs point: agent_run, then its steps,
+		// approvals, decisions and commits. ⛔ FIVE OF THESE EIGHT TABLES ARE
+		// APPEND-ONLY BY TRIGGER (and by grant), so the teardown can only
+		// remove them under session_replication_role = replica — which is the
+		// point of seeding them: a plan that tried a plain DELETE would fail
+		// here, loudly, rather than leak an agent's intent log per test run.
+		{"agent_run", `INSERT INTO agent_run
+			(id, company_id, created_by, created_by_subject, agent_id, channel, instruction, delegation, status, next_poll_at)
+			VALUES ($1, $2, $3, 'fixture-subject', 'khata-agent', 'panel', 'fixture', '{}'::jsonb, 'parked', now())`,
+			[]any{agentRunID, cid, id()}},
+		{"agent_run_step", `INSERT INTO agent_run_step (company_id, run_id, step_name, output)
+			VALUES ($1, $2, 'decide:0', '{}'::jsonb)`,
+			[]any{cid, agentRunID}},
+		{"agent_approval", `INSERT INTO agent_approval
+			(id, company_id, run_id, step_key, action_id, acl_key, risk, args, preview, reasons,
+			 provenance, on_behalf_of, requested_at, deadline_at)
+			VALUES ($1, $2, $3, 'gate:1', 'post.vouchers.payment', 'create payment', 'money',
+			        '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, '{}'::jsonb, $4, now(), now() + interval '72 hours')`,
+			[]any{agentApprovalID, cid, agentRunID, id()}},
+		{"agent_decision", `INSERT INTO agent_decision (id, company_id, approval_id, decision, decided_at)
+			VALUES ($1, $2, $3, 'expired', now())`,
+			[]any{id(), cid, agentApprovalID}},
+		{"agent_commit", `INSERT INTO agent_commit (company_id, idempotency_key, run_id, action_id, voucher_ids)
+			VALUES ($1, 'fixture:commit', $2, 'post.vouchers.payment', ARRAY[]::uuid[])`,
+			[]any{cid, agentRunID}},
+		{"agent_intent_log", `INSERT INTO agent_intent_log
+			(id, company_id, run_id, seq, kind, actor_kind, actor_id, payload, hash, created_at)
+			VALUES ($1, $2, $3, 1, 'run_started', 'system', 'fixture', '{}'::jsonb,
+			        decode(repeat('00', 32), 'hex'), now())`,
+			[]any{id(), cid, agentRunID}},
+		{"agent_intent_anchor", `INSERT INTO agent_intent_anchor
+			(id, company_id, anchored_at, run_count, event_count, root)
+			VALUES ($1, $2, now(), 1, 1, decode(repeat('00', 32), 'hex'))`,
+			[]any{id(), cid}},
+		{"agent_autonomy", `INSERT INTO agent_autonomy (id, company_id, acl_key, level, set_by)
+			VALUES ($1, $2, 'create payment', 1, $3)`,
+			[]any{id(), cid, id()}},
+		// W6 — the MCP server (migration 0105). The grant, then a session on
+		// it tied to the agent_run above. ⛔ BOTH REFUSE DELETE BY TRIGGER
+		// (only revocation / closing may change them), so like the agent
+		// tables they are only removable under the teardown's replica role.
+		{"agent_mcp_grant", `INSERT INTO agent_mcp_grant
+			(id, company_id, user_id, client_name, acl_keys, expires_at, created_at)
+			VALUES ($1, $2, $3, 'fixture client', ARRAY['create payment'], now() + interval '1 day', now())`,
+			[]any{mcpGrantID, cid, id()}},
+		{"agent_mcp_session", `INSERT INTO agent_mcp_session
+			(id, company_id, grant_id, run_id, protocol_version, manifest_hash, created_at, last_seen_at)
+			VALUES ($1, $2, $3, $4, '2025-06-18', repeat('0', 64), now(), now())`,
+			[]any{id(), cid, mcpGrantID, agentRunID}},
+
+		// W3 wave 2 — the retrieval store (migration 0098). emb_vector's
+		// composite FK points at emb_document, so the plan must delete the
+		// vector first; emb_vector exists only on a pgvector cluster, which
+		// is what optionalFixtureTables below is for.
+		{"emb_document", `INSERT INTO emb_document (id, company_id, kind, source_ref, content, content_hash, untrusted)
+			VALUES ($1, $2, 'narration', 'fixture-line', 'NEFT FIXTURE', repeat('a', 64), true)`,
+			[]any{embDocID, cid}},
+		{"emb_vector", `INSERT INTO emb_vector (id, company_id, document_id, version, model_id, embedding)
+			VALUES ($1, $2, $3, 'fixture@1024/v1', 'fixture', array_fill(0.5, ARRAY[1024])::real[]::halfvec)`,
+			[]any{id(), cid, embDocID}},
+		{"emb_golden_query", `INSERT INTO emb_golden_query (id, company_id, question, dsl, prompt_version, proposed_by)
+			VALUES ($1, $2, 'fixture question', '{}'::jsonb, 'nlq-dsl-v4', 'fixture')`,
+			[]any{id(), cid}},
+		// W4 — the insight engine (migration 0102). ⛔ FOUR OF THE SIX ARE
+		// APPEND-ONLY BY TRIGGER (feedback, run, digest) or refuse DELETE
+		// (insight itself), so, like the agent tables above, only a
+		// replica-mode teardown can remove them — and insight_feedback's
+		// composite FK to insight exercises the delete ORDER.
+		{"insight", `INSERT INTO insight
+			(id, company_id, insight_type, cadence, entity_kind, entity_key, entity_name, fingerprint,
+			 as_of, impact_inr, actionability, payload_json, evidence_sql, detector_version)
+			VALUES ($1, $2, 'dead_stock', 'nightly', 'item', 'x', 'Fixture', 'dead_stock:x',
+			        DATE '2024-05-01', 1, 1, '{}'::jsonb, 'SELECT 1', 'fixture')`,
+			[]any{insightID, cid}},
+		{"insight_feedback", `INSERT INTO insight_feedback (id, company_id, insight_id, insight_type, verdict, given_by)
+			VALUES ($1, $2, $3, 'dead_stock', 'useful', 'fixture')`,
+			[]any{id(), cid, insightID}},
+		{"insight_suppression", `INSERT INTO insight_suppression (id, company_id, insight_type, reason, created_by)
+			VALUES ($1, $2, 'dead_stock', 'fixture', 'fixture')`,
+			[]any{id(), cid}},
+		{"insight_run", `INSERT INTO insight_run (id, company_id, run_date, kind, stats)
+			VALUES ($1, $2, DATE '2024-05-01', 'nightly', '{}'::jsonb)`,
+			[]any{id(), cid}},
+		{"insight_digest", `INSERT INTO insight_digest (id, company_id, digest_date, items, narrative, narrator)
+			VALUES ($1, $2, DATE '2024-05-01', '[]'::jsonb, '', 'template')`,
+			[]any{id(), cid}},
+		{"insight_voucher_event", `INSERT INTO insight_voucher_event (id, company_id, voucher_id, version_id, op)
+			VALUES ($1, $2, $3, $4, 'CREATE')`,
+			[]any{id(), cid, voucherID, id()}},
+
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter
 		// on type.
@@ -640,13 +812,30 @@ func seedCompany(t *testing.T, cid uuid.UUID) {
 	}
 	rows := buildFixture(cid)
 
+	// A table that exists only on some clusters is seeded only where the plan
+	// has it — and only a table NAMED here may be skipped, with its reason,
+	// so this cannot quietly become "seed whatever the plan happens to have".
+	inPlan := map[string]bool{}
+	for _, tbl := range pl.Tables() {
+		inPlan[tbl] = true
+	}
+	kept := rows[:0]
+	for _, r := range rows {
+		if _, optional := optionalFixtureTables[r.Table]; optional && !inPlan[r.Table] {
+			t.Logf("fixture: %s not on this cluster (%s)", r.Table, optionalFixtureTables[r.Table])
+			continue
+		}
+		kept = append(kept, r)
+	}
+	rows = kept
+
 	// The fixture must cover EXACTLY the plan. Anything else and the test proves
 	// less than it claims.
 	planned := map[string]bool{}
-	for _, s := range pl.order {
+	for _, s := range pl.Order {
 		planned[s.Table] = true
 	}
-	for _, s := range pl.special {
+	for _, s := range pl.Special {
 		planned[s.Table] = true
 	}
 	seeded := map[string]bool{}
@@ -865,11 +1054,11 @@ func TestResidueCheckCatchesADeleteThatMissedItsRows(t *testing.T) {
 	}
 	// A copy of the real plan with ONE broken predicate. verifySQL is untouched,
 	// so the check still knows to look at statutory_step.
-	broken := &plan{verifySQL: good.verifySQL, order: good.order}
+	broken := &tenant.Plan{VerifySQL: good.VerifySQL, Order: good.Order}
 	var patched bool
-	for _, s := range good.special {
+	for _, s := range good.Special {
 		if s.Table == "statutory_step" {
-			broken.special = append(broken.special, specialStmt{
+			broken.Special = append(broken.Special, tenant.SpecialStmt{
 				Table: s.Table,
 				// 'IRN:' never matches the lower-case prefix the workflow writes.
 				SQL: `DELETE FROM statutory_step WHERE workflow_id LIKE 'IRN:' || $1 || ':%'`,
@@ -877,10 +1066,10 @@ func TestResidueCheckCatchesADeleteThatMissedItsRows(t *testing.T) {
 			patched = true
 			continue
 		}
-		broken.special = append(broken.special, s)
+		broken.Special = append(broken.Special, s)
 	}
 	if !patched {
-		t.Fatal("statutory_step is no longer in specialTenancy; this test needs a new subject")
+		t.Fatal("statutory_step is no longer in tenant.SpecialTenancy; this test needs a new subject")
 	}
 
 	err = dropWithPlan(ctx, broken, cid)
@@ -991,48 +1180,31 @@ func TestDeleteOrderIsReverseTopological(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	defer conn.Release()
-	edges, err := queryFKEdges(ctx, conn)
+	edges, err := tenant.FKEdges(ctx, conn)
 	if err != nil {
 		t.Fatalf("fk edges: %v", err)
 	}
 
 	pos := map[string]int{}
-	for i, s := range pl.order {
+	for i, s := range pl.Order {
 		pos[s.Table] = i
 	}
 	for _, e := range edges {
-		ci, cok := pos[e.child]
-		pi, pok := pos[e.parent]
+		ci, cok := pos[e.Child]
+		pi, pok := pos[e.Parent]
 		if !cok || !pok {
 			continue
 		}
 		if ci > pi {
 			t.Errorf("delete order puts parent %q (position %d) before child %q (position %d); "+
-				"with foreign keys enforced that delete would fail", e.parent, pi, e.child, ci)
+				"with foreign keys enforced that delete would fail", e.Parent, pi, e.Child, ci)
 		}
 	}
-	if len(pl.order) == 0 {
+	if len(pl.Order) == 0 {
 		t.Fatal("plan is empty")
 	}
-	if last := pl.order[len(pl.order)-1].Table; last != tenantRoot {
-		t.Errorf("the tenant root %q must be deleted last, got %q", tenantRoot, last)
-	}
-}
-
-// TestReverseTopoReportsACycle proves the cycle branch is real code and not a
-// comment. A silently-chosen order under a cycle would fail intermittently
-// rather than always, which is the worst possible failure mode for a harness.
-func TestReverseTopoReportsACycle(t *testing.T) {
-	target := map[string]bool{"a": true, "b": true, "c": true}
-	edges := []fkEdge{{child: "a", parent: "b"}, {child: "b", parent: "c"}, {child: "c", parent: "a"}}
-	_, err := reverseTopo(target, edges)
-	if err == nil {
-		t.Fatal("reverseTopo accepted a cycle; it must refuse rather than pick an arbitrary order")
-	}
-	for _, name := range []string{"a", "b", "c"} {
-		if !strings.Contains(err.Error(), name) {
-			t.Errorf("cycle error must name every table in the cycle; %q missing from: %v", name, err)
-		}
+	if last := pl.Order[len(pl.Order)-1].Table; last != tenant.TenantRoot {
+		t.Errorf("the tenant root %q must be deleted last, got %q", tenant.TenantRoot, last)
 	}
 }
 
@@ -1176,9 +1348,9 @@ func TestCleanupDefersRatherThanDropping(t *testing.T) {
 }
 
 // TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate pins the fix for a
-// silent-leak bug that only a SECOND specialTenancy entry could ever expose.
+// silent-leak bug that only a SECOND tenant.SpecialTenancy entry could ever expose.
 //
-// WHAT WENT WRONG. specialTenancy used to hold a full DELETE per table, while
+// WHAT WENT WRONG. tenant.SpecialTenancy used to hold a full DELETE per table, while
 // buildVerifySQL re-spelled the residue predicate itself — and it re-spelled it
 // as statutory_step's, `workflow_id LIKE 'irn:' || $2 || ':%'`, for EVERY entry.
 // With exactly one entry registered, the two happened to agree and nothing could
@@ -1235,24 +1407,24 @@ func TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate(t *testing.T) {
 
 	// A plan carrying ONLY the second entry, with a predicate that is CORRECT.
 	// Equality on owner_key — nothing like statutory_step's prefix LIKE.
-	good := &plan{order: real.order}
-	good.special = append(good.special, specialStmt{
+	good := &tenant.Plan{Order: real.Order}
+	good.Special = append(good.Special, tenant.SpecialStmt{
 		Table:     probe,
-		SQL:       deleteFor(probe, `owner_key = `+idParam),
-		Predicate: `owner_key = ` + idParam,
+		SQL:       tenant.DeleteFor(probe, `owner_key = `+tenant.IDParam),
+		Predicate: `owner_key = ` + tenant.IDParam,
 	})
-	good.verifySQL = buildVerifySQL(good)
+	good.VerifySQL = tenant.BuildVerifySQL(good)
 
 	// The residue predicate must be THIS table's, not statutory_step's. If
 	// buildVerifySQL ever re-spells it again, this assertion is what says so
 	// before anything silently leaks.
-	if strings.Contains(good.verifySQL, "workflow_id") {
+	if strings.Contains(good.VerifySQL, "workflow_id") {
 		t.Fatalf("the residue query verifies %s with statutory_step's predicate; "+
 			"a second special entry would be deleted by its own predicate and verified by "+
-			"someone else's, so a wrong predicate would leak silently. got: %s", probe, good.verifySQL)
+			"someone else's, so a wrong predicate would leak silently. got: %s", probe, good.VerifySQL)
 	}
-	if !strings.Contains(good.verifySQL, "owner_key") {
-		t.Fatalf("the residue query does not mention %s's own column; got: %s", probe, good.verifySQL)
+	if !strings.Contains(good.VerifySQL, "owner_key") {
+		t.Fatalf("the residue query does not mention %s's own column; got: %s", probe, good.VerifySQL)
 	}
 
 	// The correct predicate removes the row and the check agrees.
@@ -1274,16 +1446,16 @@ func TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate(t *testing.T) {
 		`INSERT INTO `+probe+` (id, owner_key) VALUES ($1, $2)`, newCompanyID(t), cid.String()); err != nil {
 		t.Fatalf("re-seed probe row: %v", err)
 	}
-	broken := &plan{order: real.order}
-	broken.special = append(broken.special, specialStmt{
+	broken := &tenant.Plan{Order: real.Order}
+	broken.Special = append(broken.Special, tenant.SpecialStmt{
 		Table: probe,
 		// Still binds $1 (the batch always supplies it) but matches nothing: the
 		// prefix makes every comparison fail. This is the realistic shape of the
 		// bug — a predicate that is subtly wrong, not one that is malformed.
 		SQL:       `DELETE FROM ` + probe + ` WHERE owner_key = 'nobody-' || $1`,
-		Predicate: `owner_key = ` + idParam,
+		Predicate: `owner_key = ` + tenant.IDParam,
 	})
-	broken.verifySQL = buildVerifySQL(broken)
+	broken.VerifySQL = tenant.BuildVerifySQL(broken)
 
 	err = dropWithPlan(ctx, broken, cid)
 	if err == nil {

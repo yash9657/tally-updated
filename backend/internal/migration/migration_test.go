@@ -21,9 +21,9 @@ import (
 	migs "github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 // repoRoot walks up from the test's working directory to the repository root
@@ -107,7 +107,7 @@ func TestImportSmoke3VoucherReconcilesToThePaisa(t *testing.T) {
 	xmlPath := filepath.Join(root, "corpora", "migration", "smoke-3-voucher.xml")
 	jsonPath := filepath.Join(root, "corpora", "migration", "smoke-3-voucher.json")
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	res, err := im.ImportFile(ctx, xmlPath, "tester")
 	if err != nil {
 		t.Fatalf("import: %v", err)
@@ -187,7 +187,7 @@ func TestReconcileFailsLoudlyOnMismatch(t *testing.T) {
 	root := repoRoot(t)
 	xmlPath := filepath.Join(root, "corpora", "migration", "smoke-3-voucher.xml")
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	if _, err := im.ImportFile(ctx, xmlPath, "tester"); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestImportRequiresCompanyScope(t *testing.T) {
 	}
 	defer pool.Close()
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	root := repoRoot(t)
 	xmlPath := filepath.Join(root, "corpora", "migration", "smoke-3-voucher.xml")
 	// No company in context: the GUC guard must refuse before posting anything.

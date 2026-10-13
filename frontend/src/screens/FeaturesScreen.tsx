@@ -4,6 +4,7 @@ import { ApiError } from "../api";
 import { useClient, useCompanyContext } from "../app/CompanyContext";
 import type {
   DeductorCategory,
+  LedgerListItem,
   DeductorStatus,
   SetTDSProfileRequest,
   TCSDeclaration,
@@ -15,9 +16,14 @@ import type {
  *
  * Tally's F11 is a screen of Yes/No feature switches. Ours is deliberately a
  * STATEMENT OF FACT rather than a set of switches: a toggle that flips a flag
- * with nothing behind it is worse than no toggle at all. Four states:
+ * with nothing behind it is worse than no toggle at all. FIVE states:
  *   • "Always on"   — structural in this build (it cannot be turned off).
  *   • "On"          — built and available FROM THE KEYBOARD, here, today.
+ *   • "Part built"  — the feature is USABLE from the keyboard and a NAMED part of
+ *                     it is deliberately absent, with the note saying which part
+ *                     and why. NOT "most of it works": a row is only this if an
+ *                     operator can do the main job today AND there is a specific,
+ *                     stated thing they cannot do.
  *   • "Server only" — the server half is built, tested and reachable over HTTP,
  *                     and there is NO screen or key that reaches it. An operator
  *                     sitting in front of this application cannot use it.
@@ -34,9 +40,33 @@ import type {
  * as "we have not written it" is its own inaccuracy, and it is the one that
  * makes an accountant re-buy something they already own. So the two are now
  * separate words, and neither of them is "On".
+ *
+ * ⭐⭐ AND WHY "Part built" EXISTS AS ITS OWN STATE — T8 STEP 8, AND IT IS THE SAME
+ * ARGUMENT ONE STEP FURTHER ON.
+ * Q4 of `docs/design/t8-multi-currency-model.md` asks for it by name: *"The v1 row
+ * is `partial`, not `on`, and its note says the unrealised difference is REPORTED
+ * and not POSTED, in those words."* Multi-currency after step 8 is neither `on` nor
+ * `off` nor `server`: an operator CAN key a foreign invoice, settle it, age it and
+ * read the exposure — all from the keyboard — and there is one thing they cannot
+ * do, which is POST a revaluation of a bill that is still open. Calling that `on`
+ * overstates it in exactly the direction this screen exists to prevent; calling it
+ * `off` would tell an accountant to go and buy multi-currency they already have.
+ *
+ * ⛔ THE ALTERNATIVE WAS TO SPLIT THE ROW, and it was rejected rather than
+ * overlooked. Step 3 split "Currency masters and exchange rates" off for a real
+ * reason — the masters became keyboard-reachable a whole wave before anything
+ * could use them — and splitting again would give ONE feature five rows (masters,
+ * entry, settlement, ageing, revaluation), four of them `on` and one `off`, which
+ * is a table an operator has to reassemble in their head to answer "can I invoice
+ * in dollars". ⚠️ A state that says "yes, and here is the named gap" answers that
+ * question in one row, which is what this screen is for.
+ *
+ * ⛔ AND IT IS NOT A LICENCE. A row is `partial` only when the note NAMES the
+ * missing part and says why it is missing. "Part built" with a vague note is
+ * `off` with better marketing, which is the failure mode the whole file guards.
  */
 
-type State = "always" | "on" | "server" | "off";
+type State = "always" | "on" | "partial" | "server" | "off";
 
 const FEATURES: {
   group: string;
@@ -112,24 +142,47 @@ const FEATURES: {
         note: "F5 Payment / F6 Receipt / F4 Contra in single-entry mode: every particular carries an ALLOCATE control that splits that posting across the centres of one or more axes. ⛔ EACH AXIS MUST TOTAL THE POSTING EXACTLY, to the paisa, with no tolerance — the server refuses a partial split and a deferred database trigger refuses behind it — so the form shows the REMAINING BALANCE PER AXIS as you key, and refuses to send a short axis rather than spending your form on a 422. ⛔ AND THE INVARIANT IS PER (POSTING, AXIS), NEVER PER POSTING: several axes analyse the SAME money in parallel, so one 1,00,000 salary is allocated in full across Departments AND AGAIN in full across Branches, both complete and both correct. Nothing on any screen adds allocations across axes — for two axes that sum is twice the cost borne. The posting an allocation attaches to is identified by a 0-BASED ORDINAL THAT NO SCREEN DISPLAYS: the control hangs off the posting ROW the operator is already looking at and the ordinal is computed from that row's position, offset by the primary leg (in single entry the postings array is [the account paid from, ...the particulars], so the first particular is posting 1 — getting that wrong would attribute a departmental cost to the bank account, on a voucher that balances). WHAT IS NOT REACHABLE: a JOURNAL cannot be keyed from scratch in this build at all — the double-entry form has no posting grid — so a journal's allocations still arrive over HTTP. An ITEM INVOICE refuses allocations outright and always will: its postings are generated inside the server's transaction and index 0 is the party leg. There is also no Tally-style pop-up on a cost-centre-flagged ledger (RESEARCH.md:525): the control is on every particular rather than triggered by a ledger flag, because this build has no such flag.",
       },
       {
+        // ⛔⛔ THIS ROW STAYS `off` AND THE MASTERS ROW BELOW IS A SEPARATE ONE,
+        // for the reason the offline pair is split: to an operator,
+        // "multi-currency" means KEYING AN INVOICE IN DOLLARS AND SEEING WHAT
+        // THE EXCHANGE MOVEMENT COST. None of that exists. Flipping this row to
+        // `on` because the masters landed would be the flattering-direction lie
+        // this file exists to refuse — and it is the lie that costs most, because
+        // a business that believes it can invoice in dollars finds out at the
+        // moment it tries to.
         name: "Multi-currency",
-        state: "off",
-        note: "Not built yet — the company base currency is the only one. Its SYMBOL, formal name and decimal places are configurable per company; forex rates and a second currency are not.",
+        // ⭐⭐ T8 STEP 8 FLIPPED THIS FROM `off`, AND TO `partial` RATHER THAN `on`.
+        // Q4 of the design memo asks for `partial` by name, and the rule this file
+        // has always enforced is that a row flips in the change that gives the
+        // operator a SCREEN — which step 8 is. What is deliberately absent is the
+        // revaluation VOUCHER: the unrealised difference is REPORTED and NOT
+        // POSTED, which the note below says in those words. See the `partial`
+        // paragraph in this file's header for why the row was not split instead.
+        state: "partial",
+        note: "PART BUILT, and the missing part is named. YOU CAN NOW KEY A FOREIGN INVOICE, SETTLE IT, AGE IT AND READ YOUR EXPOSURE, all from the keyboard. WHAT YOU CANNOT DO is post a revaluation of a bill that is still open: that difference is REPORTED AND NOT POSTED (Alt+G > Unadjusted Forex Gain/Loss), and the report and the printed sheet both say so on their face. HOW TO KEY ONE (T8 step 8): press Ctrl+H > Double Entry on a Sales, Purchase, Receipt or Payment — or F7 for a Journal, which is always double entry — and each Dr/Cr line gains a currency box, a foreign amount and an exchange rate. ⛔ THE CURRENCY FIELDS APPEAR ONLY ONCE YOU HAVE DEFINED A CURRENCY (Alt+G > Create Currency); until then the grid is exactly as it was, because three permanently blank boxes on every line of the form you use most is noise. ⛔ AND THEY ARE ON DOUBLE ENTRY ONLY, which is a decision and not an omission: single entry INFERS the other leg and puts the SUM of your particulars on it, so a foreign amount on one particular has no defined relationship to the leg you never keyed — the same reason the TDS/TCS block lives on double entry and nowhere else. Every foreign transaction is expressible in double entry and Ctrl+H reaches it. THE RUPEE AMOUNT STAYS THE AUTHORITATIVE FIGURE and nothing overwrites it: the '= fgn × rate' button beside each line STATES the product if you want it, and an invoice whose rupee figure is a negotiated or contracted number rather than the day's arithmetic is an ordinary invoice — so the form suggests and never decides. A rate is kept to TEN decimals, not the four money uses, because at four a rate like 0.0033333333 becomes 0.0033 and a fifty-lakh invoice moves by thousands. A LINE IS ALL THREE OR NONE — a currency with no rate, or a rate with no amount, is refused BY THE FORM before anything is sent, naming which value is missing, because a half-filled row lets a report compute a plausible wrong number. WHEN YOU SETTLE, the bill picker now shows what the bill is carried at in BOTH currencies and warns you if it is open under two; the exchange difference needs its own line to the gain/loss ledger you choose in the panel at the top of this screen, and the server works the figure out itself and refuses any other — so you cannot post a gain the books do not support, and you cannot post one to a ledger you never chose. ⛔ AND OPENING A FOREIGN VOUCHER TO FIX A TYPO NO LONGER DESTROYS IT ON THE DOUBLE-ENTRY FORM. It did until step 8: the grid rebuilt every line without its currency and the save wrote a rupee voucher over your dollar one, with nothing refusing it — the entry still balanced in rupees and the Balance Sheet did not move by a paisa. WHAT LANDED BEFORE THAT (T8 step 5): REALISED GAIN AND LOSS, over HTTP only, and the refusal that guards it. Settle a foreign bill at a rate different from the one it was raised at and the server now works out the difference itself, from the two rates your books already hold, and REFUSES the voucher unless the exchange difference you posted is the one it derived — naming both figures. ⛔ AND IT REFUSES OUTRIGHT IF YOU HAVE NOT CHOSEN A LEDGER FOR IT: there is a setting for that now (a revenue or expense ledger; a party, bank or cash ledger is refused, because crediting a gain to a customer would make a settled bill show a residue for ever), and until you choose one, a settlement that would realise a difference is refused naming the setting rather than posted somewhere plausible or quietly absorbed. The difference is measured as the rupees the settlement actually moved less the book value it cleared, so a bill settled in parts closes at exactly zero, and a part settlement realises only the part settled. WHAT LANDED SINCE THAT (T8 step 6): OUTSTANDINGS NOW SHOWS A FOREIGN BILL AS FOREIGN, on the screen and on the printed copy. A dollar bill carries its currency and the amount still outstanding IN THAT CURRENCY, in its own column, beside the rupee figure and never instead of it — the rupee figure is the one that ties to Sundry Debtors on your Balance Sheet and it has not moved. A bill brought in on a ledger's OPENING breakup carries the same three values now, which matters if your foreign customers predate this build: until step 6 that bill could not be keyed as foreign at all, so it read as a rupee bill and could not be settled. ⛔ AND A BILL NUMBER OPEN IN TWO CURRENCIES IS SHOWN AS TWO ROWS AND MARKED, never added together: allocating a rupee receipt against a dollar invoice clears the rupee receivable and leaves the dollars uncollected, and adding the two would produce a figure in no currency at all. ⚠️ THE GRAND TOTAL, THE PARTY TOTALS AND THE AGEING BUCKETS STAY IN RUPEES ONLY, on purpose — summing dollars into a rupee total gives a number that foots and means nothing. Money on a party that names no bill (On Account) is shown in rupees with no currency, because it is worked out as your whole balance less every bill on it — many receipts at many rates — and there is no one rate it could honestly be labelled with. WHAT LANDED SINCE THAT (T8 step 7): THE UNADJUSTED FOREX GAIN/LOSS REPORT, on a screen you can reach (Alt+G > Unadjusted Forex Gain/Loss) and on paper. Between raising a foreign invoice and being paid for it the exchange rate moves and your books do not, and that difference was invisible until now: this report lists every open foreign bill — customers AND suppliers, on one page — with what is still owed in its own currency, the rate the bill was raised at, the rate as on the date you ask about, the rupee figure your books carry, and the difference between them. ⛔ THAT DIFFERENCE IS REPORTED AND NOT POSTED. No voucher is created and no ledger balance changes; the figure is what settling the whole remaining balance at that rate WOULD realise, and the screen and the printed sheet both say so in those words. A revaluation voucher is deliberately not built — it could only ever BE a voucher, because postings here are immutable, so nothing about deferring it has to be undone later. ⛔ A BILL WHOSE CURRENCY HAS NO RATE ON FILE IS LISTED AND NOT VALUED, and the report says how many: an exposure nobody can price is still an exposure, and valuing it at a rate of nothing would turn the whole bill into a loss — a large, plausible, correctly-signed figure produced by a rate you never entered. Enter a rate for that date and the row prices itself. The date you ask about does TWO jobs and the screen distinguishes them: it decides which bills are listed AND which rate values them. ⚠️ THE REPORT IS REFUSED TO THE DATA ENTRY LEVEL, both on screen and in print — it is every foreign counterparty, the terms you actually transacted on, and your whole unhedged position in one figure. An owner who disagrees deletes one rule; note that allowing it allows BOTH sides, because a net exposure is not separable into what you are owed and what you owe. ⚠️ WHAT IS STILL MISSING, AND IT IS WHY THIS ROW IS `Part built` RATHER THAN `On`: the REVALUATION VOUCHER. The unrealised difference on an open bill is reported and not posted, so your Profit & Loss carries realised differences only until a bill is settled. That is deferred on purpose and costs nothing to undo later — a revaluation could only ever BE a voucher here, because postings are immutable, and the schema it would need is the schema this build already has. ⛔ ALSO NOT BUILT: GST on an export invoice is untouched, deliberately — the return needs rupees and the rule that fixes WHICH rate a return uses is not cited in this build, so nothing guesses it. WHAT LANDED BEFORE THAT (T8 step 4): the VOUCHER DATA PATH, over HTTP only. A voucher posted through the API can now carry a currency, a foreign amount and a rate on each posting and each bill reference; they are stored, they ride inside the tamper-evident signature, the GET returns them, and an edit that re-saves the voucher no longer destroys them. ⛔ AT THAT POINT NO VOUCHER SCREEN OFFERED A CURRENCY FIELD, and this row was OFF because of it — step 8 is what closed that, and the top of this note is how you key one now. The build order settled settlement, the ageing report and the unadjusted-forex report BEFORE the operator was given the control, because a form that can key a dollar invoice the rest of the product cannot settle or age is worse than no form. It matters today because a foreign voucher can also arrive through an import or from an offline node, and until this landed, opening one and fixing a typo silently turned it into a rupee voucher. WHAT LANDED EARLIER (migration 0080): the SCHEMA. Every posting, bill allocation and opening bill can now carry three values together — the base amount, the foreign amount and the rate — and the database refuses two of the three, because a report can compute a plausible wrong number from a half-filled row. The base amount stays authoritative and is the figure the double-entry check sums, so a multi-currency journal balances in BASE and need not balance in any foreign currency. A rate is stored to TEN decimals and quoted as base units per one foreign unit, which is not the same type as money (money is four) — a rate read as money quantises and a fifty-lakh invoice moves by thousands. Realised gain/loss posts to a ledger you CHOOSE and nothing is auto-created — that is now enforced, as described at the top of this note. The unadjusted-forex REPORT is planned before the revaluation VOUCHER, and until the voucher exists that report will state that it posts nothing.",
+      },
+      {
+        // Split from the row above the day the masters became keyboard-reachable
+        // — the same treatment the offline pair got, and for the same reason: one
+        // row that is half true is worse than two rows that are each wholly true.
+        name: "Currency masters and exchange rates (Alt+G > Create Currency)",
+        state: "on",
+        note: "Alt+G > Create Currency defines a foreign currency — a code, a symbol, a formal name and how many decimals it has — and a rate can be recorded against it for a date. WHAT IT IS FOR: keying a foreign voucher. ⚠️ THIS SENTENCE READ 'nothing you can key' UNTIL T8 STEP 8 and the correction is worth stating rather than quietly deleting — the masters shipped a wave ahead of the voucher work so the schema and the vocabulary were settled before anything wrote to them, and until step 8 no voucher screen offered a currency. One now does: define a currency here and every Dr/Cr line on a double-entry voucher gains a currency box, a foreign amount and a rate (see Multi-currency above). ⛔ THE FIELDS ARE HIDDEN UNTIL A CURRENCY EXISTS, so this screen is the switch that turns them on. ⛔ YOUR OWN BASE CURRENCY IS NOT CREATED HERE and asking for it is refused by name: a base-currency amount is recorded with NO currency at all, so a master for it would be a second way of saying the same thing — and a voucher keyed against it would carry a rate of 1.0 for ever and sit in the forex report showing a difference of zero, indistinguishable from a genuine foreign bill that happens to be flat. A currency may have 0 to 4 decimals, because money is carried to four everywhere in this product and a currency claiming six is one the wire cannot carry; 0 is real and accepted (yen, won). A new currency has NO rate until you enter one, and the list says so with an empty rate rather than a zero — a zero would offer the currency and value the whole invoice at nothing. A rate must be greater than zero, is quoted as BASE UNITS PER ONE FOREIGN UNIT (1 USD = 83.65 INR), and is kept to ten decimals: correcting a rate is safe and changes no posted voucher, because a voucher stores its OWN rate and this table is only consulted for defaults and for the revaluation report. Re-entering a rate for a date you already have REPLACES it. WHAT IS NOT HERE: no rename, no delete and no alter of a currency — this build has no master alter for any master — and no way to remove a rate once entered.",
       },
       {
         name: "Bank reconciliation",
         state: "on",
-        note: "Gateway > Bank Reconciliation. Migration 0045 records the date the bank cleared each voucher leg, and the statement shows balance per books, the un-cleared items with their age, balance per bank, and a difference that must be exactly zero to the paisa. The Bank Date column is the only editable cell: type the date off your bank statement to tick an item off, clear the cell to un-tick it. F4 picks the account when a company has more than one; F2 dates the statement, which matters because reconciliation is normally done in arrears. STATEMENT IMPORT NOW WORKS (Alt+O), AND MATCHING STILL DOES NOT. Point Alt+O at the CSV your bank exports and its rows are stored against the account, with totals in and out; that is T4 slice 2a. MATCHING those rows to your vouchers is slice 2b and is NOT built, so every tick in the Bank Date column is still manual and the keys Tally offers for matching (F8, Alt+F8, Alt+S, F9, plus Ctrl+J and Ctrl+B) all answer 'not built' rather than doing nothing. THE IMPORT ASKS YOU TO CONFIRM HOW YOUR FILE IS READ, and that is the feature rather than a nuisance: this build ships NO built-in layout for any bank, because HDFC, ICICI and SBI all differ and a layout remembered wrongly by one column reads the running balance as the amount — at which point every figure on screen is a real number off a real statement that was never a transaction, nothing looks odd, and you reconcile against it. So the columns are proposed from your file's own header row and you confirm them. Where your file cannot settle a question the import refuses to guess: if every date in it fits both dd/mm and mm/dd, it says so and makes you choose, because picking wrongly moves the whole statement by up to eleven months while every amount stays plausible. FOUR THINGS IT CHECKS AND ONE IT ADMITS IT CANNOT. It walks the running balances to the paisa, so a row your bank's export dropped is REFUSED naming the row rather than imported with a gap; re-importing the same file adds nothing; overlapping statements (1-31 January, then 15 January-15 February) skip the rows already present instead of doubling them; and if you type the account number printed on the statement it is compared against this ledger's and a mismatch is refused, because a statement imported against the wrong account reconciles nothing and leaves two accounts wrong with every line in both still real. The one it admits: a file with no running-balance column CANNOT be balance-walked, and it says the check DID NOT RUN rather than staying silent — a check that did not run must never look like a check that passed. The account number and IFSC are now stored (migration 0064) and shown, and when they have not been typed the screen says 'not recorded' rather than showing an empty field, because a blank labelled field reads as 'this bank has no IFSC'. Note that importing a statement is NOT clerical work: it is your bank's own file of every counterparty you pay, including the rows no voucher exists for — salaries, drawings, the loan repayment — so the seeded Data Entry level is refused both the import and the imported statement, while it is still allowed to tick items off. An owner who disagrees writes one allow rule; a file that has been read cannot be un-read. THE STATEMENT NOW PRINTS (Ctrl+P), for the account you have selected. It was refused for a long time because the print route carried no ledger id and a reconciliation is always for ONE bank account; the route now takes the account explicitly, and a request that does not name one is refused rather than defaulted — printing 'the first bank account' would put a real, correctly rendered statement for the WRONG bank on paper with nothing on the page saying so. The printed statement shows the book balance, the un-cleared items with their age, the bank balance and the difference, says so in bold if it does not reconcile, and marks any item BROKEN by a later alter. Every bank account can be printed in one document by asking for all of them, and that document deliberately carries NO combined total: each statement reconciles to its own bank, and a sum across accounts — one of which may be an overdraft — ties to nothing you can check against a passbook. Note that reconciling never touches a voucher — the bank date lives outside the hash chain, because it is a fact about the bank and not about the voucher — so an ALTER after clearing is reported as BROKEN, with what was originally cleared shown beside the current figure, never silently absorbed.",
+        note: "Gateway > Bank Reconciliation. Migration 0045 records the date the bank cleared each voucher leg, and the statement shows balance per books, the un-cleared items with their age, balance per bank, and a difference that must be exactly zero to the paisa. The Bank Date column is the only editable cell: type the date off your bank statement to tick an item off, clear the cell to un-tick it. F4 picks the account when a company has more than one; F2 dates the statement, which matters because reconciliation is normally done in arrears. STATEMENT IMPORT (Alt+O) AND MATCHING (Alt+S) BOTH WORK NOW. Point Alt+O at the CSV your bank exports and its rows are stored against the account, with totals in and out; that is T4 slice 2a. Alt+S is slice 2b: it lines those rows up against your vouchers and PROPOSES which is which, at Tally's own four tiers — exact, potential, partial, manual. ⛔ IT PROPOSES AND IT NEVER TICKS. Nothing on that screen is reconciled until you accept it, not even an exact match, because the whole value of a bank reconciliation is that a person asserted 'this row IS that voucher' — a matcher that ticks its own guesses produces a reconciliation that attests to nothing and it fails in the direction that foots perfectly: every figure real, the difference zero, and the one wrong link invisible until somebody chases a supplier for a payment your books say cleared. What it does instead is offer to accept every UNAMBIGUOUS EXACT match together, on one key, which saves the typing and not the judgement. ⛔ AND AN AMBIGUOUS ROW IS NEVER CHOSEN FOR YOU. Two suppliers paid ₹25,000 on the same day is ordinary, not exotic, and picking one is right half the time; the row is marked AMBIGUOUS, BOTH vouchers are shown, and it waits. That works in both directions — one bank row wanted by two vouchers, and one voucher wanted by two bank rows, which is the case that is easy to miss because each row looks perfectly unambiguous on its own. AMOUNTS MUST AGREE TO THE PAISA, with no tolerance: a row a paisa out is shown as matching nothing, because it is a bank charge or a different transaction and absorbing it into a tolerance is how a real difference hides for a year. Dates need not agree — a cheque written on the 3rd and cleared on the 9th is one transaction — so candidates are sought within a window either side, and the screen says what that window was and lets you change it. ⚠️ THAT WINDOW IS A SEARCH WIDTH AND NOT A RULE FROM ANYWHERE, and the screen says so rather than dressing a chosen number as a standard; widening it only shows you more proposals, since none of them clears itself. F9 sets a row aside — 'this matches nothing in the books', the bank charge or the standing order no voucher exists for. ⛔ A SET-ASIDE IS NOT A WEAK MATCH: it writes no bank date, moves no balance, and appears on the reconciliation statement not at all. Alt+F8 withdraws a match, and it says what it is doing, because withdrawing a match withdraws the bank date it recorded — un-linking and un-ticking are ONE operation and not two that could drift apart. F8 re-matches, which is that withdrawal followed by choosing again; there is no way to re-point a clearance without first withdrawing the one that exists, and the key says so instead of implying an edit. Ctrl+J is the exception report — what is still unmatched and why, including the vouchers no bank row matches, which is a real category (a cheque written and not yet presented) rather than an error. Ctrl+B states the basis: the tolerance, the window, and what each tier rests on. FOUR THINGS ARE NOT BUILT AND THE SCREEN SAYS SO ON ITS FACE: (1) part payments are found over PAIRS ONLY — a bank row made up of three or more vouchers shows as having no candidate, and the disclosure says 'none found by this search' rather than letting silence read as 'none exists'; (2) nothing creates a voucher from a bank row, which Tally offers and which is a write to your books from an outside file and needs its own design; (3) there is no printed layout for the matching screen; (4) F5's deposits/withdrawals amount-view toggle is still not built and still answers so. Matching is refused to the seeded Data Entry level, and deliberately: the proposals are the bank's own file of every counterparty you pay, including the rows no voucher exists for. That level may still tick items off by hand, which is clerical — and accepting a match goes through the SAME permission and the same route as typing a bank date, so matching can never become a second way to reconcile for somebody refused the first. THE IMPORT ASKS YOU TO CONFIRM HOW YOUR FILE IS READ, and that is the feature rather than a nuisance: this build ships NO built-in layout for any bank, because HDFC, ICICI and SBI all differ and a layout remembered wrongly by one column reads the running balance as the amount — at which point every figure on screen is a real number off a real statement that was never a transaction, nothing looks odd, and you reconcile against it. So the columns are proposed from your file's own header row and you confirm them. Where your file cannot settle a question the import refuses to guess: if every date in it fits both dd/mm and mm/dd, it says so and makes you choose, because picking wrongly moves the whole statement by up to eleven months while every amount stays plausible. FOUR THINGS IT CHECKS AND ONE IT ADMITS IT CANNOT. It walks the running balances to the paisa, so a row your bank's export dropped is REFUSED naming the row rather than imported with a gap; re-importing the same file adds nothing; overlapping statements (1-31 January, then 15 January-15 February) skip the rows already present instead of doubling them; and if you type the account number printed on the statement it is compared against this ledger's and a mismatch is refused, because a statement imported against the wrong account reconciles nothing and leaves two accounts wrong with every line in both still real. The one it admits: a file with no running-balance column CANNOT be balance-walked, and it says the check DID NOT RUN rather than staying silent — a check that did not run must never look like a check that passed. The account number and IFSC are now stored (migration 0064) and shown, and when they have not been typed the screen says 'not recorded' rather than showing an empty field, because a blank labelled field reads as 'this bank has no IFSC'. Note that importing a statement is NOT clerical work: it is your bank's own file of every counterparty you pay, including the rows no voucher exists for — salaries, drawings, the loan repayment — so the seeded Data Entry level is refused both the import and the imported statement, while it is still allowed to tick items off. An owner who disagrees writes one allow rule; a file that has been read cannot be un-read. THE STATEMENT NOW PRINTS (Ctrl+P), for the account you have selected. It was refused for a long time because the print route carried no ledger id and a reconciliation is always for ONE bank account; the route now takes the account explicitly, and a request that does not name one is refused rather than defaulted — printing 'the first bank account' would put a real, correctly rendered statement for the WRONG bank on paper with nothing on the page saying so. The printed statement shows the book balance, the un-cleared items with their age, the bank balance and the difference, says so in bold if it does not reconcile, and marks any item BROKEN by a later alter. Every bank account can be printed in one document by asking for all of them, and that document deliberately carries NO combined total: each statement reconciles to its own bank, and a sum across accounts — one of which may be an overdraft — ties to nothing you can check against a passbook. Note that reconciling never touches a voucher — the bank date lives outside the hash chain, because it is a fact about the bank and not about the voucher — so an ALTER after clearing is reported as BROKEN, with what was originally cleared shown beside the current figure, never silently absorbed.",
       },
       {
         name: "Interest on overdue bills",
         state: "off",
-        note: "Not built. Nothing computes interest on a receivable or payable that is past its due date, and nothing posts it. Outstandings will tell you a bill is 90 days old; it will not tell you what that has cost. The day-count basis and simple-vs-compound are configuration with statutory defaults, and inventing those defaults would be worse than the gap.",
+        note: "Not built. Nothing computes interest on a receivable or payable that is past its due date, and nothing posts it. Outstandings will tell you a bill is 90 days old; it will not tell you what that has cost. ⛔ AND THERE IS NO SINGLE ANSWER TO PASTE IN, WHICH IS WHY IT IS NOT BUILT YET. For a micro or small enterprise supplier the terms are FIXED BY THE MSMED ACT 2006 — compound, monthly rests, three times the RBI Bank Rate (s.16) — and s.24 overrides anything a contract says to the contrary, so they are not ours to offer as settings. For every other party NO STATUTORY RATE EXISTS AT ALL, and a default would simply be invented. One global toggle for the day-count basis and simple-vs-compound would therefore be wrong in both directions at once: it would let an operator vary terms that statute has already fixed, and it would dress a made-up number as a standard everywhere else.",
       },
       {
         name: "Budgets and budget-vs-actual",
-        state: "off",
-        note: "Not built. A budget is a comparison dimension rather than a posting, so it changes no voucher and no balance — which is exactly why it cannot be faked by keying journals: there is no second column for any report to compare an actual against.",
+        state: "on",
+        note: "Budgets on GROUPS, LEDGERS and COST CENTRES, each line measured on either a CLOSING BALANCE (a position as at the plan's end date) or NETT TRANSACTIONS (movement inside the period) — Tally's two bases, both built, and the report prints which one every figure uses. A budget still posts nothing: no voucher, no balance, no hash chain. Unspent budgets, actuals nobody budgeted, and movement that netted to zero are each reported as what they are rather than as a variance of zero, and no percentage is shown against a budget that was never set. FOUR THINGS ARE NOT BUILT AND THE REPORT SAYS SO ON ITS FACE: (1) no pro-rata — the budget column is always the plan's WHOLE period, because comparing it against a shorter window needs a spread rule (straight-line, monthly, seasonal) that nobody has chosen; (2) no revision history — altering a figure overwrites it, so \u201coriginal, revised, actual\u201d is not available as three columns; (3) no grand total when a plan mixes the two bases, deliberately, because a position plus a flow is not a quantity; (4) no printed layout — Ctrl+P answers \u201cnot built\u201d rather than putting a variance statement on paper without those caveats. The report is denied to the seeded Data Entry level (migration 0086) and the budget master is denied to it with no rule at all.",
       },
     ],
   },
@@ -250,17 +303,17 @@ const FEATURES: {
       },
       {
         name: "Payroll statutory (EPF/EPS/EDLI, ESI, salary TDS, pay run)",
-        state: "server",
+        state: "on",
         // This row said "Not built yet." for a release AFTER the engine, the
         // pay-run posting and the three statutory returns had all shipped. That
         // is the understating direction, and it is still a lie: an honesty
         // surface is not allowed to be wrong in the flattering direction either.
-        note: "BUILT AND POSTING, WITH NO SCREEN. The calculation core is pure and deterministic — statutory wages under the Code on Social Security, EPF/EPS/EDLI, ESI, and salary income tax under s.392 — and a pay run posts real balanced double entry through the same ledger core an invoice does (POST .../vouchers/payroll, its own ACL action so a supervisor can withhold what the company pays its staff without withholding journals). Five statements come off it: the Payroll Register, a Payslip, Form 138 (ex-24Q), the PF ECR and the ESI return. There is NO payroll screen and Ctrl+F4 does not open one, so an operator cannot key a pay run here — only an integrator over HTTP. TWO DISCLOSURES THAT COST REAL MONEY. (1) THE EDLI PREMIUM IS NOW BOOKED — 0.50% of EDLI wages with effect from 29 June 2026, under S.O. 3581(E) dated 1 July 2026, ceiling-capped so it is at most Rs 75 per member per month. It was refused until that notification was identified, and the reason it was so hard to find is worth knowing: the rate is NOT in the EDLI Scheme itself, whose para 5(1)-(2) leaves it to a separate notification decided on actuarial valuation, so reading the Scheme finds no rate at all. The row is marked MEDIUM confidence, not HIGH: the notification was read through secondary reporting, no primary Gazette text could be retrieved here, and 0.50% is in any case the superseded 1976 Scheme's rate carried forward unchanged. WHAT IS STILL REFUSED is both EPF and EDLI ADMINISTRATIVE CHARGES: no standalone rate notification exists for either under the 2026 Schemes, so the engine defers them rather than inventing a number. They are PENDING, NOT ABOLISHED — the EPF Scheme 2026 para 29(2) caps a late-return fee at 'the administrative charges payable for the relevant month', which only makes sense if the charge exists — so an amount that was Rs 500 per establishment per month under the old Scheme is accruing unbooked, and you must accrue it yourself until a rate is notified. Each pay run names it in its deferrals. Do NOT let anyone substitute S.O. 2701(E) of 29 May 2026 for it: that sets INSPECTION charges for exempted establishments, a different levy. (2) No output here has been through the NSDL/Protean FVU, the EPFO portal or the ESIC portal — none of them is reachable from this build. The files are GENERATED, not validated.",
+        note: "THE SCREENS ARE HERE. Gateway > Employees creates a person and (Alt+S) gives them the salary structure and statutory election WITHOUT WHICH NOBODY CAN BE PAID; Ctrl+F4 or Gateway > Pay Run posts a whole wage month; Gateway > Payroll Register reads it back, prints, exports, drills into a payslip with Enter, and produces the EPFO ECR and the ESIC return with Alt+S; Gateway > Form 138 builds the quarterly salary-TDS statement. ⛔ AND THE TWO ROUTES THAT MADE ALL OF THAT POSSIBLE DID NOT EXIST BEFORE THIS RELEASE: `SetSalaryComponent` and `SetStatutoryElection` shipped with the engine and had no HTTP surface at all, so an employee created over the API could never be paid — every pay run answered 422 (\'no statutory election is in force\'), and every payroll test set both up by calling the Go service directly, which is exactly why a green suite never noticed. The calculation core is pure and deterministic — statutory wages under the Code on Social Security, EPF/EPS/EDLI, ESI, and salary income tax under s.392 — and a pay run posts real balanced double entry through the same ledger core an invoice does (POST .../vouchers/payroll, its own ACL action so a supervisor can withhold what the company pays its staff without withholding journals). Five statements come off it: the Payroll Register, a Payslip, Form 138 (ex-24Q), the PF ECR and the ESI return. WHAT IS STILL MISSING FROM THE SCREENS, stated because a capability page that lists only what works teaches nobody anything: (a) THE PAY RUN TAKES NO PER-EMPLOYEE ATTENDANCE OR DECLARATIONS. The route accepts paid days, loss-of-pay days, prior-employer salary and TDS, a house-property loss, Chapter VI-A deductions, other declared income, non-residence and an age band — and the screen sends NONE of them, so every run is a full month with no declarations. It sends an EMPTY selection rather than a row per employee, which is deliberate: a non-empty `inputs` is also the SELECTION, so a client that sent rows for the employees it happened to have loaded would silently leave anybody else out of the run. That is a missing feature rather than a wrong figure, which is the right side of that line. (b) NOTHING ALTERS OR REVERSES A POSTED PAY RUN. `AlterPayRunVoucher` and `ResumePayRun` exist in the service and neither is mounted, so a month posted wrongly can only be corrected as an ordinary voucher. Re-running it answers `already_posted` and writes nothing — which the screen says out loud, because read as a fresh posting it would tell an operator a correction took effect when the stored run is the earlier one. TWO DISCLOSURES THAT COST REAL MONEY. (1) THE EDLI PREMIUM IS NOW BOOKED — 0.50% of EDLI wages with effect from 29 June 2026, under S.O. 3581(E) dated 1 July 2026, ceiling-capped so it is at most Rs 75 per member per month. It was refused until that notification was identified, and the reason it was so hard to find is worth knowing: the rate is NOT in the EDLI Scheme itself, whose para 5(1)-(2) leaves it to a separate notification decided on actuarial valuation, so reading the Scheme finds no rate at all. The row is marked MEDIUM confidence, not HIGH: the notification was read through secondary reporting, no primary Gazette text could be retrieved here, and 0.50% is in any case the superseded 1976 Scheme's rate carried forward unchanged. WHAT IS STILL REFUSED is both EPF and EDLI ADMINISTRATIVE CHARGES: no standalone rate notification exists for either under the 2026 Schemes, so the engine defers them rather than inventing a number. They are PENDING, NOT ABOLISHED — the EPF Scheme 2026 para 29(2) caps a late-return fee at 'the administrative charges payable for the relevant month', which only makes sense if the charge exists — so an amount that was Rs 500 per establishment per month under the old Scheme is accruing unbooked, and you must accrue it yourself until a rate is notified. Each pay run names it in its deferrals. Do NOT let anyone substitute S.O. 2701(E) of 29 May 2026 for it: that sets INSPECTION charges for exempted establishments, a different levy. (2) No output here has been through the NSDL/Protean FVU, the EPFO portal or the ESIC portal — none of them is reachable from this build. The files are GENERATED, not validated.",
       },
       {
         name: "GSTR-9 annual return",
-        state: "off",
-        note: "Not built. It is a RECONCILIATION of the year's GSTR-1 and GSTR-3B to the books rather than a fresh derivation, so it must be able to state where the three disagree instead of smoothing it — which is why it is not a report we can generate by summing twelve months and calling it done.",
+        state: "on",
+        note: "Gateway of Tally > GSTR-9, or Alt+G. ⛔ IT IS A RECONCILIATION WORKPAPER AND IT IS NOT FILING-READY — every response says so, in ten separate disclosures headed `not-filing-ready`, and the screen prints all of them ABOVE the figures. Read that list before anything else on the page. WHAT IT ACTUALLY DOES, which is the useful part: it runs the year's twelve GSTR-1s and twelve GSTR-3Bs month by month and sets them against the POSTINGS on the tax ledgers — three independently-computed views of the same year (GSTR-1's section classifier, GSTR-3B's own SQL, and the `posting` table), plus a fourth over the per-line HSN detail — and reports where they disagree. ⭐⭐ THE ONE DESIGN DECISION WORTH KNOWING: AN ANNUAL NET DIFFERENCE IS A LIE, because twelve months added up CANCEL. A company that over-declared 40,000 of IGST in May and under-declared 40,000 in September has an annual net of ZERO — every figure foots, and the return is silently wrong about the one thing it exists to say. So no difference is ever reported as a net alone: a GROSS divergence (the sum of the monthly differences, which cannot cancel) sits beside every net, and when the months offset, the report says so and NAMES them. WHAT IS NOT BUILT, and it is most of the form: ELEVEN OF THE FOURTEEN STATUTORY TABLES ARE NOT DERIVED, each stated with the input it is missing rather than emitted as zero — table 5 and rows 4C-4E (these books carry no export, SEZ, deemed-export, nil-rated or exempt marker), table 4F (advances are not modelled), tables 10-14 (return-side amendments are not modelled and the next year's returns are outside the window), table 8 (the department's own annual GSTR-2A is not held, and 8D is 8A minus 8B, so reporting it as zero would assert agreement with a statement never read), tables 9/14/19 (there is no electronic cash or credit ledger and no GST challan register, so what was PAID is not known), table 15 (departmental data), table 16 (no job-work register), and table 18 (per-line detail for purchases IS recorded but nothing rolls it up yet). ⛔ TABLE 7 — ITC REVERSED — IS THE ONE TO UNDERSTAND: the twelve 3Bs behind the year run with no inward statement, so nothing was matched against what suppliers filed, and a ZERO there would assert the taxpayer reversed NOTHING when the truth is that nothing was checked. It is NOT DERIVED instead. Table 4 is partly derived and its 4N TOTAL IS SUPPRESSED, with the reason printed where the figure would be: it totals rows five of which are not derived, and a total over a set with known-missing members is an understatement that foots. Tables 6 and 17 are the rest of what works. ⚠️ NOTHING HERE HAS BEEN CHECKED AGAINST THE CBIC NOTIFICATION OR THE GSTN ANNUAL UTILITY — the table numbering was written from the return's published structure, RESEARCH.md contains no GSTR-9 material at all, and the portal is geo-fenced from this build so it could not be verified. It does not print (Ctrl+P answers 501): on screen the disclosures sit beside the figures, and on paper a tidy annual return on company stationery with nowhere for ten caveats is a document somebody hands to a tax officer. The seeded Data Entry level is REFUSED it (migration 0087) — it is a whole year of turnover and input credit plus the months this company may have mis-filed — and the screen renders that refusal as the decision it is. ⚠️ AND IT REFUSES TWO THINGS ITS MONTHLY SIBLINGS ACCEPT: a window that is not a financial year (there is no GSTR-9 for June to August), and a request with the six tax ledgers unset (the books column would read zero for all twelve months and every period would look wrong by exactly the tax charged — twelve findings that are all artefacts of a missing setting).",
       },
     ],
   },
@@ -285,7 +338,7 @@ const FEATURES: {
       {
         name: "Stock Summary (closing quantity AND value)",
         state: "on",
-        note: "Gateway > Stock Summary. NO STOCK VALUE IS EVER STORED: quantity is posted, and value is DERIVED at report time by replaying the movement ledger through a weighted-average valuer. That is why altering an April invoice changes the July closing value with no reversal code anywhere. DENIED to the Data Entry level by default, because the closing valuation rate is what the business PAID — an Owner can lift that in Users & Roles.",
+        note: "Gateway > Stock Summary. NO STOCK VALUE IS EVER STORED: quantity is posted, and value is DERIVED at report time by replaying the movement ledger through the valuer EACH ITEM'S OWN COSTING METHOD names — weighted average unless you switch it, and since migration 0078 either FIFO or LIFO instead. ⛔ SO ONE REPORT CAN CARRY THREE DIFFERENT VALUERS AT ONCE, one item each, and two item totals on the same page are then not on a common basis. That is why the method is printed against every item rather than stated once at the top: a Stock Summary that shows values and not the basis is a report whose figures cannot be reproduced or compared, and nothing on the page would say so. Switching an item's method is a RESTATEMENT and not an edit — it moves that item's closing stock, its cost of goods sold and therefore the Profit & Loss, on figures that were already printed and read — so it has its own route and its own audit row instead of being a field on a general master editor. And it is the same reason altering an April invoice changes the July closing value with no reversal code anywhere. DENIED to the Data Entry level by default, because the closing valuation rate is what the business PAID — an Owner can lift that in Users & Roles.",
       },
       {
         name: "Negative stock",
@@ -294,8 +347,8 @@ const FEATURES: {
       },
       {
         name: "FIFO / LIFO / batch-wise valuation",
-        state: "off",
-        note: "Not built. v1 values everything at WEIGHTED AVERAGE (Tally's default) behind a valuer interface whose state is a strict subset of what FIFO needs, so FIFO is a new arm plus fixtures rather than a schema change. An item whose valuation_method names an unimplemented valuer FAILS LOUDLY rather than being quietly valued at average under a FIFO heading.",
+        state: "on",
+        note: "THREE COSTING METHODS, CHOSEN PER ITEM: Avg. Cost (Tally's default, and still this build's), FIFO, and LIFO PERPETUAL. Choose it when you create the item (Alt+G > Create Stock Item, Costing method) or change it later with Alt+V on the Stock Summary; the picker is served by the server, so it can never offer a method the reports cannot value. The Stock Summary has a BASIS column and the printed report names each item's basis whenever a company holds more than one — because the same three movements close at 1,700 under FIFO, 1,600 under LIFO and 1,650 at average, so a stock value printed without its basis cannot be compared with the line above it. ⛔ CHANGING THE METHOD IS A RESTATEMENT, NOT AN EDIT, and the screen says so before you press the key: no valuation figure is stored anywhere, so the item's WHOLE history is re-valued — including periods that have already been reported, printed and filed. Switching back reproduces the earlier figures exactly, which is the one comfort available: nothing was lost because nothing was stored. It is an `alter master` write, so it inherits the back-dated-entry cutoff and the passkey step-up like any other, and it writes a master_audit row naming both methods — the only record of why a period's closing stock moved. ⚠️ BATCH-WISE IS NOT A FOURTH METHOD and never was: a batch is a DIMENSION of the position key (item, godown, batch), so every method already values each batch as its own layered queue, and the same item in two godowns carries two independent cost histories under all three. ⚠️ WHAT NEGATIVE STOCK DOES TO FIFO, stated because it is the one case where the answer is not a FIFO answer: an issue with no layer left to draw on consumes only what was actually there — never a cost invented from the sale price — and the layer history is then GONE, because FIFO cannot say which receipt a unit that was never received came from. The next receipt into that position rebuilds ONE blended layer. WHAT IS DELIBERATELY REFUSED: the five other TallyPrime methods. At Zero Cost silently zeroes closing stock; Last Purchase Cost and Standard Cost need a price the movement ledger does not carry; Monthly Avg. Cost needs a period boundary a replay has no notion of; and LIFO ANNUAL costs an April issue at a purchase made the following March, so no figure could be stated until the year closed and every interim Profit & Loss would be restated by the next purchase keyed. An item naming any of them is refused AT THE MASTER — not at the report, which would fail for the whole company, every other item included.",
       },
       {
         name: "Inventory vouchers (Delivery Note, Receipt Note, Stock Journal, Physical Stock)",
@@ -321,8 +374,15 @@ const FEATURES: {
       },
       {
         name: "Stock groups and compound units (Box of 12)",
-        state: "off",
-        note: "Not modelled. Stock items are flat and units are simple symbols with no conversion.",
+        state: "on",
+        // This row read "Not modelled. Stock items are flat and units are simple
+        // symbols with no conversion." and BOTH halves of that were true when it
+        // was written. Under the doc comment above, it flips in the change that
+        // gives the operator the KEYS — Alt+G > Create Stock Group, and a base
+        // unit + conversion factor on Alt+G > Create Unit — not in the change
+        // that added the tables. Migration 0079 and both routes shipped in the
+        // same commit as the screens, so the row never had to be wrong twice.
+        note: "TWO THINGS, AND THEY MEET ON THE STOCK SUMMARY. (1) STOCK GROUPS: Alt+G > Create Stock Group builds the item hierarchy — a name and, optionally, a parent, nested as deep as you like — and an item is filed into one on its own master form (Alt+G > Create Stock Item, Stock group). The Stock Summary then prints a subtotal table above the item list: one line per group in tree order, indented by depth, with everything ungrouped in its own named bucket. ⛔ A GROUP SUBTOTAL IS THE WHOLE BRANCH, so \"Provisions\" INCLUDES \"Provisions > Grains\" — which is the only thing that makes a branch total worth reading, and exactly what makes the column impossible to add up. THE GROUP LINES OVERLAP AND MUST NOT BE ADDED: the company's closing stock is the Stock-in-Hand line, never the sum of that table, and the table says so underneath itself, where a reader would otherwise reach for a calculator. ⚠️ A STOCK GROUP IS NOT AN ACCOUNTING CLASSIFICATION — every item in every group lands in the same Stock-in-Hand asset, so a group carries no nature and no group decides which statement a figure appears on. It decides how the Stock Summary is SUBTOTALLED and nothing else. (2) COMPOUND UNITS: Alt+G > Create Unit takes a base unit and a conversion factor, so 1 BOX = 12 Nos, and the Stock Summary carries a base-unit column beside the closing quantity. ⛔ THE QUANTITY IS STORED IN THE ITEM'S OWN UNIT AND NEVER IN THE BASE: four boxes are stored as 4 BOX, the invoice says 4, and \"48.0000 Nos\" is a DERIVED column recomputed on every read. That is the whole design, and the consequence is the reason for it: correcting a conversion factor that was keyed wrongly changes no voucher, no quantity and no balance — only the restated column moves — where a build that multiplied on the way IN would have to rewrite every movement and could not tell which ones it had already done. A simple unit prints an em dash in that column rather than a zero, because a zero in a quantity column is a claim about the goods. BOTH SURVIVE A TALLY IMPORT: STOCKGROUP masters arrive with their hierarchy (a parent that appears after its child is deferred and resolved, and a group that already exists is never re-parented), and a unit Tally marks ISSIMPLEUNIT=No arrives with its base and its factor — while a compound unit whose export carries no usable base or conversion is imported as a SIMPLE symbol and SAYS SO in the import warnings, rather than being guessed at a factor of 1, which would silently declare that a box holds one piece. WHAT IS REFUSED: a CHAIN — a base unit that is itself compound, Tally's PALLET of 20 BOX of 12 Nos — because a conversion that resolves one level of two is wrong by the second factor and would be printed as confidently as any other number; HALF a conversion (a base with no factor, or a factor with no base), refused on the form before the request is sent, again in the service, and by a CHECK constraint behind both; and an item naming a stock group that does not exist, which is refused rather than minted, because a group created from a misspelling subtotals half a company's stock under a name nobody meant. WHAT IS NOT HERE: no rename, re-parent or delete of a stock group, and no way to move an item to a different group after it is created — both are master ALTERs and this build has none for either master, so a mis-filed item is corrected by creating it again; and the group subtotals are ON THE SCREEN ONLY — the exported and printed Stock Summary carries the base-unit column but not the group table, so what you export is the item list you had before.",
       },
       {
         name: "Closing stock on the Balance Sheet",
@@ -346,6 +406,35 @@ const FEATURES: {
         name: "Ask your books — plain-English queries",
         state: "on",
         note: "Gateway > Query. Natural language compiles to a closed query DSL, then to parameterized, read-only, tenant-scoped SQL.",
+      },
+      /**
+       * W2 — THE AGENT. `partial` AND NOT `on`, and each of the three named gaps
+       * is a reason on its own. What IS driven from the keyboard: Ctrl+K opens the
+       * side panel (start a run, watch its steps, cancel it); Gateway > Approval
+       * Inbox and Alt+G reach the inbox (Ctrl+A approve, Alt+X reject, Alt+B ask
+       * back, over the server's ledger-effect diff); Enter opens a payment,
+       * receipt, contra or journal proposal in the NATIVE F-key screen, where
+       * Ctrl+A approves the operator's edited version. ⛔ It would be `off` with
+       * better marketing to call this `on` while the shipped server has no model:
+       * the default deployment answers every start with AGENT_UNCONFIGURED.
+       */
+      {
+        name: "Agent — side panel (Ctrl+K) and Approval Inbox",
+        state: "partial",
+        note:
+          "Ctrl+K opens the agent panel: say what to do, paste any untrusted text (a bank line, a WhatsApp forward) with where it came from, tick what you hand over (nothing is ticked by default), and watch the steps the server records. Nothing the agent does reaches the books without a person: every write it wants waits in Gateway > Approval Inbox (also Alt+G), which shows WHY a human is being asked in the policy's own words, flags any value copied verbatim from untrusted input, and shows the LEDGER EFFECT the server's real voucher handler produced in a preview it then rolled back. Ctrl+A approves as previewed, Alt+X rejects, Alt+B asks the agent back with a question. Enter opens a Payment, Receipt, Contra or Journal proposal in the ordinary F5/F6/F4/F7 screen, prefilled — edit it there and Ctrl+A approves YOUR version, through the same validators; the agent never draws a voucher form of its own. Approving posts nothing by itself: the agent commits afterwards, exactly once, and the panel shows the commit. " +
+          "WHAT IS NOT THERE: (1) no agent model is configured in the shipped server (LLM_PROVIDER unset), so starting a run says so and no new proposal can appear until one is; (2) a Sales, Purchase, Credit Note or Debit Note proposal can be approved or rejected from its diff but NOT edited — its F-key form is the GST invoice, which re-derives the tax, and Tally's 'As Voucher' mode is not built; (3) the agent can now propose voucher ALTERATIONS (as a new version that supersedes the old, with a before/after diff), a generated REVERSAL to undo a voucher, ledgers and stock items (a ledger it creates is BORN BLOCKED until a person unblocks it in Gateway > Agent Settings), the four stock vouchers, sales/purchase orders and bank-reconciliation ticks — but not ledger alterations (the product has no human screen for one yet), reminders, GST filings, deletes or anything that changes who may do what; (4) Gateway > Agent Settings (also Alt+G) is where an Owner sets how much it may do without asking, always with a passkey — and a level there never removes a person the policy requires.",
+      },
+      /**
+       * W4 — THE INSIGHT ENGINE (d125). `partial`, because the deterministic
+       * half is built and the model half is not, and the note names both.
+       */
+      {
+        name: "Insights inbox and morning digest",
+        state: "partial",
+        note:
+          "Gateway > Insights (also Alt+G). Fifteen kinds of finding, all computed by fixed rules over your books — no model decides what is an insight or how much it is worth. When a voucher is saved: credit limit crossed, a supplier bill entered twice, place of supply not matching the customer's GSTIN state, a GST rate that differs from the item master for that HSN, an e-way bill needed. Every night after 02:00 IST: a customer paying slower than their own usual, a supplier missing from your GSTR-2B (ITC at risk), supplier price creep, a customer overdue for their usual reorder, reorder-now and dead stock, cash going negative inside 13 weeks, last month's GST payable, TDS not deposited, and back-dated entries by user. EVERY FIGURE IS RE-DERIVED FROM THE BOOKS BY A READ-ONLY QUERY BEFORE IT IS SHOWN, and a finding whose query does not reproduce it to the paisa is not stored; V on an insight re-runs that query now. Tab then Enter opens the vouchers behind it. U / N / W record useful / not useful / wrong — 'wrong' is what lowers a kind's standing, and a kind that is wrong too often stops reaching the digest; S suppresses a kind. D shows today's digest: at most five items, ranked by rupee impact, how often that kind is right, whether you can act on it, whether you have already seen it, and how you have rated it. " +
+          "WHAT IS NOT THERE: (1) no model narrates the digest in the shipped server (LLM_PROVIDER unset), so it uses fixed sentences — and when a model is configured, any digit, number word or unknown figure it writes is refused and the fixed sentence is shown instead; (2) the model-backed kinds are not built: predicted-late invoices, expected pay dates, reorder by BG/NBD, cross-sell, festival uplift, and a p10/p90 cash range (the 13-week path is the plain open-bill projection); (3) no early-payment-discount or vendor-bank-change finding — no bill here carries discount terms and no ledger alteration path exists; (4) WhatsApp delivery of the digest is not built — it lives here, in the app; (5) credit limits are set when a party is created over the API (credit_limit) — the ledger form has no field for it yet.",
       },
       /**
        * ⛔ ONE ROW BECAME TWO, AND THE SPLIT IS THE HONEST PART.
@@ -434,7 +523,7 @@ const FEATURES: {
       {
         name: "Printed statements (PDF) — Trial Balance, Balance Sheet, P&L, Day Book, Outstandings, Stock Summary, Payroll Register, Payslip, Bank Reconciliation",
         state: "on",
-        note: "Ctrl+P on the report. Nine statements print; SEVEN of them have a screen here (Trial Balance, Balance Sheet, P&L, Day Book, Outstandings, Stock Summary, Bank Reconciliation) and the two payroll ones are server-only, because there is no payroll screen to press the key on. The Bank Reconciliation Statement is the one that needs to be told WHICH bank account, and it refuses rather than picking one — see the banking group above. EVERY OTHER REPORT NAME RETURNS 501 NOT IMPLEMENTED — Cash Flow, the anomaly list, GSTR-1, GSTR-3B, the reconciliation queue, the four inventory reports at other grains, ITC reconciliation and the IMS inbox are all readable on screen and none of them prints; pressing Ctrl+P on one shows that 501 rather than appearing to work. A 501 is deliberate: a print route that quietly returned an empty page would be worse. TWO THINGS WORTH KNOWING. Printing asks the SERVER for the statement, so a screen you have filtered with Ctrl+F or narrowed with F12 still prints in full — Alt+E export is the one that writes what is on screen; and on a drill-down Ctrl+P prints the PARENT statement, because that is all the route offers, and it says so when it does. Printing is its own ACL action, distinct from displaying, so a level may be allowed to READ a statement and refused permission to PRINT it — the seeded Data Entry level is granted no report-print rule at all, so it is refused every one of them, and the refusal is now visible instead of silent. Because printing is not a write it does NOT inherit the back-dated-entry cutoff or the WebAuthn step-up: reading your own books, even onto paper, never asks for a second factor.",
+        note: "Ctrl+P on the report. Nine statements print and ALL NINE now have a screen to press the key on — the two payroll ones (the Payroll Register and the Payslip) were server-only for want of a screen, and both have one: Alt+G > Payroll Register prints the month on screen, and Enter on a row opens the payslip, which prints the document an employee is handed. ⛔ Note what travels with each: the register sends the WAGE MONTH and the payslip sends the month AND the employee, both taken from what was actually LOADED rather than what was typed — printing a month that was typed but never fetched would put a document on paper that does not match the page it came from. The Bank Reconciliation Statement is the one that needs to be told WHICH bank account, and it refuses rather than picking one — see the banking group above. EVERY OTHER REPORT NAME RETURNS 501 NOT IMPLEMENTED — Cash Flow, the anomaly list, GSTR-1, GSTR-3B, the reconciliation queue, the four inventory reports at other grains, ITC reconciliation and the IMS inbox are all readable on screen and none of them prints; pressing Ctrl+P on one shows that 501 rather than appearing to work. A 501 is deliberate: a print route that quietly returned an empty page would be worse. TWO THINGS WORTH KNOWING. Printing asks the SERVER for the statement, so a screen you have filtered with Ctrl+F or narrowed with F12 still prints in full — Alt+E export is the one that writes what is on screen; and on a drill-down Ctrl+P prints the PARENT statement, because that is all the route offers, and it says so when it does. Printing is its own ACL action, distinct from displaying, so a level may be allowed to READ a statement and refused permission to PRINT it — the seeded Data Entry level is granted no report-print rule at all, so it is refused every one of them, and the refusal is now visible instead of silent. Because printing is not a write it does NOT inherit the back-dated-entry cutoff or the WebAuthn step-up: reading your own books, even onto paper, never asks for a second factor.",
       },
       {
         name: "Export a report (Alt+E — CSV, or Excel XML)",
@@ -470,36 +559,159 @@ const FEATURES: {
           "the file still written. A control that lies is worse than an absent one. Export follows " +
           "the DISPLAY permission: bytes the server has already handed over are already disclosed.",
       },
+      // ⛔ THIS WAS ONE ROW READING "Export: e-mail a document, and export to
+      // PDF — Not built", AND IT IS NOW TWO. PDF export shipped (B1); e-mail did
+      // not, and it needs a PRODUCT DECISION before any code — see its row.
+      // Flipping the joint row to `on` would have claimed e-mail works, which is
+      // the exact failure this screen exists to prevent, so it was SPLIT the way
+      // the backup / split-company row was.
       {
-        name: "Export: e-mail a document, and export to PDF",
-        state: "off",
+        name: "Export to PDF (Alt+E)",
+        state: "on",
         note:
-          "Not built, and stated separately rather than folded into the row above so that row can " +
-          "be honest. Tally's own Alt+E also mails a document and writes PDF; this build does " +
-          "neither. ⚠️ Ctrl+P DOES produce a server-rendered PDF of a voucher, which is the nearest " +
-          "thing that exists — it is a different key, a different path and a per-document layout, " +
-          "not a report export. Tally XML IMPORT is a separate, built thing; these two rows are " +
-          "about getting data OUT.",
+          "F12 on a report offers 'Export (Alt+E) as PDF' and Alt+E then SAVES the server-rendered " +
+          "document as a file. ⛔ AND IT IS NOT THE ROWS ON SCREEN, which is the one thing to know " +
+          "about it: Alt+E's other two formats write exactly what is displayed, after Ctrl+F and " +
+          "F12 have been applied, whereas the PDF comes from the print route and is the WHOLE " +
+          "statement. They are two different documents under one key. Rather than pick one meaning " +
+          "and hope, the F12 row says so in its label and the status line after the export NAMES " +
+          "the narrowing that was not honoured — 'your Ctrl+F filter \"ACME\" was NOT applied' — " +
+          "because an operator who filters to one party and exports must not send a customer the " +
+          "whole ledger believing it was filtered. ⛔ IT IS OFFERED ONLY WHERE A LAYOUT EXISTS: ten " +
+          "of the thirty report names have one, the other twenty answer an honest 501, and a format " +
+          "that fails AFTER being chosen is a menu item that lies. Which ten is not a list anybody " +
+          "maintains here — internal/server generates it by asking the router, and the frontend " +
+          "reads that golden, so the two cannot drift. On a report with no layout the F12 panel " +
+          "says which report and why instead of silently lacking a row. ⚠️ Ctrl+P is still the way " +
+          "to PRINT: it opens the same document in a tab where the browser's print command lives. " +
+          "Same bytes, same route, different verb. JPEG and HTML export are still not built.",
       },
       {
-        name: "Per-company print templates (logo, address block, footer, declarations)",
-        state: "off",
-        note: "Not built as a UI. The default document layout lives in CODE, so a company created a minute ago prints correctly with zero configuration rows — and the per-company override table holds only DIFFERENCES from it. Nothing in this application yet writes an override, so every company prints the built-in layout.",
+        // ⛔ THE NAME CARRIES THE MECHANISM, AND THAT IS NOT OPTIONAL. This row
+        // reads "On" and THIS PRODUCT STILL DOES NOT SEND MAIL — there is no SMTP
+        // anywhere and internal/notify is untouched. A bare "E-mail a document —
+        // On" would be read as an SMTP feature by everybody, which is the exact
+        // class of half-truth this screen exists to prevent. So the badge is
+        // earned by the key, and the title says what the key actually does.
+        //
+        // ⚠️ "Export:" IS GONE FROM THE NAME ON PURPOSE. E-mail is NOT one of
+        // Alt+E's formats and never was in Tally either — the TallyPrime top menu
+        // carries `E: Export` and `M: E-mail` as two separate entries
+        // (RESEARCH.md:361). It shipped as its own key, so it is named as its own
+        // feature. "e-mail this document" was removed from UNBUILT_FORMATS in the
+        // same change.
+        name: "E-mail a document (Alt+M — opens your mail client)",
+        state: "on",
+        note:
+          "Alt+M on any document or report that prints. It SAVES the server's PDF to your " +
+          "downloads and then opens YOUR OWN mail client on a draft with the subject and a short " +
+          "covering note already filled in. ⛔ IT IS TWO STEPS AND THE SECOND ONE IS YOURS: a web " +
+          "page cannot put a file on a mail draft — there is no such field in the mailto: scheme " +
+          "and no browser implements one — so YOU MUST ATTACH THE SAVED PDF BEFORE YOU SEND. The " +
+          "status line names the file and says so, and the draft's body deliberately never claims " +
+          "the document is attached, because at the moment it opens it is not. ⛔ AND THE DRAFT " +
+          "HAS NO RECIPIENT: there is no party e-mail address anywhere in this product (measured " +
+          "over the whole schema — the only e-mail columns are the operator's own login, a " +
+          "company invitation, and the company's TDS contact), so there is nothing to prefill and " +
+          "you pick the address from your own address book. Storing one against a ledger is a " +
+          "separate piece of work. ⛔ THIS PRODUCT STILL DOES NOT SEND MAIL, and that is the " +
+          "decision rather than a gap: nothing here talks to a mail server, so there is no " +
+          "deliverability story, no bounce handling and nothing that can silently fail to arrive " +
+          "— the message is in your own Sent folder, sent by your own client. ⛔ WHAT EXISTS: " +
+          "internal/notify is a real durable transactional outbox — Enqueue runs INSIDE the " +
+          "caller's transaction, so rolling back an invite rolls back its notification with it — " +
+          "with at-least-once delivery, a lease and status transitions. It is good, and it is not " +
+          "the missing piece. ⛔ WHAT DOES NOT EXIST IS A TRANSPORT AND A DECISION. There is no " +
+          "SMTP sender at all: the only Sender is LogSender, whose comment is deliberate — real " +
+          "SMTP is configuration, not code, and a log line is the honest statement that this " +
+          "deployment does not send mail. There is exactly one message Kind (a company invite) and " +
+          "no attachment concept: a Message carries a recipient, a subject and a body, so a PDF is " +
+          "not representable. ✅ THAT QUESTION IS ANSWERED AND IT WAS NOT AN ENGINEERING ONE: " +
+          "'e-mail a document' means handing the operator's own mail client a draft with the PDF " +
+          "already saved, NOT this product sending mail. That is what shipped. It needs no " +
+          "transport, no deliverability story and no bounce handling, and it is what a good deal " +
+          "of accounting software actually does. ⚠️ ONE CORRECTION TO HOW IT WAS PLANNED: the " +
+          "draft is pre-SUBJECTED but NOT pre-ADDRESSED, because no party e-mail address is " +
+          "stored anywhere — see above. ⛔ WHAT MUST NOT HAPPEN IS A HALF-SEND: notify's own rule is that " +
+          "nothing in it calls 'delivered to nobody' a send — an addressless message is settled as " +
+          "a terminal FAILURE carrying a reason, never as sent, because returning nil was once " +
+          "read as success and it cost a bug. A document e-mail that logged and reported 'sent' " +
+          "would re-introduce exactly that.",
+      },
+      {
+        // ⛔ THE WORD "logo" IS GONE FROM THIS NAME, AND ITS ABSENCE IS THE
+        // DECISION. This row used to promise "logo, address block, footer,
+        // declarations". Three of those four are columns in print_template. A
+        // LOGO IS NOT: there is no image storage anywhere in this product — no
+        // column, no object store, no upload route — so a logo is not one field
+        // short of shipping, it is a different feature with a storage decision
+        // behind it. Shipping the three and leaving the fourth advertised is the
+        // precise failure this screen exists to prevent, so the name states what
+        // exists and the note states what does not.
+        name: "Per-company print templates (letterhead, declaration, terms, signature, bank block)",
+        state: "on",
+        note: "Gateway of Tally > Print Templates. Pick a document kind and set what it says: the title, the letterhead lines under the company block, the declaration, the terms, the signature label and the bank block. A field left EMPTY prints the built-in default, which the form shows beneath the box — so a company that changes nothing still prints a correct Rule 46 invoice, and an empty box never means 'this company has no declaration'. Clearing a customisation is a separate action that REMOVES the row rather than blanking it, because a blank row still counts as a customisation and would leave the company unable to say it is back on the built-in layout. ⛔ THE FORM IS BUILT FROM A GENERATED ARTEFACT AND NOT FROM A LIST: the eight document kinds do NOT honour the same fields — a REPORT reads only the title and the letterhead lines, and ignores the declaration, terms, signature label and bank block, because printing 'Authorised Signatory' under a Trial Balance would imply a certification nobody gave. The server refuses a field the document cannot print rather than storing a value that would never appear, and which fields those are is MEASURED by rendering each kind twice per field and comparing the PDF bytes. ⚠️ NO LOGO, and that is a storage decision rather than an oversight: this product has no image storage of any kind, so there is nowhere to put one and nothing in the PDF renderer that would draw it. ⚠️ AND A DOCUMENT IS LAID OUT WHEN IT IS PRINTED, NOT WHEN IT WAS ENTERED — so changing the letterhead also changes how already-entered documents look when they are printed again. There is no per-period layout history; print_template holds exactly one row per company and document kind.",
       },
     ],
   },
   {
     group: "Data and operations",
     items: [
+      // ⛔ THIS WAS ONE ROW AND IT IS NOW TWO, DELIBERATELY. It read "Backup /
+      // restore, split company data — Not built". Backup and restore now exist;
+      // split does not, and is not going to. Flipping the single row to `on`
+      // would have absorbed a missing feature into a green badge, which is the
+      // exact failure this whole screen exists to prevent — so the row was SPLIT
+      // and the half that did not ship still says so, with its reason.
       {
-        name: "Backup / restore, split company data",
-        state: "off",
-        note: "Not built, and absent is the honest state to be in until it can be TENANT-EXACT: a restore that leaks one company's rows into another is worse than having no backup at all, because it is silent and it is discovered by the wrong person. Use your Postgres backups meanwhile.",
+        name: "Backup / restore (Alt+Y)",
+        state: "on",
+        note: "Alt+Y > Data. Backup downloads the whole company as one gzipped JSON Lines archive covering every table the schema itself says holds this company's data — the enumeration is DERIVED from the live catalog and shared with the test-data teardown, so a table added by tomorrow's migration is archived without anyone remembering to add it. ⛔ A RESTORE CREATES A NEW COMPANY AND NEVER REPLACES ONE, and that is what the schema permits rather than a simplification: there is no delete path for a company anywhere in this product, because every immutability trigger refuses DELETE for every role — so an archive whose company is already here is REFUSED rather than merged. It preserves every primary key, which is what keeps the audit hash chain verifiable against the ORIGINAL chain: re-minting ids would produce books that looked perfect and a chain that only attested to itself. ⛔ WHAT AN ARCHIVE DOES NOT RE-GRANT IS ACCESS. Who could open the archived company is carried in the file but never recreated — silently restoring access rights from a file somebody handed you is a privilege-escalation vector — so the restoring user becomes the Owner and everyone else is listed BY NAME to be re-granted deliberately. The archive carries a trailer with a per-table row count, and a restore refuses one whose counts do not match: a truncated download is still valid gzip and still parses, so without it a short file would restore as most of a company. It is its own permission (`backup`), not a report — a report token would be reached by the coarse `allow display report` every Data Entry level is seeded with, which would hand every operator in every tenant the entire book.",
       },
+      {
+        // ⭐ THE ROW THE FEATURE-LOCK DOCUMENT SAID WAS MISSING. Until this
+        // existed, the only mention of year-end closure anywhere on this screen
+        // was a FOOTNOTE inside the split-company row below — so an operator
+        // checking whether the product can close a year read "Split company
+        // data: deliberately not built" and concluded the whole area had been
+        // considered and rejected. It had not; a different thing had been.
+        // An undisclosed gap is the one failure mode this screen exists to
+        // prevent, and a gap disclosed inside another row's note is undisclosed.
+        name: "Close a financial year",
+        state: "on",
+        note: "Alt+Y > Data > Close a Financial Year. Locks the books up to and including a date you give — the LAST day of the year being closed, so 31 March 2027 closes 2026-27. NOTHING IS COPIED, SPLIT OR MOVED: the year stays where it is, every report still reads it, and there is no archive company that can drift from the original. Afterwards nobody can create, alter or delete a voucher dated inside it — INCLUDING THE OWNER — until an owner re-opens it, which is a separate and deliberate act rather than the same control run backwards. It is enforced in the policy decision point, beside the per-level back-dated cutoff and composing with it (the later of the two wins), so it also covers the two doors that carry no date at all: DELETING a voucher out of the closed year, and ALTERING one to restate it into the open year. A closed year stays fully READABLE, which is the point of closing it — that is what you hand an auditor. WHAT IT IS NOT: it does not produce a second company, it does not carry balances forward into a new one, and it does not stop you reporting across years.",
+      },
+      {
+        name: "Split company data (by financial year)",
+        state: "off",
+        note: "Not built, DELIBERATELY, and this row exists so that absence is visible rather than absorbed into the backup row above. Tally splits a company by financial year because it loads the whole company into memory and RAM is the binding constraint (RESEARCH.md:987); this product keeps unlimited multi-year history queryable at once, which is one of the things it competes on. Building split for parity would be building a workaround for a limit we do not have, and a worse copy of a feature is a worse answer than not needing it. ⚠️ THERE IS A REAL REASON TO BUILD SOMETHING NEXT DOOR, and it is not this one: closing a financial year into a READ-ONLY archive company plus a fresh one carrying opening balances, for statutory year-end and for handing a closed year to an auditor. That is archive-and-carry-forward, not a performance workaround, and it is not built either. If you came here from Tally's Alt+Y menu looking for the third item, this is why it is not there.",
+      },
+      {
+        name: "Migrate from Tally (Alt+O) — import a TallyPrime XML export",
+        state: "on",
+        note: "Alt+O, or Gateway of Tally > Import — Tally's own key and Tally's own path. Pick the XML file TallyPrime wrote and the whole company comes in; there is no way to undo an import, so the screen names the company it is about to post into before you choose a file. ⛔ THE SCREEN SENDS THE FILE AS BYTES AND NEVER AS TEXT, which is not a detail: every real export is UTF-16LE, and reading one with File.text() decodes it as UTF-8 and destroys it while every ASCII test fixture keeps passing. ⛔ AND READ THE STOCK FIGURES, NOT ONLY THE VOUCHER COUNT: the report puts stock movements and opening positions beside the vouchers because a trial balance cannot see quantity, and it flags zero opening positions against real movement as a WARNING rather than a clean result. What the route reads is a REAL export rather than a hand-authored one: UTF-16LE with a BOM (every real file is; nothing was, in every test written before a genuine file arrived), the payload nested under IMPORTDATA/REQUESTDESC/REQUESTDATA, the whole chart of accounts including the user's own groups, dated GST registrations (the flat PARTYGSTIN is often the SUPERSEDED one), bill-wise opening breakups, and revenue that exists ONLY inside a stock line's accounting allocations. ACTION=Alter and ACTION=Delete are routed by Tally GUID, so a re-sync amends rather than duplicates, and a re-import of the same file skips every voucher it already holds. ⛔ AND IT NOW IMPORTS THE GOODS, WHICH IT DID NOT: stock items, units, godowns, batches and quantities. That gap was invisible for a release because A TRIAL BALANCE CANNOT SEE IT — the rupee value of a trade is in the ledger entries, so an import that read every stock line and threw it away produced books that balanced perfectly and a Stock Summary with nothing in it. The masters are INFERRED where the file does not declare them (a Day Book export declares none: the unit is recovered from the quantity's own text, \"100.00 BAG\"), the location and the lot are read from BATCHALLOCATIONS.LIST where a real export puts them, and a NEGATIVE quantity inside a purchase becomes an OUTWARD movement because a quantity is never signed here. The import report says how many stock movements and opening positions it wrote — that count is the only thing on the wire that can distinguish \"imported the accounting\" from \"imported the trade\". ⛔ THE ONE FAILURE A REAL MIGRATION MEETS FIRST: an export with no STOCKITEM masters carries no OPENING STOCK, so the first sale of goods bought before the export window has nothing to issue and the WHOLE IMPORT IS REFUSED, naming both ways forward. The importer will not invent an opening position (a quantity nobody stated) and will not switch this company's negative-stock setting on your behalf. ⚠️ WHAT IS STILL NOT IMPORTED: cost-centre allocations, price lists, budgets, and Tally's location TREE (locations are flat here — the stock is in the right place and the hierarchy is not recorded). A COMPOUND unit arrives as a simple symbol and every quantity in it is stored in that unit, correctly, with no conversion — the import says so in its warnings rather than silently flattening it. ⛔ NEVER TREAT AN EMPTY WARNING LIST AS THE ONLY THING TO CHECK, and never treat a balanced trial balance as proof the migration worked: check the Stock Summary.",
+      },
+      // ⛔ THIS ROW WAS SPLIT IN TWO RATHER THAN FLIPPED, for the reason the
+      // backup/split pair above was split: track D shipped the RECONCILIATION
+      // half — which has a screen, a key and a write — and did NOT ship offline
+      // entry, which still has no client at all. Flipping the single row to `on`
+      // would have absorbed a missing feature into a green badge, and that is the
+      // failure this whole screen exists to prevent. The half that did not ship
+      // still says so, with its reason.
       {
         name: "Offline entry with sync",
         state: "server",
-        note: "The sequencer, the idempotent commit path and the partition fuzzer exist server-side and a client can commit a batch of vouchers keyed while disconnected. There is no offline-capable client in this build — this application needs the server — so nothing here can be keyed on a train.",
+        note: "⚠️ THIS ROW IS STILL \"SERVER ONLY\" AND ONE HALF OF IT NOW WORKS, WHICH IS WHY IT IS WORDED AS TWO HALVES RATHER THAN FLIPPED. WHAT WORKS: a voucher whose post could not reach the server is now QUEUED on this machine instead of lost — Alt+Q, or Gateway of Tally > Offline Outbox, shows what is waiting, commits the whole queue as one write, and can discard a row. The queue survives a reload (IndexedDB), carries a provisional number that says PROV on its face, and the sequencer's answers come back per voucher: committed with its real number, or parked for the Reconciliation Queue. ⛔ THE JUDGEMENT AT THE CENTRE OF IT: a voucher is queued ONLY when the client can prove the books never saw it (the request got no answer at all). A 422, a 403, a closed period, even a 500 — anything the server answered — is NOT queued and is reported on the voucher screen with the reason, because telling an operator their invoice is safely queued when it was REFUSED is the one failure here that loses money silently; they walk away and nobody is billed. ⛔ WHAT IS STILL MISSING, AND IT IS THE HALF THAT WOULD LET YOU KEY ON A TRAIN: there is no service worker and no offline app shell, so THIS APPLICATION STILL NEEDS THE SERVER TO LOAD AT ALL. The queue helps when a connection drops during a session you already have open; it does not let you start one without a network. That is a separate piece of work and this row will not say \"on\" until it exists. ⚠️ AND WHERE THE QUEUE LIVES: unencrypted in this browser's own storage, on whatever machine keyed it. Encrypting it client-side would be theatre — the key would sit in the same origin as the ciphertext — so the store is scoped per operator and per company, cleared on sign-out, and the outbox screen says so on its face rather than implying a safe.",
+      },
+      {
+        name: "Offline Outbox — vouchers this machine is holding (Alt+Q)",
+        state: "on",
+        note: "Alt+Q, or Gateway of Tally > Offline Outbox. ⛔ NOTHING ON THAT SCREEN IS IN THE BOOKS, and every column on it is chosen to keep that impossible to misread: the number column is headed \"Provisional\" and never \"No.\", the value itself contains the literal PROV and the id of the machine that minted it (so a number read down a phone line is self-evidently not a document number), and a queued voucher appears in no register, no report and not in the Day Book — it cannot, because it is not on the server. ⛔ THE QUEUE IS SENT AS ONE WRITE, oldest first, and that is not an optimisation: the back-dated cutoff judges a batch as a unit (one voucher dated inside a closed period refuses the LOT — which is why a row can be discarded), and a passkey step-up is charged once per write, so draining row by row would cost one prompt per voucher. ⛔ A WHOLE-BATCH REFUSAL IS SHOWN AS A BANNER AND NEVER AS A PER-VOUCHER STATUS: a cutoff or a step-up returns no verdict on any individual voucher, every one is still queued and still valid, and a screen that said \"these 12 failed\" would invite somebody to re-key twelve invoices that are sitting intact below — and then commit both copies. ⚠️ WHEN A COMMIT SUCCEEDS THE SCREEN KEEPS THE MAPPING from the provisional number to the real one for the rest of the session, because the operator may already have quoted the provisional to a customer and that mapping is the only thing that lets them correct it. ⚠️ AND ONE AMBIGUITY IS DISCLOSED RATHER THAN HIDDEN: a connection that dropped WHILE a voucher was being sent may have dropped after the books took it, and nothing the browser can see tells the two apart — so the screen says a queued voucher may already have landed, and names the Day Book as the place to check.",
+      },
+      {
+        name: "Reconciliation — the changes these books refused (Alt+R)",
+        state: "on",
+        note: "Alt+R, or Gateway of Tally > Reconciliation. Every alter or delete the books refused, on one list, with what to do about each. ⛔ THESE ROWS WERE ALREADY BEING WRITTEN AND NOBODY COULD SEE THEM: the freeze rule has raised one every time somebody tried to change a voucher pinned by an IRN or a filed GSTR-1 — since the e-invoicing work shipped — and the route that lists them has answered the whole time, but nothing in this application ever called it. An operator's edit was refused and the explanation went to a table only the database could read. ⛔ THE TWO KINDS ON THE LIST ARE NOT THE SAME QUESTION. A FROZEN voucher can never be superseded, so it is EXPLAINED rather than retried — and the row names what pinned it, because \"this is frozen\" without \"because an IRN is registered against it\" sends somebody looking for a setting that does not exist; the way forward is a credit note. A CONFLICT is an offline change that lost a race, and both versions are shown side by side: what the books hold now, and what was keyed. ⛔ THERE ARE EXACTLY TWO CHOICES ON A CONFLICT AND \"FORCE MY VERSION\" IS NOT ONE OF THEM: the version it was based on has already been superseded, so re-applying it would be refused again by construction. Keeping your version means entering it again as a NEW voucher, and the screen says that in those words rather than offering a button that cannot work — an operator who believes their version can still win does not re-key it, and the work is lost quietly. ⚠️ CLEARING AN ENTRY RECORDS THAT SOMEBODY DEALT WITH IT AND RE-APPLIES NOTHING; the refused change stays refused. Until this shipped, nothing in this product could clear one at all — the queue could only ever grow, which is how a queue becomes a thing operators stop reading. The amounts in the two panes are formatted by the SERVER to match each other, deliberately: the stored bytes render 1180 as \"1180\" while a live voucher renders \"1180.0000\", and two panes disagreeing about how to spell the same figure would invite somebody to discard their work over a difference that does not exist.",
       },
     ],
   },
@@ -508,6 +720,11 @@ const FEATURES: {
 const BADGE: Record<State, { text: string; className: string }> = {
   always: { text: "Always on", className: "text-tally-title" },
   on: { text: "On", className: "text-tally-title" },
+  // ⭐ T8 STEP 8. ⛔ IT IS STYLED LIKE "Server only" AND NOT LIKE "On", DELIBERATELY:
+  // the flattering direction is the one this screen has been wrong in before (see
+  // the double-entry row's own correction), so a state that means "yes, with a
+  // named gap" must not read at a glance as a state that means "yes".
+  partial: { text: "Part built", className: "text-tally-bar" },
   server: { text: "Server only", className: "text-tally-bar" },
   off: { text: "Not built", className: "text-tally-fieldText" },
 };
@@ -679,6 +896,238 @@ function NegativeStockPanel() {
       ) : null}
       {saved ? (
         <p className="mt-2 max-w-3xl text-xs text-tally-title" data-testid="negative-stock-saved">
+          {saved}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * ⭐⭐ T8 STEP 8 — THE FOREX GAIN/LOSS LEDGER. THE SETTING STEP 5's OWN REFUSAL
+ * NAMES, AND UNTIL NOW THERE WAS NOWHERE TO OBEY IT.
+ *
+ * `errForexLedgerNotChosen` in `internal/ledger/forex_settlement.go` refuses a
+ * settlement that realises an exchange difference at a company with no ledger
+ * chosen, and the message says where to go: *"set
+ * company_forex_settings.forex_gain_loss_ledger_id (Gateway > F11 >
+ * Multi-currency)"*. ⛔ THAT PATH DID NOT EXIST. An operator following the
+ * instruction arrived at a row of prose. A refusal an operator cannot act on is an
+ * outage, and this panel is the second half of it.
+ *
+ * WHY A CONTROL BELONGS ON A SCREEN WHOSE HEADER SAYS IT IS A STATEMENT OF FACT —
+ * the same answer `NegativeStockPanel` and the TDS deductor panel give: the
+ * doctrine is *"a toggle that flips a flag with nothing behind it is worse than no
+ * toggle at all"*, and this has everything behind it. Until a row exists here the
+ * settlement path REFUSES every foreign settlement that would realise a
+ * difference. It is not a decorative switch; it is the switch the rest of the
+ * feature has been waiting for since step 5.
+ *
+ * ⛔ IT READS ITS STATE BACK FROM THE SERVER AND NEVER FROM THE CALL THAT SET IT,
+ * for `NegativeStockPanel`'s stated reason (register row D43): a control that
+ * reported success from its own request would be UNABLE to detect a setter that
+ * answered 204 and wrote nothing, because a resolved promise looks identical
+ * either way. `setForexSettings` returns no body, so this panel re-GETs.
+ *
+ * ⚠️ THE PICKER OFFERS ONLY REVENUE AND EXPENSE LEDGERS, and the server refuses
+ * anything else naming what to choose. Both halves exist on purpose: the refusal
+ * is the authority, and a picker that offered a customer would be inviting an
+ * operator into a 422. ⛔ A GAIN CREDITED TO A CUSTOMER'S OWN LEDGER makes a
+ * settled bill show a residue for ever, which is why the server refuses it rather
+ * than trusting the form.
+ *
+ * ⚠️ AND CLEARING IT IS OFFERED, because it is a real operation and not a delete:
+ * it returns the company to "no ledger chosen", which is the state every company
+ * that never trades abroad is in — and a company that chose the wrong ledger
+ * needs a way back that is not a support ticket.
+ */
+function ForexGainLossPanel() {
+  const client = useClient();
+  const { company } = useCompanyContext();
+  const companyID = company?.id ?? "";
+
+  // ⛔ `null` IS "NOT READ YET" AND IS DISTINCT FROM "NONE CHOSEN". Rendering an
+  // unread setting as "none" would state a policy the screen has not looked up —
+  // and would tell an operator to go and choose one they may already have.
+  const [chosen, setChosen] = useState<{ id: string; name: string } | null>(null);
+  const [ledgers, setLedgers] = useState<LedgerListItem[]>([]);
+  const [pick, setPick] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    if (!companyID) return;
+    try {
+      const [settings, list] = await Promise.all([
+        client.forexSettings(companyID),
+        client.listLedgers(companyID),
+      ]);
+      setChosen({
+        id: settings.gain_loss_ledger_id ?? "",
+        name: settings.gain_loss_ledger_name ?? "",
+      });
+      // ⚠️ FILTERED TO THE GROUPS THE SERVER WILL ACCEPT. The nature lives on the
+      // GROUP and not the ledger, and the wire's ledger list carries the group
+      // name — so the filter is by group name, which is what an operator reads
+      // anyway. A ledger under a user-made sub-group of Indirect Expenses is
+      // therefore NOT offered here even though the server would accept it; that
+      // is a picker that is narrower than the rule, which is the safe direction.
+      setLedgers(list.ledgers);
+      setLoadError("");
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [companyID]);
+
+  async function save(next: string) {
+    setBusy(true);
+    setSaveError("");
+    setSaved("");
+    try {
+      await client.setForexSettings(companyID, { gain_loss_ledger_id: next });
+      // THE SERVER'S ROW, not `next`. See the header.
+      const after = await client.forexSettings(companyID);
+      setChosen({
+        id: after.gain_loss_ledger_id ?? "",
+        name: after.gain_loss_ledger_name ?? "",
+      });
+      setSaved(
+        (after.gain_loss_ledger_id ?? "") === ""
+          ? "No forex gain/loss ledger is chosen. A settlement that would realise " +
+              "an exchange difference will now be REFUSED, naming this setting — it " +
+              "is not absorbed or posted somewhere plausible."
+          : `Realised exchange gains and losses will post to ${after.gain_loss_ledger_name ?? ""}. ` +
+              "The server works the figure out itself from the two rates your books " +
+              "hold and refuses any voucher whose exchange difference is not the one " +
+              "it derived.",
+      );
+      setPick("");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setSaveError(
+          "Refused: choosing this ledger needs an Owner. A Data Entry level can " +
+            "neither read nor change it — the setting decides where a gain lands " +
+            "in the Profit & Loss. " + err.message,
+        );
+      } else if (err instanceof ApiError && err.status === 422) {
+        // ⭐ THE SERVER'S OWN SENTENCE, VERBATIM. It names what to choose, which
+        // is the whole value of the refusal; paraphrasing it here would put two
+        // spellings of one rule on two sides of the wire.
+        setSaveError(err.message);
+      } else {
+        setSaveError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const eligible = ledgers.filter(
+    (l) =>
+      l.group_name === "Indirect Income" ||
+      l.group_name === "Indirect Incomes" ||
+      l.group_name === "Direct Income" ||
+      l.group_name === "Direct Incomes" ||
+      l.group_name === "Indirect Expenses" ||
+      l.group_name === "Direct Expenses",
+  );
+
+  return (
+    <div className="mt-4 max-w-3xl border border-tally-panel p-3">
+      <h2 className="font-bold text-tally-title">
+        Multi-currency — forex gain/loss ledger
+      </h2>
+      <p className="mt-1 text-xs">
+        Where a REALISED exchange gain or loss is posted when a foreign bill is
+        settled at a rate other than the one it was raised at.{" "}
+        <span className="text-tally-bar">
+          Nothing is created for you. Until you choose a ledger here, a settlement
+          that would realise a difference is REFUSED and says so — it is never
+          absorbed into the party balance, never added to the bank leg, and never
+          guessed into a plausibly-named account. A Trial Balance that still
+          balances while a debtor figure is quietly wrong is the failure this
+          whole feature exists to remove.
+        </span>
+      </p>
+      <p className="mt-2 text-xs">
+        ⚠️ This is the REALISED difference only — the one that happens when money
+        actually moves. The UNREALISED difference on a bill that is still open is
+        REPORTED and NOT POSTED: read it at Alt+G &gt; Unadjusted Forex Gain/Loss.
+      </p>
+      {loadError ? (
+        <p className="mt-2 text-xs text-tally-bar" data-testid="forex-ledger-load-error">
+          Cannot read this setting: {loadError}
+        </p>
+      ) : null}
+      <p className="mt-2 text-sm" data-testid="forex-ledger-state">
+        Current setting:{" "}
+        <b className="text-tally-title">
+          {chosen === null
+            ? "not read"
+            : chosen.id === ""
+              ? "NONE CHOSEN — a realised difference will be refused"
+              : chosen.name}
+        </b>
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="text-sm">
+          Ledger{" "}
+          <select
+            className="border border-tally-panel bg-tally-bg px-1 text-sm"
+            value={pick}
+            disabled={busy || !companyID}
+            data-testid="forex-ledger-pick"
+            onChange={(e) => setPick(e.target.value)}
+          >
+            <option value="">— choose a revenue or expense ledger —</option>
+            {eligible.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.group_name})
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="border border-tally-title px-2 py-0.5 text-sm text-tally-title disabled:opacity-50"
+          disabled={busy || !companyID || pick === ""}
+          data-testid="forex-ledger-save"
+          onClick={() => void save(pick)}
+        >
+          Use this ledger
+        </button>
+        <button
+          type="button"
+          className="border border-tally-title px-2 py-0.5 text-sm text-tally-title disabled:opacity-50"
+          disabled={busy || !companyID || chosen === null || chosen.id === ""}
+          data-testid="forex-ledger-clear"
+          onClick={() => void save("")}
+        >
+          Clear the choice
+        </button>
+      </div>
+      {eligible.length === 0 && !loadError ? (
+        <p className="mt-2 text-xs text-tally-bar" data-testid="forex-ledger-none-eligible">
+          No revenue or expense ledger exists on this company yet, so there is
+          nothing to choose. Create one first (Alt+C from the Gateway) — an
+          exchange gain is income and an exchange loss is an expense, and posting
+          either to a party, bank or cash ledger would make a settled bill show a
+          residue for ever.
+        </p>
+      ) : null}
+      {saveError ? (
+        <p className="mt-2 text-xs text-tally-bar" data-testid="forex-ledger-save-error">
+          {saveError}
+        </p>
+      ) : null}
+      {saved ? (
+        <p className="mt-2 text-xs text-tally-title" data-testid="forex-ledger-saved">
           {saved}
         </p>
       ) : null}
@@ -1922,8 +2371,10 @@ export function FeaturesScreen() {
       <p className="mt-1 max-w-3xl text-sm">
         What this edition actually has. Nothing here is a decorative switch: a
         feature is either working from the keyboard, structurally always-on,
-        SERVER ONLY (built and reachable over HTTP, with no screen or key here
-        that reaches it), or openly missing. Esc goes back.
+        PART BUILT (usable from the keyboard with a NAMED part deliberately
+        absent — the note says which part and why), SERVER ONLY (built and
+        reachable over HTTP, with no screen or key here that reaches it), or
+        openly missing. Esc goes back.
       </p>
       {/* The two DEDUCTOR panels sit next to each other on purpose and are
           headed so the difference is legible: the first answers "must this
@@ -1931,6 +2382,11 @@ export function FeaturesScreen() {
           different tables with different vocabularies — see each panel's own
           comment — and nothing derives one from the other. */}
       <NegativeStockPanel />
+      {/* ⭐ T8 STEP 8. It sits with the other REAL CONTROLS rather than beside the
+          Multi-currency prose row, because step 5's refusal sends an operator to
+          "F11 > Multi-currency" and a control buried under a wall of notes is a
+          control they will not find. */}
+      <ForexGainLossPanel />
       <DeductorStatusPanel />
       <TDSReturnProfilePanel />
       <TCSDeclarationsPanel />

@@ -118,6 +118,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -270,12 +271,66 @@ func (s *Server) handleGSTR3B(w http.ResponseWriter, r *http.Request) {
 // writeGSTR3BError keeps the historical 422 for a generation failure but lets
 // the ITC sentinels through with their own statuses, so a one-period-window
 // refusal reaching this path is still the 400 its contract says it is.
+//
+// ⛔⛔ AND A DEAD DATABASE IS A 500, NOT A 422 (D117). See writeBooksUnreadable:
+// the two statuses send an operator to completely different places, and this
+// arm used to send every one of them to their own books.
 func writeGSTR3BError(w http.ResponseWriter, from, to string, err error) {
+	// THE ITC SENTINELS ARE CHECKED FIRST AND THE ORDER IS LOAD-BEARING. They
+	// are refusals about the REQUEST (a window that is not one period, a missing
+	// as-on), and gstr marks the whole ITC-resolution failure as a data-source
+	// failure — so asking about the data source first would turn a 400 the
+	// caller can fix into a 500 they cannot.
 	if errors.Is(err, itc.ErrWindowNotOnePeriod) || errors.Is(err, itc.ErrNoAsOn) {
 		writeITCError(w, from, to, err)
 		return
 	}
+	if gstr.IsDataSource(err) {
+		writeBooksUnreadable(w, "GSTR-3B", err)
+		return
+	}
 	writeError(w, http.StatusUnprocessableEntity, err.Error())
+}
+
+// writeBooksUnreadable answers a failure of OUR PLUMBING (D117).
+//
+// ⛔⛔ WHY THIS EXISTS AT ALL. `writeGSTR3BError` and `writeGSTR9Error` both
+// ended in `writeError(w, http.StatusUnprocessableEntity, err.Error())` as their
+// DEFAULT arm, so a failed query — `gstr: query 3b versions: ...`, `gstr: scan
+// sales version: ...`, `gstr: resolve ITC decisions: ...` — reached the person
+// filing a return as a 422 carrying a SQL-shaped sentence and a Go package name.
+//
+// A 422 means "the request was well-formed but the books cannot answer it",
+// which is a statement about the FILER'S DATA; a failed query is a statement
+// about the SERVER. The two send an operator to completely different places:
+// one goes and looks for a voucher they got wrong, the other reports a fault
+// and waits. Getting it backwards costs the filer an afternoon in their own
+// books looking for something that was never there.
+//
+// THREE THINGS THE BODY DOES, AND THE THIRD IS THE ONE D112 TAUGHT:
+//
+//  1. It says whose fault it is, in words, so nobody goes hunting in their
+//     ledgers.
+//  2. It says nothing was filed or altered — the first question anybody asks
+//     when a statutory document errors.
+//  3. It carries a CODE. A screen that has to recognise a server fault by
+//     matching its prose breaks the next time the wording improves, and D112
+//     shipped precisely because a screen could not tell an ordinary empty answer
+//     from a real server failure.
+//
+// ⚠️ THE DIAGNOSTIC GOES TO THE LOG AND NOT INTO THE BODY. That is not
+// squeamishness: `errors_operator_facing_test.go` keeps the `gstr: ` prefix on
+// these wraps ON PURPOSE, because "they are diagnostics for whoever reads a log,
+// and the package name is the useful part of them". The defect was never the
+// prefix — it was showing a filer a diagnostic as if it were a refusal.
+func writeBooksUnreadable(w http.ResponseWriter, document string, err error) {
+	log.Printf("gstr: %s could not be produced — the books could not be read: %v",
+		document, err)
+	writeCodedError(w, http.StatusInternalServerError, "BOOKS_UNREADABLE",
+		"The "+document+" could not be produced because the books could not be read. "+
+			"This is a fault on the server, not a problem with your data: nothing you "+
+			"change in your books will fix it, and nothing has been filed or altered. "+
+			"Please report it, with the time you saw it.")
 }
 
 // THERE IS DELIBERATELY NO forwardableDisclosures FILTER HERE ANY MORE.

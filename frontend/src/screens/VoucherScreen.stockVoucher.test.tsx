@@ -543,6 +543,13 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
     // What that cost, measured in a browser on 2026-08-07: transferring 10 units
     // carried at 889 took 8,890 off the Balance Sheet's Closing Stock line while
     // the quantity stayed at 75, under a caption reading "no value moves".
+    //
+    // ⚠️ THE SERVER NO LONGER TAKES A TRANSFER'S VALUE FROM THIS RATE (D103) —
+    // it derives what the outward leg consumed and carries the inward leg at
+    // exactly that. The guard stays because the rate is still the RATIO that
+    // splits the consumed cost when one voucher produces more than one thing,
+    // and because cored still refuses a zero: a client that let it through
+    // would meet a 422 after the whole row was keyed.
     const line: StockVoucherLine = {
       stockItemId: "s1",
       itemName: "Widget",
@@ -596,9 +603,9 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
 
   it("a Delivery Note with no rate still ships — an outward's rate is ignored by the valuer", () => {
     // The mirror of the case above, and it is the reason the refusal is scoped to
-    // INWARD rather than to "any zero". An outward is consumed at the position's
-    // running weighted-average cost; its stated rate moves no figure anybody
-    // reads. Refusing it would block a warehouse from despatching goods it holds
+    // INWARD rather than to "any zero". An outward is consumed at whatever the
+    // item's own valuer says it cost — an average, an oldest layer, a newest
+    // layer — and its stated rate moves no figure anybody reads. Refusing it would block a warehouse from despatching goods it holds
     // because nobody had priced them yet — which is the entire point of the class.
     const line: StockVoucherLine = {
       stockItemId: "s1",
@@ -657,8 +664,9 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     const { client, spies } = spyClient(base);
     const app = await openStockVoucher(client, "physical-stock");
     // "There are 13 on the shelf." The rate is what the three EXTRA units are
-    // carried at; a surplus at zero cost is refused, because it would write the
-    // item's weighted average down.
+    // carried at; a surplus at zero cost is refused, because it would carry the
+    // extra units at nothing and write the item's stock value down — on every
+    // costing method, which is why the refusal names none (D104).
     //
     // ⛔ THE GODOWN IS LEFT UNTOUCHED ON PURPOSE — that is the defect this test
     // now also guards. The count must be differenced against the shelf that
@@ -719,8 +727,8 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     });
 
     const app = await openStockVoucher(base, "physical-stock");
-    // A shortage needs no rate: the outward is consumed at the position's own
-    // running weighted-average cost and its stated rate is ignored.
+    // A shortage needs no rate: the outward is consumed at whatever the item's
+    // own valuer says it cost, and its stated rate is ignored.
     await keyRow(0, { item: widget, qty: "6" });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await screen.findByTestId("voucher-no");
@@ -943,7 +951,7 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     expect(note).toMatch(/Data Entry/);
   });
 
-  it("still says NOT BUILT for what this slice did not build", () => {
+  it("still says NOT BUILT for what is not built", () => {
     // The other half of honesty. If every row said "On" the screen would be
     // decoration.
     //
@@ -951,10 +959,42 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     // test below. That is this assertion working as intended rather than being
     // weakened: the row was "Not built" while its whole backend shipped, and it flipped
     // in the change that finally gave an operator a screen (Ctrl+F8 / Ctrl+F9, the BOM
-    // screen and both order books). Two rows are kept so this cannot pass vacuously.
+    // screen and both order books).
+    // ⚠️ FIFO / LIFO MOVED TO THE POSITIVE TEST TOO (T9: a costing-method picker
+    // on the master form and Alt+V on the Stock Summary), and now STOCK GROUPS AND
+    // COMPOUND UNITS has as well — T10 gives an operator Alt+G > Create Stock Group
+    // and a base unit + conversion factor on Alt+G > Create Unit, and the flip is
+    // pinned by its own test in VoucherScreen.itemInvoice.test.tsx.
+    //
+    // ⛔ THERE IS NO "Not built" ROW LEFT UNDER INVENTORY AT ALL — all ten read On —
+    // so this assertion had to leave the group rather than be deleted. It is now
+    // pointed at the nearest genuinely absent thing to a DOCUMENT this file keys:
+    // a delivery note prints (Ctrl+P), and there is still no way to E-MAIL it.
+    //
+    // ⚠️ THIS ASSERTION HAS NOW BEEN RE-POINTED TWICE, AND THAT IS IT WORKING.
+    // It named order processing, then FIFO/LIFO, then stock groups, then
+    // "Export: e-mail a document, and export to PDF" — each time because the row
+    // it named FLIPPED in the change that finally gave an operator a screen or a
+    // key. B1 split the joint export row; B2 then shipped the e-mail half as
+    // Alt+M (it saves the PDF and opens the operator's own mail client), so that
+    // row now reads On and this assertion had to move again.
+    //
+    // ⛔ IT IS NOW POINTED AT THE Rule 48(4) QR CODE, chosen deliberately over the
+    // other six absent rows: it is the nearest genuinely absent thing to a printed
+    // DOCUMENT, which is what this file keys — a delivery note prints, and what a
+    // registered e-invoice must also carry is a QR code that this build cannot
+    // produce. It is also blocked on a HUMAN (IRP sandbox credentials, HANDOFF.md
+    // §10 item 4) rather than on work, so it will not flip out from under this
+    // test the way three screen rows already have.
+    //
+    // ⛔ WHOEVER MAKES THAT ROW TRUE MUST RE-POINT THIS ASSERTION IN THE SAME
+    // CHANGE. Find another genuinely absent row rather than deleting the test, and
+    // keep the plural property below.
     renderFeatures();
-    expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
-    expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
+    expect(badgeFor(/^Rule 48\(4\) QR code/)).toBe("Not built");
+    // And the screen-wide property, so this cannot pass vacuously the day that
+    // row is built: F11 still carries real gaps, plural.
+    expect(screen.getAllByText("Not built").length).toBeGreaterThan(1);
   });
 
   it("says ON for order processing, and ONLY because a human can now reach it", () => {

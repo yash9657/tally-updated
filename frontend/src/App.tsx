@@ -30,6 +30,8 @@ import { LoginScreen } from "./auth/LoginScreen";
  * The `auth` prop is the INJECTABLE SEAM the auth tests drive: without it they
  * would have to stub `import.meta.env.VITE_LIVE`, and any test that failed to
  * would pass VACUOUSLY against the ungated composition.
+ * BrowserApp also supplies it explicitly, keeping /app authenticated regardless
+ * of build flags while the standalone mock/test composition remains available.
  */
 export interface AuthGateConfig {
   /** Base URL for `/auth/*` and `/v1/*`; "" (same-origin) behind the dev proxy. */
@@ -42,10 +44,13 @@ export function App({
   client,
   company,
   auth,
+  onSessionChange,
 }: {
   client?: CoredClient;
   company?: CompanyInfo;
   auth?: AuthGateConfig;
+  /** Browser routing only; component tests can keep using the standalone app. */
+  onSessionChange?: (signedIn: boolean) => void;
 } = {}) {
   const gate = useMemo<AuthGateConfig | null>(
     () => auth ?? defaultAuthGate(),
@@ -55,7 +60,7 @@ export function App({
   if (gate) {
     return (
       <AuthProvider baseUrl={gate.baseUrl} fetchImpl={gate.fetchImpl}>
-        <AuthGatedApp gate={gate} client={client} company={company} />
+        <AuthGatedApp gate={gate} client={client} company={company} onSessionChange={onSessionChange} />
       </AuthProvider>
     );
   }
@@ -105,16 +110,23 @@ function AuthGatedApp({
   gate,
   client,
   company,
+  onSessionChange,
 }: {
   gate: AuthGateConfig;
   client?: CoredClient;
   company?: CompanyInfo;
+  onSessionChange?: (signedIn: boolean) => void;
 }) {
   const auth = useAuth();
   const session = auth?.session ?? null;
   const onUnauthorized = auth?.onUnauthorized;
   const requestStepUp = auth?.stepUp;
   const currentToken = auth?.currentToken;
+  const signedIn = session !== null;
+
+  useEffect(() => {
+    onSessionChange?.(signedIn);
+  }, [onSessionChange, signedIn]);
 
   const resolvedClient = useMemo<CoredClient | null>(() => {
     if (!session) return null;

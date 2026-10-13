@@ -18,6 +18,18 @@ not summaries.
 | `ita-2025-as-amended-fa-2026.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf` | The s.393 rate table **as amended**. This is now the authority to verify §9 against — better than a yes/no on "did FA 2026 change it", because whatever this text says IS current law. |
 | `form-140-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 140 (26Q) Q1 to Q4 Version 1.0" | **THE BLOCKER, CLEARED.** Annexure 2's payment codes, the annexure field list, and Annexure 6's reason codes. See below. |
 | `form-143-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 143 (27EQ) Q1 to Q4 Version 1.0" | The **TCS** return. Delivered more than expected — see the verified collection codes below. |
+| `msmed-act-2006.pdf` | ✅ **here** (2026-08-29) — **India Code, text-native, downloaded by a human.** See "MSMED Act" below | `https://www.indiacode.nic.in/bitstream/123456789/2013/3/A2006-27.pdf` — India Code, the canonical portal | **T13's statutory half, except the numbers.** ss.15, 16, 23, 24 and the s.2(b) "appointed day" definition, all as enacted. ⛔ **It does NOT settle who is a micro/small enterprise** (s.7's thresholds are the 2006 originals and are superseded), and it says nothing about the RBI Bank Rate |
+| `rbi-bank-rate-2020-05-22.html` | ⚠️ **here** (2026-08-30) — **an HTML capture of the notification, not the PDF.** `rbidocs.rbi.org.in` (RBI's document host) refuses this machine; `www.rbi.org.in` does not. See "the PDF host is fenced" below | RBI/2019-20/240, `DOR.No.Ret.BC.74/12.01.001/2019-20` | Bank Rate **4.65% → 4.25%** w.e.f. 22 May 2020. ⭐ **The FLOOR of the series** — the one document that says when 4.25% began, previously believed from secondary sources only |
+| `rbi-bank-rate-2022-05-04.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/45, `DOR.RET.REC.32/12.01.001/2022-23` | Bank Rate **4.25% → 4.65%** w.e.f. 4 May 2022 |
+| `rbi-bank-rate-2022-06-08.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/65, `DOR.RET.REC.44/12.01.001/2022-23` | Bank Rate **4.65% → 5.15%** w.e.f. 8 Jun 2022. ⭐ One of the two changes missing from the table this project was originally handed |
+| `rbi-bank-rate-2022-08-05.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/103, `DOR.RET.REC.59/12.01.001/2022-23` | Bank Rate **5.15% → 5.65%** w.e.f. 5 Aug 2022 |
+| `rbi-bank-rate-2022-09-30.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/123, `DOR.RET.REC.70/12.01.001/2022-23` | Bank Rate **5.65% → 6.15%** w.e.f. 30 Sep 2022 |
+| `rbi-bank-rate-2022-12-07.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/148, `DOR.RET.REC.88/12.01.001/2022-23` | Bank Rate **6.15% → 6.50%** w.e.f. 7 Dec 2022 |
+| `rbi-bank-rate-2023-02-08.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/174, `DOR.RET.REC.101/12.01.001/2022-23` | Bank Rate **6.50% → 6.75%** w.e.f. 8 Feb 2023 |
+| `rbi-bank-rate-2025-02-07.pdf` | ✅ **here** (2026-08-30) | RBI/2024-25/111, `DoR.RET.REC.57/12.01.001/2024-25` | Bank Rate **6.75% → 6.50%** w.e.f. 7 Feb 2025. ⚠️ Reported once as "not findable" — it is titled with the SHORT form, `"Change in Bank Rate"` |
+| `rbi-bank-rate-2025-04-09.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/23, `DoR.RET.REC.16/12.01.001/2025-26` | Bank Rate **6.50% → 6.25%** w.e.f. 9 Apr 2025. ⭐ The other originally-missing change |
+| `rbi-bank-rate-2025-06-06.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/45, `DoR.RET.REC.22/12.01.001/2025-26` | Bank Rate **6.25% → 5.75%** w.e.f. 6 Jun 2025 |
+| `rbi-bank-rate-2025-12-05.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/134, `DoR.RET.REC.341/12.01.001/2025-26` | Bank Rate **5.75% → 5.50%** w.e.f. 5 Dec 2025. **The current rate**, and the only Bank Rate circular here that is NOT withdrawn along with 6 Jun 2025 |
 
 ### ⚠️ What Form 140 does NOT contain — checked, not assumed
 
@@ -284,3 +296,278 @@ exists. So the zero in `rates.go` must stay a refusal and must never harden into
 **The FVU cannot be run in this environment, and the GSTN portal, the NIC e-Way Bill API and
 the EPFO/ESIC portals cannot be reached from it. Never claim a validation that was not
 performed.**
+
+
+---
+
+## ⭐⭐ RBI BANK RATE — THE NOTIFICATIONS FORM A CHAIN, AND THAT IS THE WHOLE POINT
+
+**T13 (`docs/design/t13-interest-model.md` §6) needs a DATED SERIES**, because MSMED s.16 prices
+interest at three times the Bank Rate and an accrual period spanning a change must be split at the
+change's effective date. A table of rates is not enough; the series must also be **provably
+complete**, because a MISSING change is wrong only for bills inside the gap and correct everywhere
+else — it survives any spot-check that lands outside the window.
+
+⭐ **RBI's notifications solve that, and not by accident.** Every one opens by citing its
+IMMEDIATE PREDECESSOR, with both the reference number and the exact date:
+
+```
+$ for f in docs/statutory/rbi-bank-rate-*.pdf; do pdftotext -layout "$f" - \
+    | tr -s ' \n' ' \n' | /usr/bin/grep -oE "(DOR|DoR)\.RET\.REC\.[0-9]+/12\.01\.001/[0-9-]+ dated [A-Z][a-z]+ [0-9]{2}, [0-9]{4}"; done
+
+2022-08-05  ->  DOR.RET.REC.44/12.01.001/2022-23  dated June 08, 2022
+2023-02-08  ->  DOR.RET.REC.88/12.01.001/2022-23  dated December 07, 2022
+2025-04-09  ->  DoR.RET.REC.57/12.01.001/2024-25  dated February 07, 2025
+2025-06-06  ->  DoR.RET.REC.16/12.01.001/2025-26  dated April 09, 2025
+```
+
+⛔ **SO THE SERIES IS A LINKED LIST AND A GAP BREAKS IT.** Walking the chain backwards from the
+current rate does not merely *assemble* the series — it **proves there is nothing missing**, because
+a change that had been skipped would leave a notification whose named predecessor is absent. No
+table can offer that, and the table this project was originally given was in fact missing two
+changes.
+
+### ✅ EVERY CIRCULAR IS NOW HERE, AND THE CHAIN IS CLOSED AT BOTH ENDS
+
+**Eleven documents, eleven links, no gaps.** Each was read before filing; each one's *"from X per
+cent"* was checked against its predecessor's *"to"*.
+
+```
+$ for f in docs/statutory/rbi-bank-rate-*; do ... "from ([0-9.]+) per cent to ([0-9.]+) per cent" ...
+
+22 May 2020   4.65 -> 4.25      <- the FLOOR
+ 4 May 2022   4.25 -> 4.65
+ 8 Jun 2022   4.65 -> 5.15
+ 5 Aug 2022   5.15 -> 5.65
+30 Sep 2022   5.65 -> 6.15
+ 7 Dec 2022   6.15 -> 6.50
+ 8 Feb 2023   6.50 -> 6.75
+ 7 Feb 2025   6.75 -> 6.50      <- a two-year hold, PROVED by the citation, not assumed from silence
+ 9 Apr 2025   6.50 -> 6.25
+ 6 Jun 2025   6.25 -> 5.75
+ 5 Dec 2025   5.75 -> 5.50      <- the current rate
+```
+
+| Effective | Bank Rate | Reference | `NotificationUser.aspx?Id=` | Withdrawn? |
+|---|---|---|---|---|
+| 22 May 2020 | 4.65 → **4.25%** | RBI/2019-20/240, `DOR.No.Ret.BC.74` | **11897** | — (HTML capture) |
+| 4 May 2022 | 4.25 → **4.65%** | RBI/2022-23/45, `DOR.RET.REC.32` | **12312** | ⚠️ withdrawn |
+| 8 Jun 2022 | 4.65 → **5.15%** | RBI/2022-23/65, `DOR.RET.REC.44` | **12333** | ⚠️ withdrawn |
+| 5 Aug 2022 | 5.15 → **5.65%** | RBI/2022-23/103, `DOR.RET.REC.59` | **12372** | ⚠️ withdrawn |
+| 30 Sep 2022 | 5.65 → **6.15%** | RBI/2022-23/123, `DOR.RET.REC.70` | **12394** | ⚠️ withdrawn |
+| 7 Dec 2022 | 6.15 → **6.50%** | RBI/2022-23/148, `DOR.RET.REC.88` | **12420** | ⚠️ withdrawn |
+| 8 Feb 2023 | 6.50 → **6.75%** | RBI/2022-23/174, `DOR.RET.REC.101` | **12450** | ⚠️ withdrawn |
+| 7 Feb 2025 | 6.75 → **6.50%** | RBI/2024-25/111, `DoR.RET.REC.57` | **12776** | ⚠️ withdrawn |
+| 9 Apr 2025 | 6.50 → **6.25%** | RBI/2025-26/23, `DoR.RET.REC.16` | **12832** | ⚠️ withdrawn |
+| 6 Jun 2025 | 6.25 → **5.75%** | RBI/2025-26/45, `DoR.RET.REC.22` | **12857** | ✅ live |
+| 5 Dec 2025 | 5.75 → **5.50%** | RBI/2025-26/134, `DoR.RET.REC.341` | **13208** | ✅ live |
+
+⭐ **THE TWO ORIGINALLY-MISSING CHANGES ARE 8 JUN 2022 AND 9 APR 2025.** Both were absent from the
+table this project was handed. Each is proved twice over: by the *"from X per cent"* wording of the
+notification that follows it, and by that notification naming it as the predecessor circular.
+**Neither was inferred, and the chain is why they could not stay hidden.**
+
+### ⭐⭐ THE FLOOR IS NOW A DOCUMENT, NOT A BELIEF — AND FINDING IT COST ONE FETCH
+
+The 4 May 2022 circular revises *"from 4.25 per cent"* and names its predecessor:
+**`DOR.No.Ret.BC.74/12.01.001/2019-20` dated May 22, 2020**. That citation is the whole lead — the
+circular was found at **`Id=11897`** by scanning ids either side of the same policy day, and it
+says, in RBI's own words:
+
+> *"…the Bank Rate is revised downwards by 40 basis points **from 4.65 per cent to 4.25 per cent**
+> with immediate effect."*
+
+✅ **SO 4.25% BEGAN ON 22 MAY 2020.** It had been believed from secondary sources; it is now read
+from the notification. ⛔ **This README previously recorded that boundary as unverified. It is
+verified, and the entry above supersedes it.**
+
+⚠️ **THE SERIES DELIBERATELY STOPS THERE.** The May 2020 circular in turn names
+`DBR.No.Ret.BC.53/12.01.001/2019-20` **dated March 27, 2020**, and that one will name another — the
+chain regresses without end. **22 May 2020 is a chosen floor, not the beginning of history**, and
+the reason it is a *safe* choice is that it is a **verified** one: the first rate in the series has
+a known start date rather than an assumed one. It gives over six years of coverage as at
+2026-08-30, well beyond any period a receivable is realistically still being pursued.
+
+⛔ **WHAT THE ENGINE MUST DO WITH THAT.** For an anchor date before **22 May 2020**, T13 must
+**refuse to compute and say why** — naming the floor and the reason. ⛔ **It must NOT silently price
+a pre-floor period at the earliest rate it happens to hold.** That is the missing-change failure one
+step removed: it foots perfectly, it spot-checks clean everywhere outside the gap, and it is wrong.
+
+### ⛔ THE "WITHDRAWN" WATERMARK IS ON EIGHT OF THE TEN PDFs — AND IT DOES NOT MEAN WHAT IT LOOKS LIKE
+
+```
+$ for f in docs/statutory/rbi-bank-rate-*.pdf; do
+    printf "%-32s grep=%s strings=%s\n" "$(basename $f)" \
+      "$(pdftotext -layout "$f" - | grep -ic withdrawn)" "$(strings "$f" | grep -ic withdrawn)"; done
+
+rbi-bank-rate-2022-05-04.pdf     grep=0 strings=4      <- WITHDRAWN, and grep cannot see it
+rbi-bank-rate-2022-06-08.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2022-08-05.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2022-09-30.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2022-12-07.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2023-02-08.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2025-02-07.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2025-04-09.pdf     grep=0 strings=2      <- WITHDRAWN
+rbi-bank-rate-2025-06-06.pdf     grep=0 strings=0
+rbi-bank-rate-2025-12-05.pdf     grep=0 strings=0
+```
+
+⚠️ **IT EXTRACTS AS SCATTERED LETTERS, NOT AS A WORD.** The stamp is a diagonal overlay, so
+`pdftotext` yields `W` / `it` / `hdr` / `aw` / `n` on separate lines and a grep for "withdrawn"
+finds **nothing** — the `grep=0` column above is that false negative, on every single file
+including the eight that carry the stamp. It was noticed only because the letters interrupted a
+sentence mid-word (*"…to 6.25 per cent with**n aw ithdr W**immediate effect"*). ⛔ **Use `strings`
+on the file, never `grep` on the text layer.**
+
+⭐ **WHAT IT MEANS, AND WHY THESE FILES ARE STILL THE RIGHT SOURCES.** RBI withdraws a circular when
+its substance is folded into a Master Direction — the April 2025 circular points at exactly that:
+*"Please refer to Chapter VIII of Master Direction – Reserve Bank of India [Cash Reserve Ratio (CRR)
+and Statutory Liquidity Ratio (SLR)] Directions – 2021"*. **Withdrawal ends the circular's life as
+an operative INSTRUCTION. It does not unmake the historical fact** that the Bank Rate changed on
+that date to that figure, which is the only thing T13 needs from it.
+
+⛔ **BUT DO NOT CITE A WITHDRAWN CIRCULAR AS CURRENT AUTHORITY.** For "what is the Bank Rate today",
+the live instruments are the Master Direction and the **5 Dec 2025** circular — the two rows marked
+✅ live above are the only ones that answer it. For "what was the Bank Rate on 12 September 2022",
+these files are exactly right. The distinction has to be written down because the two questions look
+identical and only one of them is T13's.
+
+### ⛔ TWO CIRCULARS ISSUE ON EACH POLICY DAY, WITH ADJACENT IDS, AND THE WRONG ONE LOOKS RIGHT
+
+| Circular | Department | Carries |
+|---|---|---|
+| *"Liquidity Adjustment Facility – Change in rates"* | FMOD | repo, SDF, **MSF** |
+| ⭐ *"Change in Bank Rate"* | **DoR.RET.REC** | **the Bank Rate** |
+
+**The MSF rate equals the Bank Rate**, so a series built from the LAF circular would show the right
+numbers while citing the wrong instrument throughout. ⭐ **The adjacency was observed directly while
+locating two of these files** — `13206` is the FMOD/LAF circular of 5 Dec 2025 and `13208` is the
+Bank Rate one; `11893`/`11894` are the MSF and LAF circulars of 22 May 2020 and `11897` is the Bank
+Rate one. **Take the `DoR.RET.REC` one.** Every id in the table above already is.
+
+⚠️ **THE TITLE HAS TWO SPELLINGS.** The older circulars are titled just **"Change in Bank Rate"**;
+the 2025-26 ones are **"Penal Interest on shortfall in CRR and SLR requirements - Change in Bank
+Rate"**. Searching for the long form alone misses February 2025 — which is exactly why it was once
+reported as "not findable". **Search for `Bank Rate` and nothing more.**
+
+### ⚠️ RBI'S DOCUMENT HOST IS FENCED; ITS WEBSITE IS NOT
+
+The 22 May 2020 entry is an **HTML capture** rather than a PDF, and the reason is worth recording
+because it will recur:
+
+| Host | Resolves to | Result |
+|---|---|---|
+| ✅ `www.rbi.org.in` | Azure Front Door (`150.171.109.145`) | **200.** The notification pages carry the FULL circular text — reference number, date, predecessor citation, the from/to sentence, and the Annex |
+| ⛔ `rbidocs.rbi.org.in` | `1.6.75.39`, `14.140.169.71` (India) | **Empty reply.** TCP connects; TLS completes against a valid `*.rbi.org.in` certificate; then the HTTP request is dropped with no response |
+
+⭐ **THE FAILURE IS ABOVE TLS, WHICH IS WHAT IDENTIFIES IT.** `openssl s_client` handshakes cleanly
+and verifies the certificate, so this is not a transport or trust problem — it is application-layer
+filtering on the document host. Retrying across both IPs, HTTP/1.1 and HTTP/2, TLS 1.2 and 1.3, and
+with browser headers and a referer changes nothing. ⚠️ **It is the same class of block as
+`samadhaan.msme.gov.in` and the NIC e-invoice hosts**, recorded below and in the project memory —
+but note it is a *different* range, so the pattern is "Indian-hosted government document servers",
+not "the 164.100.x block".
+
+✅ **AND IT DID NOT COST ANYTHING HERE**, because `www.rbi.org.in` serves the same text. The PDF can
+be swapped in whenever a human with a browser fetches `Id=11897`; the capture is primary evidence
+from RBI's own domain in the meantime.
+
+### ⭐ WHAT THE CHAIN PROVES, AND WHAT IT STILL DOES NOT
+
+✅ **PROVED COMPLETE, 22 May 2020 → today.** No change can be missing inside that window: a skipped
+one would leave a circular whose *"from"* did not match its predecessor's *"to"*, and none does.
+**This is a completeness proof, not a tidiness check** — and it is not a property of any rate table,
+which is why the pasted table this project started from could be wrong in a way nobody noticed.
+
+⛔ **NOT ESTABLISHED, AND DELIBERATELY SO: anything before 22 May 2020.** See the floor section
+above. The engine refuses rather than guesses.
+
+⛔ **AND THE SERIES WILL GO STALE.** It is complete as at 2026-08-30 and RBI reviews the policy rate
+roughly every two months. **`5 Dec 2025 → 5.50%` is the last link only until the next
+announcement** — a fresh circular does not break the chain, it extends it, and the check is the same
+one: does its *"from"* equal 5.50?
+
+## ⚠️ MSMED Act 2006 — what it settles, what it does not, and how it was obtained
+
+**Obtained 2026-08-29.** `docs/design/t13-interest-model.md` §8 asked for this and rated it
+*"NOT blocked by anything — ordinary public documents"*. That turned out to be half true, and the
+half that was false is worth recording because the next person will hit it:
+
+| Host | Result |
+|---|---|
+| `indiacode.nic.in` (the canonical portal) | ⛔ **403 to automated fetchers.** A human with a browser gets through — the same behaviour this README's opening paragraph records for `incometaxindia.gov.in` |
+| `samadhaan.msme.gov.in` (the Ministry's delayed-payment portal) | ⛔ **Connection REFUSED from `164.100.158.186`.** ⚠️ That is the **same `164.100.x` NIC range** as the geo-fenced e-invoice hosts. **The geo-fence is broader than the IRP** — it is a property of NIC-hosted government services generally, and it is now known to block a second, unrelated document source |
+| `legislative.gov.in` | ⛔ 403 |
+| `wb.gov.in` | ⚠️ Downloads, but it is an **FAQ / guidance document**, not the Act |
+| ✅ `dcmsme.gov.in` | **Downloads, and it is the whole Act, ss.1–32** |
+
+### ✅ THE COMMITTED COPY IS INDIA CODE'S, AND IT WAS VERIFIED AGAINST A SECOND SOURCE
+
+**The file here is India Code's `A2006-27.pdf`**, downloaded **by a human with a browser** on
+2026-08-29 — the same workaround this README's opening paragraph prescribes for
+`incometaxindia.gov.in`, applied to `indiacode.nic.in`, which 403s automated fetchers identically.
+It is **text-native** (produced from Word, not scanned), so quotations can be taken from the text
+layer directly.
+
+⭐ **IT REPLACED AN OCR'd MINISTRY SCAN, AND THE TWO WERE DIFFED BEFORE THE SWAP.** The first copy
+obtained was `https://www.dcmsme.gov.in/MSMED2006.pdf` (Development Commissioner, MSME) — a scan
+whose text layer carried artifacts (`d2Y` for "day", `(I)` for `(1)`, `offacilitating`). Every
+section quoted below was re-read against the India Code text **word for word** and **all of them
+matched**, including s.7's thresholds. The scan was right; it is simply a worse artefact to keep.
+
+⚠️ **NOTE FOR ANYONE RE-VERIFYING WITH `grep`.** Both documents wrap lines mid-phrase, so
+`grep "three times"` returns **zero** against s.16 and `grep "twenty-five lakh"` returns **zero**
+against s.7 — in each case the phrase is split across a line break (`at three` / `times of the bank
+rate`; `twenty-` / `five lakh rupees`). **A zero here is a line-wrap artefact and not an absence.**
+Searching for a distinctive single word is the reliable form.
+
+### ✅ WHAT IT SETTLES — read from its own text
+
+- **s.2(b) — "appointed day"**: *"the day following immediately after the expiry of the period of
+  fifteen days from the day of acceptance or the day of deemed acceptance"*.
+  ⭐ **THE FIFTEEN DAYS LIVES HERE, NOT IN s.15.** A note citing s.15 for it cites the wrong section.
+  ⚠️ And its **Explanation** moves the anchor. It defines **two** starting facts, not one:
+  - *"the day of acceptance"* — the day of actual delivery **or**, where the buyer objects **in
+    writing within fifteen days** of delivery, *"the day on which such objection is removed by the
+    supplier"*;
+  - *"the day of deemed acceptance"* — where **no** written objection is made within fifteen days,
+    *"the day of the actual delivery of goods or the rendering of services"*.
+
+  ⛔ **SO THE CLOCK'S START IS NOT SIMPLY THE INVOICE DATE, AND IT IS NOT EVEN FIXED AT DELIVERY.**
+  A written objection resets it to an event that happens later and that this product does not
+  record anywhere. §5's anchor-date gap is therefore wider than §5 states.
+- **s.15**: payment on or before the date agreed **in writing**, or *"where there is no agreement in
+  this behalf, before the appointed day"*; proviso — the agreed period *"shall in no case exceed
+  forty-five days from the day of acceptance or the day of deemed acceptance"*.
+- **s.16**: *"compound interest with monthly rests … from the appointed day or, as the case may be,
+  from the date immediately following the date agreed upon, at three times of the bank rate notified
+  by the Reserve Bank"*. ⭐ **TWO ANCHORS, not one** — which of them applies depends on whether there
+  was a written agreement.
+- **s.23**: the interest *"shall not, for the purposes of computation of income under the Income-tax
+  Act, 1961, be allowed as deduction"*.
+- **s.24 — the override, now PINNED**: *"The provisions of sections 15 to 23 shall have effect
+  notwithstanding anything inconsistent therewith contained in any other law for the time being in
+  force."* The T13 memo guessed "s.24 or equivalent"; it is s.24.
+
+### ⛔ WHAT IT DOES *NOT* SETTLE — and the second one is a trap
+
+1. **THE RBI BANK RATE.** Not in the Act and never will be. s.16 is an arithmetic instruction over a
+   dated series that this repository still does not have. **T13 remains blocked on it.**
+2. ⛔⛔ **WHO IS A MICRO OR SMALL ENTERPRISE. s.7's THRESHOLDS ARE THE 2006 ORIGINALS AND ARE
+   SUPERSEDED.** The Act as enacted reads *"a micro enterprise, where the investment in plant and
+   machinery does not exceed twenty-five lakh rupees"*. Those figures were replaced in 2020 by
+   composite investment-**and**-turnover criteria and revised again since. **Using the Act's own
+   numbers would misclassify almost every real enterprise**, and it would do so in the flattering
+   direction — nearly everybody would fall outside micro/small, so the MSMED regime would silently
+   never apply and no interest would ever be computed under it.
+
+   ⭐ **s.7(1) IS THE PART THAT MATTERS, AND IT IS STILL GOOD LAW**: the Central Government *"may,
+   for the purposes of this Act, **by notification** … classify"*. So classification is delegated,
+   exactly as the EPF administrative charges are — the Act supplies the mechanism and a separate
+   notification supplies the numbers.
+
+   ⚠️ **AND THE PRODUCT PROBABLY SHOULD NOT COMPUTE THIS AT ALL.** It has no investment or turnover
+   figure for a counterparty and must not invent one. What a supplier actually presents is a **Udyam
+   Registration Number** and a declared class. **Record the declaration; do not derive the
+   classification.** That is a design decision for `t13-interest-model.md` §3.2, which currently only
+   records that the flag does not exist.

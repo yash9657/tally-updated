@@ -57,7 +57,8 @@ const MAPPABLE_FIELDS: readonly {
   { key: "withdrawal", label: "Withdrawal amount", onlyFor: ["two-columns"], required: true },
   { key: "amount", label: "Amount", onlyFor: ["signed-amount", "amount-and-flag"], required: true },
   { key: "direction", label: "Credit / debit flag", onlyFor: ["amount-and-flag"], required: true, hint: "The column holding C or D, in the bank's own wording." },
-  { key: "running_balance", label: "Running balance", hint: "Only used to CHECK the file: it is how a dropped or duplicated row is detected. Without it that check cannot run." },
+  { key: "running_balance", label: "Running balance", hint: "Only used to CHECK the file: it is how a dropped or duplicated row is detected. Without it, key the statement's opening and closing balance below." },
+  { key: "balance_sign", label: "Balance Cr / Dr column", hint: "Only for files that print the balance unsigned beside its own Cr/Dr. Dr there means overdrawn." },
   { key: "bank_reference", label: "Bank reference / UTR" },
   { key: "cheque_number", label: "Cheque number" },
 ];
@@ -92,6 +93,10 @@ export function BankStatementImportPanel({
   const [preview, setPreview] = useState<PreviewStatementResponse | null>(null);
   const [mapping, setMapping] = useState<StatementColumnMapping | null>(null);
   const [statementAccount, setStatementAccount] = useState("");
+  // W5 — the balances printed on the statement. Strings, never numbers: they go
+  // to the server as decimal strings and the proof is computed there.
+  const [declaredOpening, setDeclaredOpening] = useState("");
+  const [declaredClosing, setDeclaredClosing] = useState("");
   const [result, setResult] = useState<ImportStatementResponse | null>(null);
   const [imported, setImported] = useState<ImportedStatementResponse | null>(
     null,
@@ -176,6 +181,8 @@ export function BankStatementImportPanel({
         content,
         mapping,
         statement_account_number: statementAccount || undefined,
+        declared_opening_balance: declaredOpening.trim() || undefined,
+        declared_closing_balance: declaredClosing.trim() || undefined,
         created_by: "ui",
       })
       .then((res) => {
@@ -185,7 +192,7 @@ export function BankStatementImportPanel({
       })
       .then((st) => setImported(st ?? null))
       .catch(fail);
-  }, [client, companyID, content, fail, fileName, ledgerID, mapping, statementAccount]);
+  }, [client, companyID, content, declaredClosing, declaredOpening, fail, fileName, ledgerID, mapping, statementAccount]);
 
   const showImported = useCallback(() => {
     setBusy(true);
@@ -271,7 +278,14 @@ export function BankStatementImportPanel({
             onChange={(e) => setContent(e.target.value)}
             onBlur={() => {
               if (content.trim()) {
-                runPreview(fileName || "pasted.csv", content);
+                // ⛔ NO INVENTED NAME HERE ANY MORE (D111). This call used to
+                // send "pasted.csv" while the IMPORT ninety-nine lines up sent
+                // the bare (empty) name — one of the two calls that needed a
+                // fallback got one, which is how every pasted statement came to
+                // be stored nameless. The fallback now lives in ONE place, the
+                // server, where the file's own period and row count are known
+                // and can tell two pastes apart; a constant here could not.
+                runPreview(fileName, content);
               }
             }}
           />
@@ -391,6 +405,32 @@ export function BankStatementImportPanel({
                 two accounts wrong.
               </span>
             </label>
+
+            <label className="flex flex-col">
+              <span>Opening balance printed on the statement</span>
+              <input
+                data-testid="stmt-declared-opening"
+                inputMode="decimal"
+                className="mt-1 bg-tally-bg p-1"
+                value={declaredOpening}
+                onChange={(e) => setDeclaredOpening(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col">
+              <span>Closing balance printed on the statement</span>
+              <input
+                data-testid="stmt-declared-closing"
+                inputMode="decimal"
+                className="mt-1 bg-tally-bg p-1"
+                value={declaredClosing}
+                onChange={(e) => setDeclaredClosing(e.target.value)}
+              />
+              <span className="mt-0.5 text-[10px] leading-tight opacity-80">
+                Required when the file has no running balance: the import is
+                REFUSED unless opening + deposits − withdrawals = closing can be
+                checked. If the file prints them too, they must agree.
+              </span>
+            </label>
           </div>
 
           {missing.length > 0 ? (
@@ -433,6 +473,22 @@ export function BankStatementImportPanel({
           <p className="mt-1 text-xs">
             {result.period_from} to {result.period_to}
           </p>
+          {/* ⛔ THE NAME IT WAS STORED UNDER, AND IT IS NOT ALWAYS THE ONE SENT
+              (D111). A statement PASTED rather than chosen has no file name, so
+              the server derives one from the file's own period, row count and
+              fingerprint. Shown here because the disclosures on the combined
+              import report QUOTE this string — an operator who has pasted twice
+              cannot otherwise tell which of the two a warning is about. */}
+          <p className="mt-1 text-xs" data-testid="stmt-stored-name">
+            Stored as <strong>{result.file_name}</strong>
+            {fileName.trim() === "" ? (
+              <>
+                {" "}
+                — this statement was pasted, so it had no file name of its own
+                and one was made from its contents.
+              </>
+            ) : null}
+          </p>
 
           {/* ⚠️ A CHECK THAT DID NOT RUN MUST NOT LOOK LIKE A CHECK THAT
               PASSED. This is the difference between "your file is verified" and
@@ -447,7 +503,9 @@ export function BankStatementImportPanel({
           >
             {result.balance_walked
               ? `Balance check PASSED: the rows walk from ${formatMoney(result.opening_balance)} to ${formatMoney(result.closing_balance)} to the paisa, so no row is missing or duplicated.`
-              : "Balance check DID NOT RUN — this file carries no running balance. A row dropped or duplicated by the export would NOT have been detected."}
+              : result.balance_proof === "declared"
+                ? `Balance PROVED by totals, not row by row: ${formatMoney(result.opening_balance)} + deposits − withdrawals = ${formatMoney(result.closing_balance)}. One missing or duplicated row would have been refused; two errors of equal and opposite amount would not.`
+                : "Balance check DID NOT RUN — this file carries no running balance. A row dropped or duplicated by the export would NOT have been detected."}
           </p>
 
           {result.disclosures.length > 0 ? (

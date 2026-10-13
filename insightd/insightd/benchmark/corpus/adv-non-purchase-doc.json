@@ -1,6 +1,6 @@
 {
   "id": "adv-non-purchase-doc",
-  "description": "Delivery challan / quotation -> not a purchase -> manual, and NOTHING is posted. The derived_gst block below is therefore not a claim about this document's tax at all — a challan has none to claim. It records the no-conclusion default the pipeline reaches when there is no candidate supplier ledger (contrast adv-ambiguous-supplier, where candidates exist and agree, so the state IS known). The value is retained only so the oracle has something to check; a challan that carried no derived_gst at all would be more honest, and is tracked in HANDOFF §6.",
+  "description": "Delivery challan / quotation -> not a purchase -> manual, and NOTHING is posted. The derived_gst block below is therefore not a claim about this document's tax at all \u2014 a challan has none to claim. It records the no-conclusion default the pipeline reaches when there is no candidate supplier ledger (contrast adv-ambiguous-supplier, where candidates exist and agree, so the state IS known). The value is retained only so the oracle has something to check; a challan that carried no derived_gst at all would be more honest, and is tracked in HANDOFF \u00a76.",
   "rulesetVersion": "gst-2024-09",
   "ocr_quality": "clean",
   "input": {
@@ -55,7 +55,7 @@
           "confidence": 0.97
         },
         {
-          "text": "GSTIN: 27ABCDE1234F1Z5",
+          "text": "GSTIN: 27ABCDE1234F1Z0",
           "bbox": [
             10,
             130,
@@ -158,7 +158,7 @@
         {
           "id": "L-PARTY-1",
           "name": "Acme Components Pvt Ltd",
-          "gstin_masked": "27ABC…1Z5",
+          "gstin_masked": "27ABC\u20261Z0",
           "state_code": "27",
           "kind": "party"
         },
@@ -199,7 +199,7 @@
     },
     "planted_pii": {
       "GSTIN": [
-        "27ABCDE1234F1Z5"
+        "27ABCDE1234F1Z0"
       ],
       "PAN": [
         "ABCDE1234F"

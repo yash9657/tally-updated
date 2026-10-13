@@ -15,6 +15,28 @@
 export type Money = string;
 
 /**
+ * An EXCHANGE RATE transported as a string: base units per ONE foreign unit,
+ * carried to TEN decimals (e.g. "83.6512345678").
+ *
+ * ⛔⛔ A RATE IS NOT `Money`, AND THIS ALIAS EXISTS TO SAY SO AT THE ONE PLACE
+ * A READER WILL LOOK. Both are `string`, so TypeScript cannot enforce the
+ * difference — which is exactly why the distinction has to be carried by the
+ * NAME. `Money` is fixed-4 end to end in this product and every money helper
+ * assumes it: `parseFixed4` (screens/vouchers/itemInvoice.ts) TRUNCATES the
+ * fifth decimal onward, and its own comment says so. Feed it a rate and
+ * 83.6512345678 silently becomes 83.6512 — a value that then round-trips
+ * through every later layer perfectly, so nothing fails and the bill is simply
+ * priced wrong.
+ *
+ * ⚠️ THE ERROR IS NOT COSMETIC AT THE FOURTH DECIMAL. Base-per-foreign for a
+ * weak currency is 0.0033333333, where four decimals give 0.0033 — a relative
+ * error around 1.5e-4, or thousands of rupees on a fifty-lakh invoice.
+ *
+ * Use `parseRate` / `formatRate` (api/rate.ts), never the money pair.
+ */
+export type Rate = string;
+
+/**
  * The voucher classes with a POST route (path segment + F-key mapping).
  *
  * The first eight are ACCOUNTING classes: they must state balanced double-entry
@@ -295,10 +317,47 @@ export interface LedgerListItem {
    * be drawn", not "this is an asset".
    */
   is_bank: boolean;
+  /**
+   * BORN BLOCKED (migration 0095): a ledger the AGENT created, which no voucher
+   * may post to until a person unblocks it. Absent on a server older than 0095.
+   */
+  blocked?: boolean;
+  blocked_reason?: string;
 }
 
 export interface ListLedgersResponse {
   ledgers: LedgerListItem[];
+}
+
+/**
+ * One account group as `GET .../groups` serves it.
+ *
+ * ⚠️ THE ROUTE WAS ADDED FOR T11 AND `POST /groups` LONG PREDATES IT. Every
+ * screen that cared about groups before named them by NAME (createLedger takes a
+ * group name), and a budget line on a GROUP has to store an account_group_id —
+ * which no master form may ask a human to type. It costs no permission rule: the
+ * server already mapped `/groups` to the shared `master` token, the same one
+ * `listLedgers` reads under.
+ */
+export interface AccountGroupListItem {
+  id: string;
+  name: string;
+  /** "" for a primary group — never a null and never the nil uuid. */
+  parent_name: string;
+  /**
+   * ASSET / LIABILITY / INCOME / EXPENSE.
+   *
+   * ⚠️ SERVED BECAUSE A CALLER CANNOT DERIVE IT, and a budget line takes its SIDE
+   * from it: debit for what is spent or owned, credit for what is earned or owed.
+   */
+  nature: string;
+  /** A Profit & Loss group rather than a Balance Sheet one. */
+  is_pl: boolean;
+}
+
+/** `GET .../groups` */
+export interface ListGroupsResponse {
+  groups: AccountGroupListItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +429,19 @@ export interface SetBankDateRequest {
    */
   bank_date: string;
   created_by: string;
+  /**
+   * T4 slice 2b — the imported bank row this tick came from. OPTIONAL; its
+   * absence is the ordinary manual reconciliation.
+   *
+   * ⭐ ACCEPTING A PROPOSED MATCH IS THIS REQUEST, not a route of its own, so
+   * matching cannot become a second way to acquire the authority to assert a
+   * clearance — and the back-dated cutoff, which reads `bank_date` out of THIS
+   * body, keeps working because it is the same body.
+   *
+   * ⛔ `bank_date` MUST BE THE STATEMENT ROW'S OWN VALUE DATE. The server
+   * refuses a disagreement naming both dates rather than preferring either.
+   */
+  statement_line_id?: string;
 }
 
 export interface SetBankDateResponse {
@@ -390,9 +462,7 @@ export interface SetBankDateResponse {
 
 /** How a file says which way money moved. */
 export type StatementDirectionEncoding =
-  | "two-columns"
-  | "signed-amount"
-  | "amount-and-flag";
+  "two-columns" | "signed-amount" | "amount-and-flag";
 
 /**
  * The operator-confirmed reading of one file. Every field except `encoding` and
@@ -413,6 +483,12 @@ export interface StatementColumnMapping {
   running_balance: string;
   bank_reference: string;
   cheque_number: string;
+  /**
+   * W5 — a Cr/Dr column carrying the RUNNING BALANCE's sign (Kotak prints the
+   * balance unsigned beside its own flag). "Dr" there is an OVERDRAWN, negative
+   * balance. Optional; omitted by every client written before it.
+   */
+  balance_sign?: string;
 }
 
 export interface PreviewStatementRequest {
@@ -438,6 +514,16 @@ export interface PreviewStatementResponse {
   unresolved: string[];
   /** Observations that do not block — e.g. a column nothing was mapped to. */
   notes: string[];
+  /**
+   * W5 — the bank whose export layout the header matched IN FULL, "" when none
+   * did. ⚠️ `bank_verified` is false for every layout today (no real export has
+   * been checked in this build) and `notes` says so; render it as "recognised",
+   * never as "verified".
+   */
+  bank?: string;
+  bank_verified?: boolean;
+  /** "comma" | "tab" | "semicolon" | "pipe" — how the file was read. */
+  delimiter?: string;
   known_date_layouts: string[];
   known_encodings: StatementDirectionEncoding[];
 }
@@ -455,10 +541,32 @@ export interface ImportStatementRequest {
    */
   statement_account_number?: string;
   created_by: string;
+  /**
+   * W5 — the opening and closing balance PRINTED ON THE STATEMENT, as decimal
+   * strings. The import is REFUSED without a balance proof: a file with no
+   * running balance and no summary of its own can only be proved by these
+   * (opening + deposits − withdrawals = closing). If the file states them too,
+   * the two must agree.
+   */
+  declared_opening_balance?: string;
+  declared_closing_balance?: string;
 }
 
 export interface ImportStatementResponse {
   import_id: string;
+  /**
+   * The name the import was STORED under — which is not always the name that
+   * was sent (D111). A statement PASTED rather than chosen arrives with no file
+   * name at all, and the server derives one from the file's own period, row
+   * count and fingerprint ("pasted statement 2026-04-01 to 2026-04-30, 42 rows
+   * (3f9a1c7e)") rather than storing "".
+   *
+   * ⛔ IT MATTERS BECAUSE A DISCLOSURE QUOTES IT. The combined "everything
+   * imported for this account" report names the file that could NOT be
+   * balance-walked; stored empty, that sentence read `"" carried no running
+   * balance…` and, with two pasted imports on one account, named neither.
+   */
+  file_name: string;
   /**
    * True when this exact file was already imported into this account. A SUCCESS
    * and a no-op, not an error: the operator's intent is satisfied either way.
@@ -477,6 +585,17 @@ export interface ImportStatementResponse {
    * the outside, and only one of them is safe.
    */
   balance_walked: boolean;
+  /**
+   * W5 — WHICH balance proof held: "running" (row by row), "declared" (opening
+   * + deposits − withdrawals = closing on declared figures — a walk did NOT
+   * run), or "running+declared" (both). Never empty on a successful import.
+   */
+  balance_proof?: "running" | "declared" | "running+declared";
+  balance_declared_by?: "" | "file" | "operator" | "file+operator";
+  /** "oldest-first" | "newest-first", or "" when the file carries no balance. */
+  row_order?: string;
+  /** Each comparison the proof ran and passed, in words. */
+  proof_checks?: string[];
   period_from: string;
   period_to: string;
   /** What this import could not verify, in the operator's own words. */
@@ -517,6 +636,8 @@ export interface BankStatementImport {
   line_count: number;
   /** False when this file carried no running balance to walk. */
   balance_walked: boolean;
+  /** W5 — see ImportStatementResponse.balance_proof; "" before W5. */
+  balance_proof?: string;
 }
 
 /** GET /bank-statement/{ledgerID} — what the bank said, over a period. */
@@ -540,6 +661,141 @@ export interface ImportedStatementResponse {
   disclosures: string[];
 }
 
+// ---------------------------------------------------------------------------
+// T4 SLICE 2b — MATCHING an imported bank row to a voucher leg.
+// ---------------------------------------------------------------------------
+
+/**
+ * The evidence a proposal rests on — RESEARCH.md:879's four tiers.
+ *
+ * "manual" is never PROPOSED. It is what the server stores when an operator
+ * resolves a leg the matcher offered at no tier, and is the honest word for
+ * "a person said so".
+ */
+export type MatchTier = "exact" | "potential" | "partial" | "manual";
+
+/** One voucher leg the matcher believes a bank row might be. */
+export interface BankMatchCandidate {
+  voucher_id: string;
+  leg_no: number;
+  voucher_no: string;
+  class: string;
+  voucher_date: string;
+  narration: string;
+  party: string;
+  amount: Money;
+  dr_cr: DrCr;
+  /** "" on an unmatched LEG, which was offered to nobody. */
+  tier: MatchTier | "";
+  /**
+   * The evidence in the operator's words. A client MUST show it: a candidate
+   * offered without a reason is a machine asking to be trusted.
+   */
+  why: string;
+  /** For a partial: what makes up the sum. */
+  partial_with?: string[];
+}
+
+/** One imported bank row and what the matcher found for it. */
+export interface BankMatchProposal {
+  line_id: string;
+  line_no: number;
+  value_date: string;
+  description: string;
+  amount: Money;
+  dr_cr: DrCr;
+  bank_reference?: string;
+  cheque_number?: string;
+
+  /** "" when nothing was found at any tier. */
+  best_tier: MatchTier | "";
+  candidates: BankMatchCandidate[];
+  /**
+   * ⛔ INVARIANT B-1 ON THE WIRE. True when more than one candidate sits at the
+   * best tier, OR when another bank row competes for this one's best candidate.
+   * A client must NEVER offer a one-key acceptance for a row carrying it: two
+   * payments of the same amount on the same day are ordinary, and picking one is
+   * right half the time — with the wrong half invisible.
+   */
+  ambiguous: boolean;
+  /** The other file line numbers competing for this row's best candidate. */
+  contested_by?: number[];
+  /** The ONLY field a bulk-accept key may read. */
+  acceptable_in_bulk: boolean;
+}
+
+/** One decision already recorded about a bank row. */
+export interface BankMatchResolution {
+  line_id: string;
+  /**
+   * ⛔ "set-aside" IS NOT A WEAK "matched" AND MUST NOT RENDER AS ONE. It is the
+   * operator recording that a bank row corresponds to NOTHING in the books — a
+   * real category. It writes no clearance and moves no balance.
+   */
+  status: "matched" | "set-aside";
+  tier: MatchTier;
+  note?: string;
+  matched_by: string;
+  matched_at: string;
+
+  voucher_id?: string;
+  leg_no?: number;
+  voucher_no?: string;
+  class?: string;
+  bank_date?: string;
+  /**
+   * True when somebody retyped the Bank Date cell after matching, so the tick
+   * and the statement row no longer agree about WHEN the bank did it. The same
+   * class as BROKEN BY ALTER, one column over — surface it.
+   */
+  bank_date_differs?: boolean;
+  line_value_date?: string;
+}
+
+/** The exception report's counts (Ctrl+J), over the same payload. */
+export interface BankMatchCounts {
+  lines: number;
+  exact: number;
+  potential: number;
+  partial: number;
+  ambiguous: number;
+  no_candidate: number;
+  acceptable_in_bulk: number;
+  unmatched_legs: number;
+}
+
+/**
+ * GET /bank-statement/{ledgerID}/matches — what the matcher PROPOSES.
+ *
+ * ⛔ NOTHING IN THIS RESPONSE HAS BEEN RECONCILED, and `disclosures[0]` says so
+ * in those words. Deriving proposals writes nothing; a bank date is written only
+ * when the operator accepts one, through the bank-reconciliation PUT.
+ */
+export interface BankMatchesResponse {
+  ledger_id: string;
+  ledger_name: string;
+  from: string;
+  to: string;
+  /** The search width actually used, which the screen must state. */
+  date_window_days: number;
+  proposals: BankMatchProposal[];
+  /** Books-only unreconciled: legs no bank row proposed. A CATEGORY, not an error. */
+  unmatched_legs: BankMatchCandidate[];
+  resolved: BankMatchResolution[];
+  counts: BankMatchCounts;
+  disclosures: string[];
+}
+
+/** POST .../lines/{lineID}/set-aside */
+export interface SetAsideRequest {
+  note?: string;
+  created_by?: string;
+}
+
+export interface SetAsideResponse {
+  status: "set-aside" | "unmatched";
+}
+
 /**
  * One bill of a ledger's BILL-WISE OPENING BREAKUP — the individual unpaid
  * invoices that make up its opening balance, as at `books_beginning_from`.
@@ -554,6 +810,26 @@ export interface OpeningBillRequest {
   dr_cr?: DrCr;
   amount: Money;
   due_date?: string;
+  /**
+   * ⭐⭐ T8 STEP 6 — THE OPENING BILL'S CURRENCY, foreign amount and rate.
+   *
+   * ⛔ ALL THREE OR NONE OF THEM. Omit all three and the bill is in the books' own
+   * currency — that is the ONE encoding of base (migration 0080), and there is no
+   * other. `currency_id: ""` is not "no currency", it is a malformed triple and
+   * the server answers 400.
+   *
+   * ⚠️ `rate` IS **NOT** A `Money`. It is base units per ONE foreign unit at ten
+   * decimals, and putting it through `parseFixed4` silently truncates it —
+   * 0.0033333333 becomes 0.0033. Use `api/rate.ts` (`normaliseRate`,
+   * `formatRate`), never the money helpers.
+   *
+   * ⛔ AND IT IS THE RATE THE OPENING BILL WAS RAISED AT, the historical truth of
+   * that bill. Step 5's settlement engine differences a later receipt against
+   * exactly this value, so a wrong rate here is a wrong realised gain for ever.
+   */
+  currency_id?: string;
+  foreign_amount?: Money;
+  rate?: Rate;
 }
 
 export interface CreateLedgerRequest {
@@ -653,7 +929,43 @@ export interface CreateUnitRequest {
   symbol: string;
   formal_name?: string;
   decimal_places?: number;
+  /**
+   * A COMPOUND unit (T10): 1 <symbol> = <conversion_factor> <base_unit_symbol>,
+   * e.g. 1 BOX = 12 Nos.
+   *
+   * ⛔ BOTH OR NEITHER — the server refuses half of one, because a base with no
+   * factor cannot be converted and a factor with no base converts to nothing.
+   * ⛔ AND THE FACTOR IS A DECIMAL STRING, like every other number on this wire:
+   * a JSON number is a float, and a float conversion factor is how one BOX
+   * quietly becomes 11.999999 pieces.
+   */
+  base_unit_symbol?: string;
+  conversion_factor?: Money;
   created_by?: string;
+}
+
+/**
+ * One unit of measure as stored. `decimal_places` is what tells a grid how many
+ * decimals a quantity in this unit may carry.
+ *
+ * A COMPOUND unit carries `base_unit_symbol` and `conversion_factor`; both are ""
+ * for a simple one.
+ *
+ * ⚠️ DO NOT MULTIPLY A QUANTITY BY THIS FACTOR IN A CLIENT. Quantities are stored
+ * in the item's own unit and RESTATED by the server (the Stock Summary's
+ * base_qty); a client that converted as well would convert twice.
+ */
+export interface UnitListItem {
+  id: string;
+  symbol: string;
+  formal_name: string;
+  decimal_places: number;
+  is_system: boolean;
+  base_unit_symbol: string;
+  conversion_factor: Money | "";
+}
+export interface ListUnitsResponse {
+  units: UnitListItem[];
 }
 export interface CreateUnitResponse {
   unit_id: string;
@@ -666,6 +978,24 @@ export interface CreateStockItemRequest {
   gst_rate_pct?: Money;
   opening_qty?: Money;
   opening_rate?: Money;
+  /**
+   * THE COSTING METHOD (T9): "WEIGHTED_AVG" (the default), "FIFO" or "LIFO".
+   *
+   * ⛔ OMITTED MEANS THE DEFAULT, and it is optional so that every caller
+   * written before T9 keeps creating weighted-average items. Do not send a
+   * method the server does not offer: GET .../inventory-vocabulary is the list,
+   * and the server refuses anything else at the MASTER rather than letting the
+   * Stock Summary and the Balance Sheet fail later for the whole company.
+   */
+  valuation_method?: string;
+  /**
+   * The item's STOCK GROUP (T10). Absent leaves it UNGROUPED.
+   *
+   * ⚠️ THE GROUP MUST ALREADY EXIST — the server refuses an unknown one rather
+   * than creating it, because a group minted from a misspelling subtotals half a
+   * company's stock under a name nobody meant.
+   */
+  stock_group_name?: string;
   created_by?: string;
 }
 export interface CreateStockItemResponse {
@@ -676,12 +1006,47 @@ export interface CreateStockItemResponse {
 // Vouchers
 // ---------------------------------------------------------------------------
 
+/**
+ * One double-entry line.
+ *
+ * `amount` IS THE BASE AMOUNT AND IS AUTHORITATIVE — it is what the server's
+ * double-entry trigger sums and what every report reads. T8's three forex
+ * fields sit BESIDE it and never instead of it.
+ *
+ * ⛔ THE THREE ARE ALL-OR-NONE. Send all three or none; a two-of-three posting
+ * is refused (migration 0080's posting_forex_all_or_none, surfaced in words by
+ * the ledger). Absent means BASE — which is every voucher keyed before this
+ * feature and most vouchers for ever.
+ *
+ * ⛔ AND THE CURRENCY IS PER-POSTING, NOT PER-VOUCHER. The ordinary foreign
+ * purchase is MIXED: the creditor leg is $1,000 and the expense leg is
+ * ₹83,651.23, because what the company owes is dollars and what the purchase
+ * cost the business is rupees.
+ */
 export interface PostingRequest {
   ledger_id: string;
   dr_cr: DrCr;
   amount: Money;
+  /** The currency MASTER's uuid. Absent on a base-currency posting. */
+  currency_id?: string;
+  /** The amount in that currency. Absent on a base-currency posting. */
+  foreign_amount?: Money;
+  /** ⛔ `Rate`, NOT `Money` — ten decimals, never the fixed-4 money path. */
+  rate?: Rate;
 }
 
+/**
+ * A bill-wise reference on a party leg.
+ *
+ * It carries the SAME three forex fields as a posting, and it must: the
+ * Outstandings report reads `bill_allocation`, NOT `posting`, so a foreign bill
+ * whose currency arrived only on the posting would show correctly in the ledger
+ * and as a base bill on the ageing report.
+ *
+ * ⚠️ AND ITS `rate` IS THE BILL'S HISTORICAL RATE — the figure a later
+ * settlement is differenced against to realise an exchange gain or loss. Losing
+ * it does not corrupt the gain; it makes the gain uncomputable.
+ */
 export interface BillAllocationRequest {
   ledger_id: string;
   ref_name: string;
@@ -689,6 +1054,9 @@ export interface BillAllocationRequest {
   dr_cr: DrCr;
   amount: Money;
   due_date?: string;
+  currency_id?: string;
+  foreign_amount?: Money;
+  rate?: Rate;
 }
 
 export interface GSTLineRequest {
@@ -944,6 +1312,45 @@ export interface VoucherRequest {
    * the seller. See {@link TCSRequest}.
    */
   tcs?: TCSRequest | null;
+  /**
+   * THE insightd BILL DRAFT THIS POST IS ACCEPTING (§7.3 B, migration 0077).
+   * Unset on every hand-keyed voucher, which is nearly all of them.
+   *
+   * ⛔⛔ IT IS WHAT MAKES "ACCEPT THIS AI BILL ONCE" A GUARANTEE INSTEAD OF A
+   * CLAIM, AND THE REASON IS THAT THE SERVER ENFORCES IT IN THE VOUCHER'S OWN
+   * TRANSACTION. Accepting a draft is two writes to two services: this POST, and
+   * then telling insightd the draft is `accepted`. When that second write is lost
+   * — tab closed, network dropped, laptop asleep — insightd keeps offering the
+   * bill as `ready`. Every guard that READS a status (the session memo, the
+   * durable memo, the localStorage retry queue, the day-book lookup, the claim
+   * lease) is a check-then-act, and all of them live in ONE BROWSER: a second
+   * machine inside that window walked straight through, which is why
+   * draftAccept.test.ts used to pin a test asserting TWO real vouchers.
+   *
+   * Sending it here puts the decision under a unique index on
+   * (company_id, source_draft_id): the loser rolls back with no voucher, no
+   * numbering advance and no input tax, and gets a 409 whose `detail.code` is
+   * `draft_already_accepted` — the SAME code and fields insightd's own claim
+   * route mints, so {@link acceptPurchaseDraft} translates one refusal shape and
+   * not two.
+   *
+   * ⚠️ IT IS AN OPAQUE insightd IDENTIFIER, NOT A UUID (its corpora use ids like
+   * "CO-DEMO/bill-3"). The only property the server needs is that two accepts of
+   * one draft spell it identically.
+   */
+  draft_id?: string;
+  /**
+   * W5 (migration 0100) — the CLIENT's name for THIS REQUEST. A second POST
+   * under the same key and the same body is answered with the FIRST one's
+   * result (`idempotent_replay: true`) instead of posting a second voucher; the
+   * same key with a different body is refused 422 `idempotency_key_reused`.
+   *
+   * ⛔ IT CLOSES WHAT `draft_id` CANNOT: a body with no draft id (the Bill
+   * Inbox's "no draft id resolvable" window) and a retry after an ambiguous
+   * timeout, which `draft_id` alone answers with a 409 for a request that in
+   * fact succeeded. 8..200 characters, no white space. Honoured on CREATE only.
+   */
+  idempotency_key?: string;
 }
 
 /**
@@ -1001,6 +1408,12 @@ export interface VoucherResponse {
   cgst: Money;
   sgst: Money;
   igst: Money;
+  /**
+   * W5 — true when this answer was NOT written by this request: its
+   * `idempotency_key` had already created the voucher, and this is that first
+   * request's result, replayed. Nothing was posted. Absent otherwise.
+   */
+  idempotent_replay?: boolean;
 }
 
 /**
@@ -1027,6 +1440,23 @@ export interface DeleteVoucherResponse {
 // fixed-4 strings; dr_cr is the canonical "D"/"C".
 // ---------------------------------------------------------------------------
 
+/**
+ * One posting of a fetched voucher.
+ *
+ * ⛔⛔ THE FOUR FOREX FIELDS ARE ABSENT ON A BASE POSTING, AND EVERY BUILDER
+ * THAT REBUILDS AN ALTER BODY FROM THIS VIEW MUST PASS THEM STRAIGHT BACK.
+ * An alter RE-STATES: the server rewrites `posting` from the request body, so
+ * whatever the body omits is gone. A form that echoes `amount` and drops
+ * `currency_id` turns a $1,000 bill into a ₹83,651.23 bill on an unrelated
+ * narration edit — and nothing refuses it, because the voucher still balances
+ * and the Balance Sheet does not move. This is the same defect
+ * `cost_allocations`, `fulfilments` and `gst_lines` each carry a warning about;
+ * it is the first one where the loss is a VALUE on a surviving row rather than
+ * a row.
+ *
+ * ⚠️ SPREAD THEM, DO NOT COPY THEM FIELD BY FIELD. `{...view, ...}` carries
+ * a field added later; an explicit copy list silently stops carrying it.
+ */
 export interface PostingView {
   /** The REAL posting ledger id (uuid) — never a name. */
   ledger_id: string;
@@ -1034,6 +1464,13 @@ export interface PostingView {
   ledger: string;
   dr_cr: DrCr;
   amount: Money;
+  /** Absent on a base-currency posting. Send back verbatim on an alter. */
+  currency_id?: string;
+  /** The currency's CODE ("USD") — display only; the id is the fact. */
+  currency?: string;
+  foreign_amount?: Money;
+  /** ⛔ Ten decimals. Never re-format it through a money helper. */
+  rate?: Rate;
 }
 
 export interface BillAllocationView {
@@ -1044,6 +1481,11 @@ export interface BillAllocationView {
   amount: Money;
   /** "" when no due date is recorded. */
   due_date: string;
+  /** Absent on a base-currency bill. See PostingView — same rule, same cost. */
+  currency_id?: string;
+  currency?: string;
+  foreign_amount?: Money;
+  rate?: Rate;
 }
 
 export interface VoucherView {
@@ -1346,6 +1788,107 @@ export interface StockItemListItem {
   /** Names the valuer that replays this item's movements, e.g. "WEIGHTED_AVG". */
   valuation_method: string;
   is_system: boolean;
+  /**
+   * The item's STOCK GROUP (T10), or "" for an UNGROUPED item — a real state
+   * (Tally's "under Primary") and not a missing value: every item created before
+   * T10 is ungrouped, so a picker that hid them would hide most of a company's
+   * stock.
+   */
+  stock_group: string;
+}
+
+/**
+ * One node of the item hierarchy (T10), as served in TREE ORDER: a parent always
+ * precedes its children, and `depth` is what a client indents by.
+ *
+ * ⚠️ RE-SORTING THE LIST BREAKS THE TREE. The order is the server's ltree path
+ * order; sorting by name would put a child above its parent and the indentation
+ * would describe a hierarchy that does not exist.
+ */
+export interface StockGroupListItem {
+  id: string;
+  name: string;
+  /** "" for a top-level group. */
+  parent_name: string;
+  depth: number;
+  /** How many items sit DIRECTLY in this group (not in its descendants). */
+  item_count: number;
+}
+export interface ListStockGroupsResponse {
+  stock_groups: StockGroupListItem[];
+}
+/**
+ * A foreign currency as the server stores it (T8).
+ *
+ * ⛔ `latest_rate` IS A STRING AND MAY BE EMPTY, AND EMPTY IS NOT ZERO. A
+ * currency with no rate on file cannot be used to key a voucher; rendering "0"
+ * would offer the choice anyway and value the whole invoice at nothing. The
+ * rate carries TEN decimals — more than `Money` — so it must never be parsed
+ * with parseFixed4, which truncates the fifth.
+ */
+export interface CurrencyListItem {
+  id: string;
+  code: string;
+  symbol: string;
+  formal_name: string;
+  decimal_places: number;
+  /** "" when no rate has ever been entered. */
+  latest_rate: string;
+  /** "" when no rate has ever been entered. */
+  latest_rate_date: string;
+}
+export interface ListCurrenciesResponse {
+  currencies: CurrencyListItem[];
+}
+export interface CreateCurrencyRequest {
+  code: string;
+  symbol: string;
+  formal_name: string;
+  decimal_places: number;
+  created_by?: string;
+}
+export interface CreateCurrencyResponse {
+  currency_id: string;
+}
+export interface SetCurrencyRateRequest {
+  code: string;
+  effective_date: string;
+  /** Base units per ONE foreign unit. `Rate`, not `Money` — see the alias. */
+  rate: Rate;
+  created_by?: string;
+}
+
+/**
+ * WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080).
+ *
+ * ⛔ `gain_loss_ledger_id` IS ABSENT OR "" WHEN NOTHING IS CHOSEN, NEVER THE NIL
+ * UUID. "00000000-0000-0000-0000-000000000000" is a well-formed id that names no
+ * ledger, and a client that round-tripped it back into the PUT would be sending a
+ * choice rather than clearing one.
+ *
+ * ⚠️ AND "NOT CHOSEN" IS A REAL, ORDINARY STATE — every company that never trades in
+ * a foreign currency is in it, so this is a 200 with an empty field and never a 404.
+ * A settlement that would realise a difference at such a company is REFUSED by the
+ * server naming this setting, which is the whole reason the route exists.
+ */
+export interface ForexSettingsResponse {
+  gain_loss_ledger_id?: string;
+  /** The operator's own spelling of it, so a screen need not resolve the uuid. */
+  gain_loss_ledger_name?: string;
+}
+export interface SetForexSettingsRequest {
+  /** A ledger uuid, or "" to CLEAR the choice. */
+  gain_loss_ledger_id: string;
+}
+
+export interface CreateStockGroupRequest {
+  name: string;
+  /** An EXISTING group, or absent for a top-level one. */
+  parent_name?: string;
+  created_by?: string;
+}
+export interface CreateStockGroupResponse {
+  stock_group_id: string;
 }
 export interface ListStockItemsResponse {
   stock_items: StockItemListItem[];
@@ -1379,6 +1922,43 @@ export interface ListStockBatchesResponse {
   batches: StockBatchListItem[];
 }
 
+/**
+ * One costing method the SERVER offers, with Tally's own name for it and one
+ * line on what the closing stock ends up carried at.
+ *
+ * ⛔ SERVED, NEVER HARDCODED. A picker built from a client-side list can offer a
+ * method the server refuses, and the operator meets that refusal after keying
+ * the whole master — and the list will grow (Tally ships eight methods, this
+ * build implements three).
+ */
+export interface ValuationMethodOption {
+  method: string;
+  label: string;
+  basis: string;
+}
+export interface InventoryVocabularyResponse {
+  valuation_methods: ValuationMethodOption[];
+  /** The method an item gets when none is asked for. */
+  default: string;
+}
+
+export interface SetValuationMethodRequest {
+  valuation_method: string;
+  created_by?: string;
+}
+export interface SetValuationMethodResponse {
+  stock_item_id: string;
+  name: string;
+  /** THE STORED value, never an echo of the request. */
+  valuation_method: string;
+  /**
+   * The server's own disclosure that the item's WHOLE history has been
+   * re-valued — including periods already reported. Show it: a client that says
+   * only "saved" lets an operator walk away not knowing a filed figure moved.
+   */
+  restates: string;
+}
+
 // ---------------------------------------------------------------------------
 // Stock Summary (GET .../stock-summary)
 // ---------------------------------------------------------------------------
@@ -1401,6 +1981,8 @@ export interface StockPositionRow {
   godown: string;
   batch_id: string;
   batch: string;
+  /** The item's stock group (T10), carried on the flat row so an export can group by it. */
+  stock_group: string;
   valuation_method: string;
   opening_qty: Money;
   opening_value: Money;
@@ -1428,6 +2010,32 @@ export interface StockSummaryItem {
   stock_item_id: string;
   item: string;
   unit: string;
+  /** The item's STOCK GROUP (T10), "" for an ungrouped item. */
+  stock_group: string;
+  /**
+   * The closing quantity RESTATED in the unit's base unit when the item's unit
+   * is COMPOUND: an item in "BOX of 12 Nos" closing at 4 BOX reads base_qty
+   * "48.0000" in base_unit "Nos".
+   *
+   * ⛔ BOTH ARE "" FOR A SIMPLE UNIT — render NOTHING, never "0.0000": a unit
+   * with no base restates into nothing, and a zero would read as a claim about
+   * the goods. And `closing_qty` is the STORED figure: nothing converts a
+   * quantity on the way in, so a report that showed base_qty as the quantity
+   * would disagree with the invoice about what was keyed.
+   */
+  base_unit: string;
+  base_qty: Money;
+  /**
+   * The BASIS every figure on this line was derived on — "WEIGHTED_AVG",
+   * "FIFO" or "LIFO". It is on the ITEM and not on a position because that is
+   * where stock_item.valuation_method lives: one item is valued one way in
+   * every godown it sits in.
+   *
+   * ⛔ A SCREEN THAT PRINTS THESE VALUES MUST PRINT THIS TOO. One company can
+   * mix all three, so two item totals on the same page can mean different
+   * things; without the basis beside them neither can be reproduced or compared.
+   */
+  valuation_method: string;
   opening_qty: Money;
   opening_value: Money;
   inward_qty: Money;
@@ -1439,9 +2047,33 @@ export interface StockSummaryItem {
   positions: StockPositionRow[];
 }
 
+/**
+ * One STOCK GROUP's subtotal on the Stock Summary (T10) — the whole BRANCH: a
+ * group's own items plus every item in every group beneath it.
+ *
+ * ⛔ THESE DO NOT SUM TO `total_value`, AND ADDING THEM UP IS A BUG. An item
+ * counts in every ancestor of its group, which is what makes a branch total worth
+ * reading. The company's closing stock is `total_value`, which comes off the
+ * POSITIONS.
+ *
+ * `group` is "" for the UNGROUPED bucket, which is a real bucket holding every
+ * item that predates T10 — label it, never skip it.
+ */
+export interface StockGroupSubtotal {
+  group: string;
+  depth: number;
+  item_count: number;
+  opening_value: Money;
+  inward_value: Money;
+  outward_value: Money;
+  closing_value: Money;
+}
+
 export interface StockSummaryResponse {
   /** The as-at date the replay stopped at; "" when unbounded. */
   as_on: string;
+  /** Group subtotals in TREE ORDER, ungrouped last. See StockGroupSubtotal. */
+  groups: StockGroupSubtotal[];
   items: StockSummaryItem[];
   /** The same positions, flat — the item tree is folded from these. */
   rows: StockPositionRow[];
@@ -1532,6 +2164,52 @@ export interface OutstandingBill {
   due_date: string;
   overdue_days: number;
   slab: string;
+  /**
+   * True for the one row per party that is NOT a bill: the part of the balance
+   * that names no reference at all (D106).
+   *
+   * ⛔ IT IS UN-AGED AND IN NO SLAB, so `slab` is `""` and `overdue_days` is 0 —
+   * and an empty `due_date` here means "there is no bill to be due", not "the due
+   * date was not recorded". The screen must say those differently, because
+   * "no due date recorded" invites an operator to go and record one.
+   *
+   * ⚠️ READ THE FLAG, NEVER THE NAME. Testing `ref_name === "On Account"` would
+   * re-derive a server fact from a display string, and a customer may legitimately
+   * name a real bill that.
+   */
+  on_account: boolean;
+  /**
+   * ⭐⭐ T8 STEP 6 — THE FOREIGN HALF (Q5 of the multi-currency design memo).
+   *
+   * `currency_code` is the bill's currency ('USD'), or `""` for a bill carried in
+   * the books' own currency. `foreign_pending` is the unsettled amount in it,
+   * signed exactly as `pending` is.
+   *
+   * ⛔ TWO FIELDS, NEVER ONE COLUMN. `pending` stays the BASE figure because that
+   * is what ties to Sundry Debtors/Creditors on the Balance Sheet, and this
+   * report's caption promises that agreement. A single column that held whichever
+   * applied would change currency from row to row and foot to a total in none.
+   *
+   * ⚠️ READ `currency_code`, NEVER `foreign_pending`. A zero foreign amount does
+   * NOT mean the bill is base: a foreign bill whose foreign column has netted to
+   * zero while its base column has not is exactly the data error this report
+   * exists to disclose, and it arrives with a code and a zero.
+   */
+  currency_code: string;
+  foreign_pending: Money;
+  /**
+   * True on EVERY row of a reference that is open under more than one currency —
+   * including base-versus-foreign, because base IS a currency (encoded as no
+   * currency at all, never as an absence).
+   *
+   * ⛔⛔ RENDER IT ON THE ROW, NOT ONLY IN A FOOTNOTE. Q5 calls such a reference a
+   * data error and not a sum: the server never adds the two together (they are
+   * separate netting groups), so the operator receives TWO rows bearing ONE bill
+   * number. Unmarked, that reads as a customer who numbered two invoices alike —
+   * a harmless fact — rather than as one invoice with an allocation against it in
+   * the wrong currency.
+   */
+  currency_conflict: boolean;
 }
 
 export interface OutstandingParty {
@@ -1552,8 +2230,18 @@ export interface OutstandingSlabTotal {
   amount: Money;
 }
 
+/**
+ * ⛔ THE SLAB TOTALS DO NOT SUM TO `total`, AND THIS IS THE DIFFERENCE (D106).
+ * On-account money has no due date and is therefore in no bucket, so
+ * `sum(slab_totals) + on_account_total === total` — always. Tally leaves that gap
+ * silent; this report states it, because a column of buckets printed beside a
+ * larger total is exactly the shape a reader checks by adding up.
+ */
+
 export interface OutstandingsResponse {
   kind: OutstandingKind;
+  /** See OutstandingSlabTotal — the part of `total` that is in no ageing slab. */
+  on_account_total: Money;
   /**
    * The date the ROWS are limited to, or `""` when they are not limited at all.
    *
@@ -1574,6 +2262,105 @@ export interface OutstandingsResponse {
   parties: OutstandingParty[];
   slab_totals: OutstandingSlabTotal[];
   total: Money;
+}
+
+/**
+ * ⭐⭐ T8 STEP 7 — ONE OPEN FOREIGN BILL'S UNREALISED POSITION.
+ *
+ * ⛔ THIS REPORT POSTS NOTHING (Q4 of the multi-currency design memo, and the repo
+ * owner's own answer). The revaluation VOUCHER is deferred; the server says so on
+ * the wire in `posts_nothing` and the screen must say so in those words.
+ */
+export interface UnadjustedForexBill {
+  ledger_id: string;
+  ledger: string;
+  group: string;
+  ref_name: string;
+  /** 'NEW' or 'ADVANCE'. An advance IS revalued — see UnadjustedForexResponse. */
+  ref_type: string;
+  currency_code: string;
+  /**
+   * What is still open in the foreign currency, signed to the party's natural side
+   * exactly as `OutstandingBill.foreign_pending` is. NEGATIVE on an advance held.
+   */
+  foreign_pending: Money;
+  /** The base figure the books carry for the part still open. */
+  book_value: Money;
+  /**
+   * The unrealised gain (positive) or loss (negative), in the books' OWN currency,
+   * and `"0.0000"` when `has_rate_as_on` is false.
+   */
+  difference: Money;
+  /**
+   * ⛔⛔ THE TWO RATES ARE `Rate`, NOT `Money`, AND THIS IS THE ONE PLACE ON THIS
+   * SCREEN WHERE A WRONG CHOICE IS INVISIBLE. They arrive at TEN decimals; putting
+   * either through `parseFixed4` or `formatMoney` gives 0.0033 for 0.0033333333 —
+   * thousands of rupees on a fifty-lakh invoice — and the truncated value
+   * round-trips through its own type perfectly, so nothing fails. Use
+   * `api/rate.ts`'s helpers, never the money ones.
+   *
+   * `bill_rate` is the rate the document was RAISED at. `rate_as_on` is the rate
+   * used to price it.
+   */
+  bill_rate: Rate;
+  rate_as_on: Rate;
+  /**
+   * ⛔ READ THIS, NEVER `rate_as_on`. `"0.0000000000"` is what "no rate was ever
+   * entered for this currency on or before the date" looks like as a decimal, and a
+   * zero rate revalues the whole exposure to nothing — a LOSS of the entire book
+   * value, correctly signed, in the right column, from a rate nobody keyed.
+   *
+   * The row is still listed: an exposure with an unknown rate is still an exposure,
+   * and dropping it is how a reader takes a short report for a small exposure.
+   */
+  has_rate_as_on: boolean;
+}
+
+/**
+ * The unadjusted-forex (unrealised gain/loss) report.
+ *
+ * ⛔⛔ IT COVERS **BOTH** SIDES — receivable and payable — IN ONE REPORT, which is
+ * the opposite call from the `Outstandings` / `Bills Payable` split and is argued
+ * rather than inherited (see migration 0090's header). The subject is the company's
+ * NET exposure to a currency: a $1,000 receivable and a $1,000 payable at one rate
+ * are an exposure of NOTHING, so two reports would show two numbers neither of which
+ * is the position. The screen states that it covers both.
+ *
+ * ⚠️ AN `ADVANCE` IS REVALUED AND `On Account` IS NOT ON THIS REPORT. An advance is
+ * a named reference with one rate on one document and a real book value; `On Account`
+ * is the derived residue of a party's balance over many rates and carries no currency
+ * at all.
+ */
+export interface UnadjustedForexResponse {
+  /**
+   * The date the ROWS are limited to, or `""` when they are not limited at all
+   * (D86 — empty is an ANSWER, not a missing field; read it with `??`, never `||`).
+   */
+  as_on: string;
+  /**
+   * The day every row was PRICED against. ALWAYS populated, including on an
+   * unbounded read. ⚠️ On this report the date genuinely does two jobs and this is
+   * the second one: a revaluation with no rate date is a number with no reference.
+   */
+  priced_as_on: string;
+  bills: UnadjustedForexBill[];
+  /**
+   * The sum of the differences of the rows that could be PRICED.
+   *
+   * ⭐ UNLIKE `OutstandingsResponse`'s foreign column this total IS meaningful: a
+   * DIFFERENCE is in the books' own currency whatever currency produced it, so a
+   * book with dollar and euro bills has one honest total — and receivable and
+   * payable rows OFFSET rather than accumulate.
+   */
+  total_difference: Money;
+  /**
+   * How many listed rows could NOT be priced. ⛔ IT IS THE DISCLOSURE THAT THE TOTAL
+   * IS SHORT — the same argument `on_account_total` exists for on the ageing report,
+   * and the screen must state it rather than leaving a reader to add the column up.
+   */
+  unrated_count: number;
+  /** Always true. Emitted so no client has to hard-code Q4's sentence. */
+  posts_nothing: boolean;
 }
 
 /**
@@ -1682,8 +2469,60 @@ export interface ImportedVoucher {
 export interface ImportTallyXMLResponse {
   source_company: string;
   vouchers_posted: number;
-  ledgers_ensured: number;
+  vouchers_altered: number;
+  vouchers_deleted: number;
+  vouchers_skipped: number;
+  /**
+   * D101 — MONEY THE SOURCE BOOKS EXCLUDE. Vouchers marked ISCANCELLED or
+   * ISOPTIONAL in Tally, which Tally itself keeps out of the books, and which
+   * this importer therefore does NOT post.
+   *
+   * ⛔ THIS IS NOT `vouchers_skipped`. That figure means "already imported under
+   * this GUID". Rendering the two together would tell an operator their voided
+   * sales were duplicates.
+   */
+  vouchers_voided: number;
+  /** One line per excluded voucher: ordinal, type, number, date and reason. */
+  voided_vouchers: string[];
+  /** LEDGER masters marked ISDELETED in the export, and so not created. */
+  ledgers_tombstoned: string[];
+  /** Account groups CREATED from the export's GROUP masters (Tally's own built-ins resolve instead). */
+  groups_ensured: string[];
+  /** Every ledger name the import touched. It is a list of NAMES, not a count. */
+  ledgers_ensured: string[];
+  /**
+   * What the import carried on past rather than aborting over — an opening
+   * bill-wise breakup that does not sum to its own balance, a ledger whose Tally
+   * group was not in the file. An empty array is the only clean import; a
+   * non-empty one MUST be shown to the operator, because the totals will look
+   * right either way.
+   */
+  warnings: string[];
   posted: ImportedVoucher[];
+  /**
+   * THE GOODS — the number of stock MOVEMENTS the import wrote across every
+   * voucher, and the number of OPENING POSITIONS it wrote from STOCKITEM
+   * masters.
+   *
+   * ⛔ THESE ARE THE ONLY FIGURES IN THIS RESPONSE THAT CAN TELL AN OPERATOR
+   * WHETHER THEIR STOCK ARRIVED. Quantity is invisible in a trial balance, so an
+   * import that reads every stock line and drops it answers 200 with a report
+   * that looks complete — books that balance, and a Stock Summary with nothing
+   * in it. `stock_lines: 0` on a file full of invoices is the tell.
+   *
+   * ⚠️ `opening_positions: 0` alongside a non-zero `stock_lines` is a WARNING and
+   * not a clean result: the export carried no opening stock (a Day Book does
+   * not), so every position starts at nil and the first issue of older goods was
+   * either refused or consumed nothing at all.
+   */
+  stock_lines: number;
+  opening_positions: number;
+  /** The inventory masters CREATED (not merely referenced), sorted and unique. */
+  stock_items_ensured: string[];
+  units_ensured: string[];
+  godowns_ensured: string[];
+  /** "ITEM/BATCH", because a batch name is scoped to its item. */
+  batches_ensured: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -2879,7 +3718,7 @@ export interface CostCategorySummaryResponse {
  * stock effect, and an order must never appear in the Day Book beside vouchers.
  * It is a promise, not an entry.
  */
-export type OrderDirection = 'SALES' | 'PURCHASE';
+export type OrderDirection = "SALES" | "PURCHASE";
 
 /**
  * One committed item quantity on an order.
@@ -3278,7 +4117,7 @@ export interface EWayBillRequest {
   transporter_name?: string;
   /** Part B. Absent for a movement under the distance threshold the server states. */
   vehicle_number?: string;
-  transport_mode?: 'ROAD' | 'RAIL' | 'AIR' | 'SHIP';
+  transport_mode?: "ROAD" | "RAIL" | "AIR" | "SHIP";
   /**
    * Approximate distance in km — drives the validity period the server computes.
    *
@@ -3464,7 +4303,7 @@ export interface EInvoicePinned {
 /** The order list: heads only, WITHOUT their lines — see {@link OrderView}. */
 export interface OrderListResponse {
   direction: OrderDirection;
-  orders: Omit<OrderView, 'lines'>[];
+  orders: Omit<OrderView, "lines">[];
   /**
    * Echoed so a screen cannot render a filtered list under an unfiltered heading.
    * "No orders" and "no OPEN orders" are different answers to an operator.
@@ -3474,7 +4313,7 @@ export interface OrderListResponse {
 
 /** The recipe list: heads only, WITHOUT their components. */
 export interface BomListResponse {
-  boms: Omit<BomView, 'components'>[];
+  boms: Omit<BomView, "components">[];
 }
 
 /**
@@ -3488,4 +4327,1348 @@ export interface CloseOrderRequest {
   is_closed: boolean;
   /** Required when closing. Omit (or send empty) when re-opening. */
   reason?: string;
+}
+
+// ===========================================================================
+// PAYROLL (Track 3, migrations 0034-0036 · backend/internal/payroll,
+// internal/server/handler_payroll.go).
+// ===========================================================================
+//
+// The eight routes below have been mounted, PDP-mapped and tested since Track 3
+// landed, and NOTHING IN THIS APP HAS EVER CALLED ONE OF THEM. The engine, the
+// statutory rates, the two reports and the three statutory FILES were all built
+// server-side; `frontend/src/screens/` contained no payroll screen at all, so an
+// operator could not create an employee, run a wage month, or produce an ECR
+// without calling the server directly. That is the same shape of gap T4 (bank
+// reconciliation) and T6 (the challan register) each had, and it is closed the
+// same way: a client method per route, and a screen per authority.
+//
+// ⛔ EVERY MONEY FIELD ON EVERY TYPE BELOW IS A STRING, AND IT IS THE SERVER'S
+// OWN `StringFixed(4)`. There is no `number` anywhere in this section and there
+// must never be one: a JSON number arrives as a float64 and re-prices somebody's
+// salary in the last paisa. The screens render these strings and never parse
+// them; the ONE place a decimal is built is an operator's own typed input on the
+// way OUT, where it travels as a string too (`monthInputReq` on the server takes
+// strings for exactly this reason).
+
+/**
+ * One employee master row.
+ *
+ * ⚠️ THE IDENTIFIERS ARE HERE — PAN, UAN, ESIC IP number, bank IFSC — and that
+ * is a deliberate server decision, not an oversight to be filtered in a screen:
+ * an operator who may reach the master must be able to SEE and correct a wrong
+ * PAN, because a malformed one is a Form 138 deductee record the department
+ * rejects. WHO may reach it is decided by the ACL and not by this projection —
+ * `employees` is served under its OWN resource token `employee` (never folded
+ * into `master`, which migration 0022 grants to every seeded Data Entry level),
+ * and migration 0035 disallows create/alter/display of it there by default. So a
+ * 403 on the employee screen is a NORMAL answer and is rendered as the decision
+ * it is.
+ */
+export interface EmployeeView {
+  id: string;
+  code: string;
+  name: string;
+  /** Date of joining, YYYY-MM-DD. "" when not recorded. */
+  doj: string;
+  /** Date of leaving, YYYY-MM-DD. "" for a serving employee — the usual case. */
+  dol: string;
+  designation: string;
+  pan: string;
+  uan: string;
+  esic_ip_number: string;
+  bank_ifsc: string;
+  /**
+   * The LAST FOUR DIGITS of the bank account and nothing else. The column is
+   * `bank_account_last4` on the server too: a payroll master is the highest-value
+   * row in the database for anybody who reaches it, and a full account number
+   * buys nothing the payslip or the ECR needs.
+   */
+  bank_account_last4: string;
+  is_active: boolean;
+  /** Absent when the employee has no dedicated payable ledger. */
+  payable_ledger_id?: string;
+}
+
+export interface ListEmployeesResponse {
+  employees: EmployeeView[];
+}
+
+/**
+ * The POST /employees body.
+ *
+ * ⛔ `is_active` IS OPTIONAL AND ITS ABSENCE MEANS TRUE — the server's field is a
+ * `*bool` precisely so a client that does not know about the flag cannot create
+ * an INACTIVE employee. An inactive employee is silently excluded from the pay
+ * run, which is a missing salary discovered on pay day, so this client never
+ * sends `false` unless somebody chose it.
+ */
+export interface CreateEmployeeRequest {
+  code: string;
+  name: string;
+  doj?: string;
+  dol?: string;
+  designation?: string;
+  pan?: string;
+  uan?: string;
+  esic_ip_number?: string;
+  bank_ifsc?: string;
+  bank_account_last4?: string;
+  payable_ledger_id?: string;
+  is_active?: boolean;
+}
+
+export interface CreateEmployeeResponse {
+  employee_id: string;
+}
+
+/**
+ * One employee's non-derivable facts for a wage month.
+ *
+ * EVERY FIELD IS A STRING for the reason this section's header states. `paid_days`
+ * and `lop_days` are decimals too — a half-day of loss of pay is real, and
+ * `parseFloat` on the wire is how it stops being exactly a half.
+ *
+ * Omitted fields are omitted, not sent as "0": the server skips an empty string
+ * and leaves the engine's own zero value, so sending "0" for a declaration the
+ * employee never made is the client asserting something it was not told.
+ */
+export interface PayRunMonthInput {
+  employee_id: string;
+  paid_days?: string;
+  lop_days?: string;
+  /** YYYY-MM-DD — first date this person was EVER a PF member (s.PF continuity). */
+  first_pf_member_on?: string;
+  prior_employer_taxable?: string;
+  prior_employer_tds?: string;
+  house_property_loss?: string;
+  chapter_via?: string;
+  other_income_declared?: string;
+  non_resident?: boolean;
+  /** The income-tax age band; the engine's own vocabulary, passed through. */
+  age_band?: string;
+}
+
+/**
+ * POST /vouchers/payroll — compute and post a whole wage month.
+ *
+ * ⛔ ITS DATE DIMENSION IS `wage_month`, NOT A VOUCHER DATE, AND THE BACK-DATED
+ * CUTOFF STILL APPLIES TO IT. The server derives the voucher date from the wage
+ * month with `payrolldb.LastDayOf` and runs the SAME period lock every invoice
+ * meets (`peekPayrollVoucherDate`, `auth_payroll_cutoff_test.go`). So a pay run
+ * for a closed month is a 403 that means "that month is locked" — never a
+ * permission problem with payroll — and the screen must say which.
+ */
+export interface PayRunRequest {
+  /** YYYY-MM. Strictly parsed server-side: "2026-13" and "2026-1" are refused. */
+  wage_month: string;
+  created_by?: string;
+  narration?: string;
+  inputs: PayRunMonthInput[];
+}
+
+export interface PayRunResponse {
+  pay_run_id: string;
+  voucher_id: string;
+  voucher_no: string;
+  version_no: number;
+  status: string;
+  /**
+   * TRUE when this month had already been posted and nothing new was written.
+   *
+   * ⛔ IT IS NOT A FAILURE AND IT IS NOT A FRESH POSTING, and a screen that
+   * renders it as either is wrong in a way that costs money: read as a failure,
+   * the operator runs it again; read as a success, they believe a correction they
+   * just keyed took effect when the stored run is the earlier one.
+   */
+  already_posted: boolean;
+}
+
+/** One line of the payroll register — an employee, or the TOTALS row. */
+export interface PayrollRegisterRow {
+  /** Absent on the totals row, which is how the totals row is identified. */
+  employee_id?: string;
+  employee_code?: string;
+  employee_name?: string;
+  days_paid: string;
+  gross: string;
+  epf_employee: string;
+  esi_employee: string;
+  tds: string;
+  deductions: string;
+  net: string;
+  epf_employer: string;
+  eps_employer: string;
+  esi_employer: string;
+}
+
+/**
+ * GET /payroll-register?month=YYYY-MM.
+ *
+ * ⚠️ THE RULESET VERSIONS ARE PART OF THE REPORT AND MUST BE RENDERED. A payroll
+ * figure with no statement of which law produced it cannot be checked by anybody
+ * who was not present when it was run — which is the whole audit problem with
+ * every payroll system. The server puts them on the JSON and on the printed page;
+ * a screen that drops them is the only place the chain breaks.
+ */
+export interface PayrollRegisterResponse {
+  pay_run_id: string;
+  wage_month: string;
+  status: string;
+  ss_ruleset_version: string;
+  it_ruleset_version: string;
+  rows: PayrollRegisterRow[];
+  totals: PayrollRegisterRow;
+}
+
+/** One component line of a payslip. */
+export interface PayslipLine {
+  code: string;
+  type: string;
+  tag: string;
+  /** "EARNING" or "DEDUCTION" — the server's own word, never inferred here. */
+  direction: string;
+  amount: string;
+}
+
+/**
+ * A component the engine DID NOT compute, and why.
+ *
+ * ⛔ IT BELONGS ON THE PAYSLIP, NOT IN A LOG. A blank where a number should be is
+ * a question the employee will ask, and the honest answer is "the rate has not
+ * been notified", not "zero". The server puts these on the payslip for that
+ * reason; the screen renders them beside the components rather than swallowing
+ * them.
+ */
+export interface PayslipDeferral {
+  component: string;
+  reason: string;
+  citation: string;
+}
+
+/** GET /payroll-payslip?month=YYYY-MM&employee_id=UUID. */
+export interface PayslipResponse {
+  pay_run_id: string;
+  wage_month: string;
+  employee_id: string;
+  employee_code: string;
+  employee_name: string;
+  days_paid: string;
+  lop_days: string;
+  gross: string;
+  deductions: string;
+  net: string;
+  lines: PayslipLine[];
+  deferrals: PayslipDeferral[];
+  ss_ruleset_version: string;
+  it_ruleset_version: string;
+}
+
+/**
+ * One challan on a Form 138 Annexure I statement.
+ *
+ * `total_tds_deposited` is OPTIONAL and omitting it is the better answer: the
+ * server DERIVES the challan total from the month's payslips (what the books say
+ * was deducted). A supplied amount that does not equal the deductee sum is
+ * REFUSED — that reconciliation is the whole point of the statement, so this is
+ * not a convenience field but a cross-check the operator can opt into.
+ */
+export interface Form138Challan {
+  /** YYYY-MM — the wage month the challan pays for. */
+  month: string;
+  bsr_code: string;
+  /** YYYY-MM-DD. */
+  date_of_deposit: string;
+  challan_serial_number: number;
+  total_tds_deposited?: string;
+  /** A government book-entry transfer rather than a bank deposit. */
+  book_entry?: boolean;
+}
+
+/**
+ * GET /payroll-form-138 — the quarterly salary-TDS statement (ex-24Q Annexure I).
+ *
+ * ⛔ NOT ONE OF THESE PARTICULARS IS IN THE DATABASE. The company master carries
+ * no TAN and no challan, so every field here is supplied by the operator and an
+ * absent one is a 400. Nothing is defaulted into a FILED RECORD — that is the
+ * rule this whole shape exists to keep, and it is why the screen behind it is a
+ * form rather than a download button.
+ *
+ * ⚠️ Q4 IS REFUSED BY THE SERVER (`ErrQ4FormatNotPublished`): the Q4 / Annexure
+ * II record structure is not published, and guessing it would mis-file every
+ * employee's whole-year salary detail.
+ */
+export interface Form138Request {
+  /** "2026-27" or "2026" — the tax year beginning 1 April of the leading year. */
+  tax_year: string;
+  /** "Q1" | "Q2" | "Q3" (Q4 is refused — see above). */
+  quarter: string;
+  tan: string;
+  deductor_pan: string;
+  deductor_name: string;
+  /** "24Q". */
+  form_number: string;
+  /** YYYY-MM-DD. */
+  file_creation_date: string;
+  /** Defaults to 1 server-side. Unique across every file this deductor has sent. */
+  file_sequence?: number;
+  challans: Form138Challan[];
+}
+
+/**
+ * A statutory file download: the file, its statutory NAME, and the disclosure.
+ *
+ * ⛔ THE SERVER SERVES A ZIP, ON PURPOSE, AND THIS CLIENT NEVER UNWRAPS IT. None
+ * of the three formats permits an in-file comment — the ECR is a bare member list
+ * the portal parses line by line, the Form 138 file must begin with its FH record,
+ * and the ESI CSV must begin with the ESIC column headers — so the "this has NOT
+ * been through the validator" disclosure can only travel BESIDE the file. The
+ * archive holds exactly two entries: the statutory file under its statutory
+ * filename, and `<name>.README.txt`. A client that opened the zip and handed over
+ * only the file would be separating the file from the statement of what is not
+ * verified about it, which is the one thing the zip exists to prevent.
+ */
+export interface StatutoryFileDownload {
+  /** The .zip itself, exactly as served. */
+  blob: Blob;
+  /** The download name from Content-Disposition, or null. */
+  filename: string | null;
+  /**
+   * `X-Statutory-File` — the name of the statutory file INSIDE the archive.
+   * Shown so an operator knows what the portal will be given, not just what
+   * landed in their downloads folder.
+   */
+  statutoryFile: string | null;
+  /**
+   * `X-Statutory-Disclosure` — the server's own one-line warning that nothing
+   * here has been through the FVU, the EPFO portal or the ESIC portal, none of
+   * which can run in this environment. Rendered VERBATIM; never summarised.
+   */
+  disclosure: string | null;
+}
+
+/**
+ * One effective-dated salary component.
+ *
+ * ⛔ THE EMPLOYEE MASTER ALONE CANNOT BE PAID, AND THAT IS WHY THIS TYPE EXISTS.
+ * `payrolldb.SetSalaryComponent` and `SetStatutoryElection` shipped with Track 3
+ * and had NO ROUTE, so an employee created through `POST /employees` met
+ * "no salary structure is in force on <date>; there is nothing to pay and
+ * nothing to contribute on" — a 422 on the PAY RUN, long after the master was
+ * created, with nothing anywhere saying it was incomplete. Both children are now
+ * served under the same `employee` authority as the master itself.
+ *
+ * The window is HALF-OPEN [effective_from, effective_to): with an inclusive
+ * upper bound the day of a revision belongs to both the old row and the new one,
+ * and a pay run for that month would have two answers to "what is the basic".
+ * An empty `effective_to` is an open window — the usual case.
+ */
+export interface SalaryComponentView {
+  id: string;
+  effective_from: string;
+  /** "" = still in force. */
+  effective_to: string;
+  /** The operator's own name for it — "Basic", "HRA", "Site allowance". */
+  code: string;
+  /** A member of the served component-type vocabulary; never free text. */
+  type: string;
+  amount: string;
+  /**
+   * Whether PF and ESI are contributed on this component (Code on Social
+   * Security s.2(88)).
+   *
+   * ⛔ IT TRAVELS WITH THE ROW rather than being looked up by this client against
+   * a vocabulary it fetched at some other moment. This is the single most
+   * consequential fact about a component — a type that silently fell through to
+   * "excluded" under-contributes PF for the whole of an employee's service with
+   * no error anywhere — and a join between two responses is a join that can be
+   * stale.
+   */
+  is_wages: boolean;
+  /**
+   * Whether this component is one of s.2(88) clauses (a)-(i), the only sum
+   * proviso 1 measures against the one-half floor.
+   *
+   * A screen that showed only wages/not-wages would be telling an operator that
+   * an excluded component never affects the contribution, and for these it does:
+   * paid above one half of all remuneration, the EXCESS is deemed back into
+   * wages. (j) gratuity and (k) retrenchment compensation are outside it.
+   */
+  in_deeming_test: boolean;
+}
+
+export interface ListSalaryComponentsResponse {
+  salary_components: SalaryComponentView[];
+}
+
+/** The POST body for one effective-dated salary component. */
+export interface SetSalaryComponentRequest {
+  effective_from: string;
+  effective_to?: string;
+  code: string;
+  type: string;
+  /** A decimal STRING. Never a JSON number — see this section's header. */
+  amount: string;
+}
+
+export interface SetSalaryComponentResponse {
+  salary_component_id: string;
+}
+
+/**
+ * One effective-dated statutory election: the PF contribution base, the pension
+ * scheme, ESI coverage and the income-tax regime.
+ *
+ * ⛔ `regime` MAY BE "" AND THAT IS A DIFFERENT FACT FROM "NEW". An empty regime
+ * is "no election was made", which the server resolves to the s.202 default when
+ * it computes and STORES AS GIVEN so a later reader can still tell one from the
+ * other. A screen that rendered "" as "New regime" would be reporting an
+ * election nobody made.
+ */
+export interface StatutoryElectionView {
+  id: string;
+  effective_from: string;
+  effective_to: string;
+  /** "CEILING" | "ACTUAL" — no default; the two differ above the wage ceiling. */
+  pf_base: string;
+  pf_voluntary_base: string;
+  employer_matches_voluntary: boolean;
+  eps_member: boolean;
+  esi_applicable: boolean;
+  /** "" = no election; see the interface doc. */
+  regime: string;
+}
+
+export interface ListStatutoryElectionsResponse {
+  statutory_elections: StatutoryElectionView[];
+}
+
+/**
+ * The POST body for one election.
+ *
+ * The three booleans are POSITIVE ASSERTIONS about one person and an omitted one
+ * is FALSE, unlike {@link CreateEmployeeRequest}'s `is_active`: there is no
+ * answer that is safe to assume — assuming membership contributes on somebody who
+ * is not a member, and assuming coverage withholds from somebody who is not
+ * covered — so the form asks for all three rather than letting a default decide.
+ */
+export interface SetStatutoryElectionRequest {
+  effective_from: string;
+  effective_to?: string;
+  pf_base: string;
+  pf_voluntary_base?: string;
+  employer_matches_voluntary?: boolean;
+  eps_member?: boolean;
+  esi_applicable?: boolean;
+  regime?: string;
+}
+
+export interface SetStatutoryElectionResponse {
+  statutory_election_id: string;
+}
+
+/** One entry of the served salary-component vocabulary. */
+export interface PayrollComponentType {
+  code: string;
+  is_wages: boolean;
+  in_deeming_test: boolean;
+}
+
+/**
+ * The closed sets a payroll form chooses from.
+ *
+ * ⛔ FETCHED AND NEVER HARDCODED, for the reason {@link SecurityVocabulary} is:
+ * a form built from a list this client owns can compose a value the server
+ * answers 400, and the operator meets the refusal after keying the whole thing.
+ * Here it is worse than inconvenient — `is_wages` is a LEGAL classification (it
+ * carries the Vivekananda Vidyamandir holding that a universally paid special
+ * allowance IS wages), and a second copy of it in TypeScript, updated by
+ * somebody else, is the drift that under-contributes PF with no error anywhere.
+ */
+export interface PayrollVocabularyResponse {
+  component_types: PayrollComponentType[];
+  pf_bases: string[];
+  regimes: string[];
+  /**
+   * What an UNSTATED regime resolves to (s.202: the new regime).
+   *
+   * Served so a form can SAY so rather than pre-selecting it — pre-selecting
+   * would record an election nobody made, which is exactly the distinction
+   * {@link StatutoryElectionView.regime} keeps.
+   */
+  default_regime: string;
+  age_bands: string[];
+}
+
+// ---------------------------------------------------------------------------
+// PER-COMPANY PRINT TEMPLATES (track C)
+// ---------------------------------------------------------------------------
+
+/**
+ * The seven fields a company may override on a printed document.
+ *
+ * ⛔ THE STRINGS ARE THE SERVER'S, and the vocabulary is CONSUMED FROM A
+ * GENERATED GOLDEN rather than declared here — see `printTemplateSurface.ts`.
+ * `bank_details` is deliberately ONE field covering TWO columns
+ * (`show_bank_details` and `bank_lines`): every renderer tests them together, so
+ * lines with the flag off print nothing, and offering them separately lets an
+ * operator fill in their account number, save, and print a document with no bank
+ * block having done everything the screen asked.
+ */
+export type PrintTemplateField =
+  | "title"
+  | "header_lines"
+  | "footer_lines"
+  | "declaration"
+  | "terms"
+  | "signature_label"
+  | "bank_details";
+
+/** What a company has overridden. Every field is optional; blank means "use the built-in default". */
+export interface PrintTemplateOverrides {
+  title: string;
+  header_lines: string[] | null;
+  footer_lines: string[] | null;
+  declaration: string;
+  terms: string;
+  signature_label: string;
+  show_bank_details: boolean;
+  bank_lines: string[] | null;
+}
+
+/**
+ * GET/PUT/DELETE .../print-templates/{docKind}.
+ *
+ * ⛔ `customised` AND THE BLANKNESS OF `overrides` ARE DIFFERENT FACTS and the
+ * screen needs both. An absent row and a row of empty strings print the same
+ * document but are not the same sentence: the first is "this company has never
+ * been asked", the second is "this company deliberately prints nothing there".
+ * Without `customised` a form cannot offer to CLEAR an override, because it does
+ * not know there is one.
+ *
+ * ⚠️ THERE IS NO SERVER-COMPUTED "EFFECTIVE TEMPLATE" AND ASKING FOR ONE WAS
+ * CONSIDERED AND REFUSED. It would be a third implementation of "blank falls back
+ * to the built-in", and the two that exist in the renderers do not agree about
+ * whitespace. `defaults` is what prints when a box is empty, so the screen shows
+ * it as the placeholder — which tells the operator what will print without
+ * anybody re-deriving it.
+ */
+export interface PrintTemplateResponse {
+  doc_kind: string;
+  /** Whether a print_template row exists at all. */
+  customised: boolean;
+  /** The fields THIS document's renderer actually reads. A form must offer no others. */
+  honours: PrintTemplateField[];
+  /** What prints when the corresponding box is blank. */
+  defaults: {
+    title: string;
+    declaration: string;
+    signature_label: string;
+  };
+  /**
+   * This kind honours a title override but has no fixed default, because the
+   * default is the document's own name. True only for `report`, whose title is
+   * whichever of the thirty statements is being printed.
+   */
+  default_title_is_the_documents_own_name: boolean;
+  overrides: PrintTemplateOverrides;
+  /** Present only on a DELETE: whether there was anything to clear. */
+  cleared?: boolean;
+}
+
+/** The PUT body. A FULL restatement: an omitted field is stored as empty, not left alone. */
+export interface PrintTemplateRequest {
+  title?: string;
+  header_lines?: string[];
+  footer_lines?: string[];
+  declaration?: string;
+  terms?: string;
+  signature_label?: string;
+  show_bank_details?: boolean;
+  bank_lines?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// OFFLINE SYNC (track D) — the cloud sequencer's wire contract.
+//
+// ⛔ `SyncIntent.payload` IS A `VoucherRequest`, THE SAME TYPE THE ONLINE PATH
+// POSTS, and that is load-bearing rather than tidy. The server decodes it with
+// `buildVoucherInput`, the single translator every voucher route shares, so
+// anything the online path carries the offline path carries for free — including
+// the once-only AI-bill `draft_id`. `server.go` warns three times against a
+// parallel type and records two silent-drop defects from ignoring it.
+// ---------------------------------------------------------------------------
+
+/** A hybrid-logical-clock reading on the wire. Mirrors `sync.HLCTimestamp`. */
+export interface SyncHLC {
+  wall_millis: number;
+  counter: number;
+  node_id: string;
+}
+
+/** CREATE / ALTER / DELETE — the change kinds an offline node records. */
+export type SyncOp = "CREATE" | "ALTER" | "DELETE";
+
+/**
+ * One outbox entry: a single recorded voucher change awaiting commit.
+ *
+ * ⚠️ `provisional_no` IS NEVER SENT AS `payload.voucher_no`. The server allocates
+ * the real sequential number; the provisional exists so the offline UI can show
+ * something, and so the loser of a conflict can be surfaced with the label the
+ * operator actually saw. `OfflineNode` forces `payload.voucher_no` empty.
+ */
+export interface SyncIntent {
+  idempotency_key: string;
+  client_voucher_id: string;
+  op: SyncOp;
+  class: string;
+  provisional_no: string;
+  hlc: SyncHLC;
+  node_id: string;
+  /** The head version an ALTER/DELETE was based on; 0 for a CREATE. */
+  base_version: number;
+  payload: VoucherRequest;
+}
+
+/**
+ * The four TERMINAL dispositions of one committed intent.
+ *
+ * ⛔ THERE IS NO NON-TERMINAL STATUS ON THIS WIRE, and a probe must not invent
+ * one (HANDOFF's standing rule). A commit either produces one of these four per
+ * intent, or fails as a WHOLE REQUEST — see `SyncBatchRefusal`.
+ */
+export type SyncOutcomeStatus = "COMMITTED" | "CONFLICT" | "FROZEN" | "DUPLICATE";
+
+/** The sequencer's answer for one intent, in submission order. */
+export interface SyncOutcome {
+  idempotency_key: string;
+  client_voucher_id: string;
+  status: SyncOutcomeStatus;
+  /** The server-assigned number on a COMMITTED CREATE; "" otherwise. */
+  final_voucher_no: string;
+  version_no: number;
+  /** Set on CONFLICT (the parked loser) and on FROZEN (the freeze row). */
+  reconciliation_id: string;
+  detail: string;
+}
+
+/** `POST /sync/commit` — one outcome per submitted intent, in caller order. */
+export interface SyncCommitResponse {
+  outcomes: SyncOutcome[];
+}
+
+/**
+ * A WHOLE-BATCH refusal, which is NOT one of the four statuses above.
+ *
+ * ⛔⛔ THE OUTBOX IS INTACT WHEN THIS HAPPENS AND MUST BE LEFT THAT WAY. Two
+ * request-level failures return no outcomes at all:
+ *
+ *   cutoff   the back-dated cutoff refuses the LOT if ONE intent is pre-cutoff
+ *            ("a batch is only as permitted as its most-refused member" —
+ *            auth_backdated_key_binding_test.go, cutoff round 2)
+ *   stepup   403 STEPUP_REQUIRED: any write at a level requiring WebAuthn
+ *
+ * Rendering either as "these 12 vouchers failed" is wrong in the dangerous
+ * direction — nothing was rejected, the batch was never judged intent by intent,
+ * and a screen that says otherwise invites an operator to re-key work that is
+ * still queued. Because the commit is ONE batched write, the whole outbox costs
+ * exactly one step-up, which is the argument for draining it as a batch.
+ */
+export interface SyncBatchRefusal {
+  /**
+   * ⚠️ `offline` IS THE THIRD ONE, and it is the commonest of the three on this
+   * track: the drain was attempted with no network, so the request never got an
+   * answer. It belongs in this union rather than under `other` because the screen
+   * must say something different — "you are still offline, nothing was sent"
+   * rather than "the server refused the batch" — while the invariant it shares
+   * with the other two is the important part: THE OUTBOX IS UNTOUCHED.
+   */
+  kind: "cutoff" | "stepup" | "offline" | "other";
+  status: number;
+  message: string;
+}
+
+/** One OPEN reconciliation-queue row (`GET /reconciliation-queue`). */
+export interface ReconciliationEntry {
+  id: string;
+  voucher_id: string;
+  attempted_op: string;
+  /** "CONFLICT" for a parked sync loser; "IRN" / "FILED_GSTR1" for a freeze. */
+  kind: string;
+  ref_value: string;
+  frozen_voucher_no: string;
+  detail: string;
+  created_at: string;
+}
+
+/** `GET /reconciliation-queue` */
+export interface ReconciliationQueueResponse {
+  entries: ReconciliationEntry[];
+}
+
+/** The parked voucher body, formatted the way the LIVE voucher route formats it. */
+export interface ParkedVoucher {
+  class: string;
+  voucher_type_id: string;
+  party_ledger_id: string;
+  item_ledger_id: string;
+  voucher_no: string;
+  voucher_date: string;
+  narration: string;
+  party: string;
+  created_by: string;
+  source_guid: string;
+  source_draft_id: string;
+  /** W5 (0100) — the parked request's idempotency key, "" when it carried none. */
+  idempotency_key?: string;
+  postings: { ledger_id: string; dr_cr: string; amount: string }[];
+  bill_allocations: { ledger_id: string; ref_name: string; ref_type: string; amount: string }[];
+  inventory: {
+    stock_item_id: string;
+    godown_id: string;
+    batch_id: string;
+    direction: string;
+    qty: string;
+    rate: string;
+    discount_pct: string;
+    amount: string;
+    rate_unstated: boolean;
+  }[];
+  physical_count: {
+    stock_item_id: string;
+    godown_id: string;
+    batch_id: string;
+    qty: string;
+    rate: string;
+  }[];
+  /**
+   * Blocks a two-pane diff has no room for, NAMED rather than dropped (e.g.
+   * "GST parameters"). A field that is neither rendered above nor named here
+   * fails `TestParkedVoucherAccountsForEveryVoucherInputField` server-side.
+   */
+  also_carries: string[];
+}
+
+/** The parked intent, with the entry metadata the compare screen needs. */
+export interface ReconciliationPayloadResponse {
+  reconciliation_id: string;
+  voucher_id: string;
+  attempted_op: string;
+  kind: string;
+  ref_value: string;
+  frozen_voucher_no: string;
+  detail: string;
+  created_at: string;
+  /**
+   * ⚠️ FALSE IS A REAL ANSWER, NOT AN ERROR. Only a parked CONFLICT preserves the
+   * keyed payload; a FROZEN row is raised by the ledger's freeze rule and never
+   * held one. When this is false the operator's own version exists ONLY in the
+   * local outbox on the machine that keyed it — read it from there, and say so
+   * when it is not on this machine.
+   */
+  has_payload: boolean;
+  payload_absent_because?: string;
+  intent?: {
+    idempotency_key: string;
+    client_voucher_id: string;
+    op: SyncOp;
+    class: string;
+    provisional_no: string;
+    node_id: string;
+    base_version: number;
+    hlc: SyncHLC;
+    payload: ParkedVoucher;
+  };
+}
+
+/** `POST /reconciliation-queue/{id}/resolve` */
+export interface ResolveReconciliationResponse {
+  reconciliation_id: string;
+  resolved: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// T11 — BUDGETS AND BUDGET VS ACTUAL (migrations 0085/0086)
+// ---------------------------------------------------------------------------
+//
+// ⛔⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE TYPES: A BUDGET FIGURE IS
+// MEANINGLESS WITHOUT ITS BASIS, AND TWO BASES MAY NEVER BE ADDED.
+//
+// A CLOSING_BALANCE budget is a POSITION as at the period's end date (opening
+// balance folded in); a NETT_TRANSACTIONS budget is MOVEMENT inside the period
+// (opening balance excluded). "Sundry Debtors must not exceed 40 lakh at year
+// end" is the first; "travel spend must not exceed 5 lakh this year" is the
+// second. The same Rs 10,00,000 means different things under each, so the basis
+// is on EVERY line and EVERY total, and the server refuses a grand total when a
+// plan mixes them — see {@link BudgetVarianceResponse.totals_are_addable}.
+//
+// ⛔ AND A BUDGET POSTS NOTHING. There is no voucher, no posting, no balance
+// effect and no hash chain. That is why a budget cannot be faked by keying
+// journals: it is the second column a report compares an actual against.
+
+/** The grain a budget line targets. A closed set; the server refuses anything else. */
+export type BudgetDimension = "GROUP" | "LEDGER" | "COST_CENTRE";
+
+/**
+ * How a budget line's actual is measured.
+ *
+ * ⛔ THERE IS NO DEFAULT, DELIBERATELY. These answer different questions and a
+ * line whose author never chose would still be reported against with total
+ * confidence.
+ */
+export type BudgetBasis = "CLOSING_BALANCE" | "NETT_TRANSACTIONS";
+
+/**
+ * What a variance row IS — seven distinct facts, none a rounding of another.
+ *
+ * ⛔ THE FOUR THAT ARE EASY TO GET WRONG:
+ *
+ *  - `UNSPENT` is a budget with NOTHING posted against it. It is NOT "zero
+ *    variance" and NOT ordinary underspend: an untouched budget is a fact about
+ *    the plan, or about what is being keyed, and both matter.
+ *  - `NETTED_TO_ZERO` is movement on both sides that cancelled exactly. Distinct
+ *    from UNSPENT, where nothing happened — which is why every row carries
+ *    `actual_debit` and `actual_credit` and not just the nett.
+ *  - `CONTRA` is an actual on the OPPOSITE side from the budget. It is NOT
+ *    "comfortably under budget"; it usually means a reversal, a refund, or a
+ *    posting on the wrong side.
+ *  - `UNBUDGETED` is an actual with NO budget line. It is NOT "100% over": the
+ *    plan is silent about it rather than exceeded, and no percentage of a budget
+ *    that was never set can be stated. These rows arrive in their own array.
+ */
+export type BudgetStatus =
+  | "ON_TARGET"
+  | "OVER"
+  | "UNDER"
+  | "UNSPENT"
+  | "NETTED_TO_ZERO"
+  | "CONTRA"
+  | "UNBUDGETED";
+
+/** One plan: a name and a period. `GET .../budgets` */
+export interface Budget {
+  id: string;
+  name: string;
+  /** Both bounds inclusive. REQUIRED, unlike every report period in this API. */
+  from_date: string;
+  to_date: string;
+  /**
+   * ⚠️ RENDER THIS. An empty budget is a live trap: the variance report over it is
+   * a page of unbudgeted actuals, which reads as "nothing was planned" and is
+   * indistinguishable from "the plan was never keyed".
+   */
+  line_count: number;
+  created_by: string;
+  created_at: string;
+}
+
+/** `GET .../budgets` */
+export interface BudgetListResponse {
+  budgets: Budget[];
+}
+
+/** `POST .../budgets` and `PUT .../budgets/{id}` */
+export interface CreateBudgetRequest {
+  name: string;
+  from_date: string;
+  to_date: string;
+  created_by: string;
+}
+
+/** `POST .../budgets` */
+export interface CreateBudgetResponse {
+  id: string;
+  name: string;
+  from_date: string;
+  to_date: string;
+}
+
+/** `PUT .../budgets/{id}` — the read-back may be null when it failed. */
+export interface AlterBudgetResponse {
+  id: string;
+  budget: Budget | null;
+  read_back_error?: string;
+}
+
+/** `DELETE .../budgets/{id}` */
+export interface DeleteBudgetResponse {
+  id: string;
+  deleted: boolean;
+  /**
+   * ⚠️ SHOW THIS. Deleting a plan cascades to its lines, and "I deleted a budget"
+   * and "I deleted 40 budgeted figures" are different acts.
+   */
+  lines_deleted_by_cascade: number;
+}
+
+/** One budgeted figure. */
+export interface BudgetLine {
+  id: string;
+  budget_id: string;
+  dimension: BudgetDimension;
+  target_id: string;
+  /**
+   * The group / ledger / centre name. ⚠️ FOR A COST CENTRE THE NAME ALONE IS
+   * AMBIGUOUS — "Mumbai" may legitimately be both a Branch and a Project — so
+   * render `cost_category_name` beside it.
+   */
+  target_name: string;
+  /** Set for a COST_CENTRE line only; "" otherwise. */
+  cost_category_id: string;
+  cost_category_name: string;
+  /**
+   * ASSET / LIABILITY / INCOME / EXPENSE, and "" for a cost centre, which has
+   * none. Carried so a caller can tell whether exceeding this budget is the good
+   * direction — the server refuses to say "favourable" and this is what lets a
+   * screen decide. See {@link BudgetVarianceRow.nature}.
+   */
+  nature: string;
+  basis: BudgetBasis;
+  /** "D" or "C" — the side the figure is expected on. */
+  dr_cr: string;
+  amount: Money;
+  note: string;
+  /**
+   * The basis in words, served on EVERY line. ⛔ RENDER IT: a screen that showed
+   * only the token would let an operator set a position ceiling thinking they had
+   * set a spend cap.
+   */
+  basis_means: string;
+  created_at: string;
+}
+
+/** `GET .../budgets/{id}/lines` */
+export interface BudgetLineListResponse {
+  budget_id: string;
+  lines: BudgetLine[];
+}
+
+/**
+ * `POST .../budgets/{id}/lines` and `PUT .../budgets/{id}/lines/{lineID}`
+ *
+ * ⛔ ON A PUT, `dimension` AND `target_id` ARE IMMUTABLE and the server refuses a
+ * different one by name. Omit them, or send the stored values.
+ */
+export interface CreateBudgetLineRequest {
+  dimension?: BudgetDimension;
+  target_id?: string;
+  basis: BudgetBasis;
+  /**
+   * Omit for a GROUP or LEDGER line to take the target's natural side (debit for
+   * ASSET/EXPENSE, credit for LIABILITY/INCOME) — the ordinary case, which an
+   * operator never types.
+   *
+   * ⛔ REQUIRED FOR A COST CENTRE, which has no nature to derive from. A cost
+   * budget is "D".
+   */
+  dr_cr?: string;
+  /** A decimal STRING. Never a JSON number: a budgeted figure sent as a float has already lost precision. */
+  amount: Money;
+  note?: string;
+  created_by: string;
+}
+
+/** `POST .../budgets/{id}/lines` */
+export interface CreateBudgetLineResponse {
+  id: string;
+  budget_id: string;
+}
+
+/** One target's plan beside its actual. */
+export interface BudgetVarianceRow {
+  dimension: BudgetDimension;
+  target_id: string;
+  target_name: string;
+  /** Set for a COST_CENTRE row only. */
+  cost_category_id?: string;
+  cost_category_name?: string;
+  /**
+   * ⛔ THIS IS HERE BECAUSE THE SERVER REFUSES TO SAY "FAVOURABLE". Spending more
+   * than budget is bad; EARNING more than budget is good; and both are `OVER`. A
+   * screen that colours every OVER row red paints the best news on the page in the
+   * colour of a crisis. "" for a cost centre.
+   */
+  nature: string;
+  basis: BudgetBasis;
+  dr_cr: string;
+  /** Zero on an UNBUDGETED row, which arrives in its own array. */
+  budget: Money;
+  /**
+   * BOTH RAW SIDES, not only the nett. They are the only thing distinguishing
+   * `UNSPENT` (nothing posted) from `NETTED_TO_ZERO` (movement that cancelled),
+   * and they let a caller re-derive `actual` rather than trust it.
+   */
+  actual_debit: Money;
+  actual_credit: Money;
+  /** Oriented to `dr_cr`: the figure the budget is actually compared with. */
+  actual: Money;
+  /** `actual` - `budget`. Positive means MORE than planned on the budgeted side. */
+  variance: Money;
+  /**
+   * ⛔⛔ `null` WHENEVER THERE IS NO BUDGET TO DIVIDE BY, and a caller MUST render
+   * "no budget set" rather than substituting a number. A 0, a 100 or an infinity
+   * here is a figure a reader will believe and act on.
+   */
+  variance_percent: Money | null;
+  /** Present only when `variance_percent` is null, saying why in words. */
+  variance_percent_absent_because?: string;
+  status: BudgetStatus;
+  /** The operator's own note from the budget line. */
+  note: string;
+  /** The REPORT's caveats about THIS row. They travel with the number; render them. */
+  notes: string[];
+}
+
+/**
+ * The subtotal for one basis.
+ *
+ * ⛔ THE ONLY TOTALS THIS REPORT IS ALWAYS WILLING TO STATE. A grand total exists
+ * only when every row shares one basis.
+ */
+export interface BudgetBasisTotal {
+  basis: BudgetBasis;
+  rows: number;
+  budget: Money;
+  actual: Money;
+  variance: Money;
+}
+
+/** `GET .../budget-variance?budget_id=&dimension=[&cost_category_id=]` */
+export interface BudgetVarianceResponse {
+  /** Echoed so a screen cannot render one plan or grain under another's heading. */
+  budget_id: string;
+  budget_name: string;
+  dimension: BudgetDimension;
+  /**
+   * The plan's OWN period. ⛔ THE REPORT DOES NOT NARROW IT: comparing a
+   * full-period budget against a shorter window needs a spread rule
+   * (straight-line, monthly, seasonal) that nobody has chosen, and apportioning by
+   * day count would be confidently wrong for any business with a seasonal year.
+   */
+  from_date: string;
+  to_date: string;
+  /** The plan: one row per budget line. */
+  rows: BudgetVarianceRow[];
+  /**
+   * Actuals no budget line covers, at leaf grain.
+   *
+   * ⛔ A SEPARATE ARRAY AND NOT ROWS WITH A ZERO BUDGET, so the budget column
+   * never carries a figure nobody set. These are the plan's GAPS, not variances
+   * against it, and they are NOT in the totals below. Complete — no cap, no
+   * sampling.
+   */
+  unbudgeted: BudgetVarianceRow[];
+  unbudgeted_count: number;
+  unbudgeted_actual: Money;
+  /** Always served, one per basis present. */
+  totals: BudgetBasisTotal[];
+  /**
+   * ⛔⛔ CHECK THIS BEFORE DRAWING A FOOTER. When a plan mixes bases this is false
+   * and the three grand totals below are ZERO — not because the report failed, but
+   * because no single number is correct: a position plus a flow is not a quantity.
+   * A footer that summed them would be the most believable wrong figure on the page.
+   */
+  totals_are_addable: boolean;
+  total_budget: Money;
+  total_actual: Money;
+  total_variance: Money;
+  /** Counts by status, so a screen can lead with "4 overspent, 11 untouched". */
+  status_counts: Partial<Record<BudgetStatus, number>>;
+  /** Set for the COST_CENTRE dimension only. */
+  cost_category_id: string;
+  cost_category_name: string;
+  /**
+   * The report-level caveats: the mixed-basis refusal, the no-apportionment
+   * statement, the cross-axis warning, and the reminder that OVER is arithmetic
+   * rather than bad news. A screen may style them; it may not decide whether to
+   * show them.
+   */
+  notes: string[];
+}
+
+// ---------------------------------------------------------------------------
+// T12 — THE GSTR-9 ANNUAL RECONCILIATION
+// ---------------------------------------------------------------------------
+//
+// ⛔ READ {@link GSTR9Divergence} BEFORE ANY OTHER TYPE HERE. Everything else in
+// this block is evidence for it, and its `net` field is the one number in this
+// whole API that must never be rendered on its own.
+
+/**
+ * The three GST tax heads, as every GSTR-9 figure carries them.
+ *
+ * ⚠️ THE KEYS ARE THE GSTN SPELLINGS — `camt` CGST, `samt` SGST, `iamt` IGST —
+ * matching the 3B tables rather than the Go field names. Fixed-point strings, so
+ * no caller is tempted into arithmetic.
+ */
+export interface GSTTax {
+  camt: Money;
+  samt: Money;
+  iamt: Money;
+}
+
+/**
+ * A comparison of two of the year's sources, month by month, in the only form
+ * that cannot hide an offsetting pair.
+ *
+ * ⭐⭐ THE RULE THIS TYPE EXISTS TO ENFORCE: AN ANNUAL NET DIFFERENCE IS A LIE.
+ * Twelve months added up CANCEL. A company that over-declared 40,000 of IGST in
+ * May and under-declared 40,000 in September has an annual net of ZERO — every
+ * figure foots, every total is correct, and the return is silently wrong about
+ * the one thing it exists to say.
+ *
+ * So a screen MUST NOT render {@link net} without {@link gross} beside it, and
+ * when {@link offsetting} is true it must say so and name {@link months}. This is
+ * the same discipline as {@link BudgetVarianceResponse.totals_are_addable}: a
+ * figure that cannot be honestly stated is suppressed and the reason printed in
+ * its place, never left as a plausible zero.
+ */
+export interface GSTR9Divergence {
+  /** The two sources compared, in subtraction order: every figure is `a` minus `b`. */
+  a: string;
+  b: string;
+  /** Sum over the year of (a − b), head by head. IT CANCELS. */
+  net: GSTTax;
+  /** Sum over the year of |a − b|, head by head. It cannot cancel. */
+  gross: GSTTax;
+  /**
+   * True when `gross` differs from |`net`| in at least one head: months disagree
+   * in opposite directions and the annual net understates the disagreement.
+   */
+  offsetting: boolean;
+  /** The FPs ("MMYYYY") where the two sources disagree, in period order. */
+  months?: string[];
+  /**
+   * True when the two sources agree in EVERY month.
+   *
+   * ⛔ IT IS NOT `net === 0`. That is precisely the question a net cannot answer,
+   * and a client that recomputes it that way reintroduces the defect this type
+   * was built to prevent. The server derives it per month.
+   */
+  agrees: boolean;
+}
+
+/**
+ * The taxable-value analogue of {@link GSTR9Divergence}. It is a separate type
+ * because taxable value is ONE figure where tax is three heads, and it has no
+ * books column at all — see the `books-carry-no-taxable-value` disclosure: the
+ * books post TAX to ledgers, and taxable value is not a posted quantity, so
+ * there is no third opinion on it.
+ */
+export interface GSTR9TaxableDivergence {
+  a: string;
+  b: string;
+  net: Money;
+  gross: Money;
+  offsetting: boolean;
+  months?: string[];
+  agrees: boolean;
+}
+
+/** One (HSN, rate) bucket of a month's GSTR-1 table 12. */
+export interface GSTR9HSNItem {
+  num: number;
+  /** Blank when the supply could not be attributed to a code. Rendered, never dropped. */
+  hsn_sc: string;
+  rt: Money;
+  txval: Money;
+  iamt: Money;
+  camt: Money;
+  samt: Money;
+  tot_val: Money;
+}
+
+/**
+ * One month of the year with all sources beside each other.
+ *
+ * ⛔ THE ARRAY IS ALWAYS TWELVE LONG, including months with no activity. A month
+ * missing from a list of twelve is a month nobody checked, and a reader who
+ * cannot tell "absent" from "nothing happened" cannot tell which they are seeing.
+ */
+export interface GSTR9Month {
+  /** Filing period, "MMYYYY" — how a reader matches this row to a return they filed. */
+  fp: string;
+  from: string;
+  to: string;
+
+  /** GSTR-1, summed across every section (credit notes signed negative). */
+  r1_txval: Money;
+  r1_tax: GSTTax;
+  /** GSTR-3B table 3.1(a). */
+  r3b_txval: Money;
+  r3b_tax: GSTTax;
+  /** The BOOKS: postings on the output-tax ledgers. A third table, a third query. */
+  books_outward_tax: GSTTax;
+
+  /** GSTR-3B table 4(A) and 4(D). Their sum must equal the input-tax postings. */
+  r3b_itc_available: GSTTax;
+  r3b_itc_ineligible: GSTTax;
+  books_itc_tax: GSTTax;
+
+  /**
+   * The month's GSTR-1 table-12 rollup — a FOURTH path, and the only one that
+   * reads per-line detail rather than the invoice aggregates.
+   */
+  hsn_txval: Money;
+  hsn_tax: GSTTax;
+  hsn?: GSTR9HSNItem[];
+
+  /** The per-month verdicts, so a reader can find the month without re-doing the sums. */
+  r1_matches_r3b: boolean;
+  r3b_matches_books: boolean;
+  itc_matches_books: boolean;
+  hsn_foots_to_r1: boolean;
+}
+
+/**
+ * What a GSTR-9 table can say about itself.
+ *
+ * ⛔ THERE IS DELIBERATELY NO VALUE MEANING "EMPTY". A table with no data is
+ * DERIVED and zero, which is a different statement from NOT_DERIVED and must
+ * never be rendered the same way: a zero in table 7 ("ITC reversed") asserts the
+ * taxpayer reversed nothing, when the truth is that nothing was checked.
+ */
+export type GSTR9TableStatus = "DERIVED" | "PARTIAL" | "NOT_DERIVED";
+
+/** One sub-row a table could not produce, and why. */
+export interface GSTR9Omission {
+  label: string;
+  title: string;
+  reason: string;
+}
+
+/** One lettered row of a derived table. */
+export interface GSTR9Row {
+  label: string;
+  title: string;
+  /**
+   * Absent where the row has no taxable value (the ITC tables are tax-only).
+   * OPTIONAL rather than zero, for the reason
+   * {@link BudgetVarianceRow.variance_percent} is nullable: "no taxable value"
+   * and "a taxable value of zero" are different facts.
+   */
+  txval?: Money;
+  tax: GSTTax;
+}
+
+/** One statutory table of the annual return, and its own account of itself. */
+export interface GSTR9Table {
+  no: string;
+  title: string;
+  status: GSTR9TableStatus;
+  /** Present unless DERIVED, and names the missing input in words a filer can act on. */
+  reason?: string;
+  /** Empty for NOT_DERIVED — which means NO rows, not zero rows. */
+  rows?: GSTR9Row[];
+  /** The sub-rows that could not be derived. Populated for PARTIAL. */
+  omitted?: GSTR9Omission[];
+  /**
+   * True when the table's statutory TOTAL cannot be honestly stated because
+   * something in it is not derived. There is then no total row, and
+   * {@link total_suppressed_reason} must be printed in its place — a total over a
+   * set with known-missing members is an UNDERSTATEMENT THAT FOOTS.
+   */
+  total_suppressed?: boolean;
+  total_suppressed_reason?: string;
+}
+
+/**
+ * `GET .../gstr9?from=&to=&cgst_ledger_id=&…` — the annual reconciliation.
+ *
+ * ⛔ IT IS NOT FILING-READY AND IT NEVER WILL BE WITHOUT PORTAL VERIFICATION.
+ * {@link disclosures} always carries ten tokens on a clean year and up to twelve
+ * otherwise. A screen must render ALL of them; showing some and dropping the rest
+ * is the closed-vocabulary failure the field exists to prevent. The ten
+ * unconditional ones:
+ *
+ *   advances-not-modelled · amendments-not-modelled ·
+ *   annual-table-structure-unverified · books-carry-no-taxable-value ·
+ *   exempt-and-zero-rated-not-marked · itc-reversals-not-computed ·
+ *   no-annual-2a · no-cash-or-credit-ledger · not-filing-ready ·
+ *   portal-schema-unverified
+ *
+ * and the two conditional ones — `monthly-differences-offset`, which is the most
+ * important token in the set, and `returns-and-books-disagree`.
+ */
+export interface GSTR9Response {
+  gstin?: string;
+  /** The financial year as Indian filers write it: "2025-26". */
+  fy: string;
+  from: string;
+  to: string;
+  /** Always twelve, in period order. See {@link GSTR9Month}. */
+  months: GSTR9Month[];
+
+  /** The two RETURNS against each other. A break here is a filing inconsistency. */
+  outward_r1_vs_r3b: GSTR9Divergence;
+  /** The return against the BOOKS. A break here means the trial balance disagrees. */
+  outward_r3b_vs_books: GSTR9Divergence;
+  /** The third leg, emitted rather than left for the reader to compose. */
+  outward_r1_vs_books: GSTR9Divergence;
+  /** 3B table 4(A)+4(D) against the input-tax postings. */
+  itc_vs_books: GSTR9Divergence;
+  /** Per-line HSN detail against the invoice aggregates — the fourth path. */
+  hsn_vs_r1: GSTR9Divergence;
+  /** Taxable value, two-way only. See {@link GSTR9TaxableDivergence}. */
+  taxable_r1_vs_r3b: GSTR9TaxableDivergence;
+
+  /** Tables 4 through 19, each with its status. Every one is present. */
+  tables: GSTR9Table[];
+  /** The closed vocabulary. Always non-empty. See the interface doc. */
+  disclosures: string[];
+}
+
+/** The envelope `GET .../gstr9` actually returns. */
+export interface GSTR9Envelope {
+  gstr9: GSTR9Response;
+  /**
+   * True when every comparison agrees in every month.
+   *
+   * ⛔ IT IS LIFTED ONTO THE ENVELOPE SO NO CLIENT COMPUTES IT. A client that
+   * derived it would derive it from the annual nets, which is exactly the
+   * question a net cannot answer.
+   */
+  reconciled: boolean;
+}
+
+/**
+ * The six tax ledgers a GSTR-9 needs, as a named record rather than six loose
+ * strings.
+ *
+ * ⛔ ALL SIX ARE REQUIRED AND THE TYPE SAYS SO. The server refuses a missing one
+ * (400, naming it), and making the field optional here would move that discovery
+ * from compile time to a support call. See {@link ApiClient.gstr9} for why the
+ * refusal exists at all: the books column would otherwise be silently zero.
+ *
+ * ⚠️ THEY ARE IDS, AND NO SCREEN MAY ASK A HUMAN TO TYPE ONE. A screen resolves
+ * them by letting an operator CHOOSE ledgers from the Duties & Taxes group — the
+ * same rule that made `GET /groups` necessary for T11.
+ */
+export interface GSTR9TaxLedgers {
+  /** OUTPUT tax — what was charged on sales. */
+  cgst: string;
+  sgst: string;
+  igst: string;
+  /** INPUT tax — the credit claimed on purchases. */
+  inputCGST: string;
+  inputSGST: string;
+  inputIGST: string;
+}
+
+/**
+ * The company's YEAR-END LOCK: how far the books have been closed.
+ *
+ * ⚠️ `closedThrough` IS THE LAST CLOSED DAY, INCLUSIVE — the last day of the
+ * financial year being closed (2027-03-31 for FY 2026-27), never the first day
+ * of the new one. The server's cutoff is one day later; the conversion happens
+ * there, once, and no client should ever do it.
+ *
+ * `closedAt` / `closedBy` record what HAPPENED and survive a re-open, because
+ * "was this year ever closed, and by whom?" is a question about history.
+ */
+export interface BooksClosure {
+  closed: boolean;
+  closedThrough: string | null;
+  closedAt: string | null;
+  closedBy: string | null;
 }

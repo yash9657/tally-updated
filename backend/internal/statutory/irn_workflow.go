@@ -101,7 +101,7 @@ func GenerateIRNWorkflow(
 	// SETTLED-FIRST. Ask the store whether the external call has already been made
 	// BEFORE deriving anything, so a workflow that already holds an IRN is never
 	// re-built and never re-validated.
-	done, err := store.Load(workflowID)
+	done, err := store.Load(ctx, workflowID)
 	if err != nil {
 		return IRNResult{}, fmt.Errorf("statutory: load workflow %q: %w", workflowID, err)
 	}

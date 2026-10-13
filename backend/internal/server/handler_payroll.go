@@ -759,6 +759,15 @@ func filepathExt(name string) string {
 	return ""
 }
 
+// CodeNoPayRun is the machine-readable token on the 404 a payroll route answers
+// when the wage month has no live pay run.
+//
+// ⚠️ IT IS PART OF THE WIRE CONTRACT, not a log string: PayrollRegisterScreen
+// switches on it to draw an EMPTY STATE instead of an error, and the statutory
+// download panel switches on it to keep a refusal. Renaming it silently turns
+// the register's empty month back into a red error message, which is D112.
+const CodeNoPayRun = "NO_PAY_RUN"
+
 // writePayrollError maps a payroll service error to an HTTP status.
 //
 // The message is passed through, deliberately: every refusal in payrolldb and
@@ -772,7 +781,14 @@ func writePayrollError(w http.ResponseWriter, err error) {
 	case errors.Is(err, db.ErrNoCompany):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, payrolldb.ErrPayRunNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		// ⛔ CODED, BECAUSE THIS ONE IS USUALLY NOT A FAILURE AT ALL.
+		// "You have not run September payroll yet" is an ordinary state on the
+		// register screen, whose entire purpose is a month that may not have
+		// been run — and a genuine refusal on the statutory export routes,
+		// where an empty file would be a nil return nobody filed. ONE server
+		// fact, two correct presentations, so the server states the fact and
+		// lets each screen decide. See CodeNoPayRun.
+		writeCodedError(w, http.StatusNotFound, CodeNoPayRun, err.Error())
 	case errors.Is(err, payrolldb.ErrInvalidEmployeeField),
 		errors.Is(err, payrolldb.ErrAadhaarShapedValue):
 		writeError(w, http.StatusBadRequest, err.Error())

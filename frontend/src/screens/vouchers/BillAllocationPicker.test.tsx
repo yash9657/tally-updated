@@ -62,6 +62,10 @@ const OPEN_BILLS: PartyOpenBillsResponse = {
       due_date: "2026-07-19",
       overdue_days: 20,
       slab: "0-45 days",
+      on_account: false,
+      currency_code: "",
+      foreign_pending: "0.0000",
+      currency_conflict: false,
     },
   ],
 };
@@ -77,12 +81,15 @@ function Harness({
   initial,
   onRefs,
   voucherClass = "receipt",
+  forex,
 }: {
   client: Partial<CoredClient>;
   mode: "raise" | "settle";
   initial: DraftBillRef[];
   onRefs?: (refs: DraftBillRef[]) => void;
   voucherClass?: VoucherClass;
+  /** T8 step 8 — the LEG's currency and rate, which the picker inherits. */
+  forex?: { currencyId: string; currencyCode: string; rate: string };
 }) {
   function Inner() {
     const [refs, setRefs] = useState<DraftBillRef[]>(initial);
@@ -99,6 +106,7 @@ function Harness({
         mode={mode}
         kind="RECEIVABLE"
         label="Acme Traders"
+        forex={forex}
         onChange={(next) => {
           setRefs(next);
           onRefs?.(next);
@@ -360,5 +368,152 @@ describe("D97 — the picker reads its own door, under the class's authority", (
 
     await screen.findByTestId("billrefs-autoname:0");
     expect(getPartyOpenBills).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⭐⭐ T8 STEP 8 — THE PICKER'S FOREIGN SIDE.
+ *
+ * ⛔ §4.3 OF THE HANDOFF MADE THIS NON-OPTIONAL, AND STEP 5's DESIGN IS WHY: the
+ * server DERIVES the realised exchange difference and REFUSES any voucher whose
+ * figure it did not derive, so an operator has to be able to SEE what the bill is
+ * carried at in both currencies before they can state a settlement the server will
+ * accept. Step 6 put `currency_code`, `foreign_pending` and `currency_conflict` on
+ * this exact read for this purpose.
+ *
+ * ⚠️ THE CURRENCY AND THE RATE ARE INHERITED FROM THE LEG AND ARE NOT KEYED HERE.
+ * A `bill_allocation` row and the `posting` it belongs to must agree — step 5 reads
+ * the AGAINST row's rate and Outstandings nets the allocation — so two rows naming
+ * one document at two rates is a voucher that reports two different exposures for
+ * itself. Only the AMOUNT is a per-bill split.
+ */
+describe("T8/8: the bill picker's foreign side", () => {
+  const FOREIGN_BILLS = {
+    kind: "RECEIVABLE" as const,
+    ledger_id: "led-acme",
+    ledger: "Acme Traders",
+    group: "Sundry Debtors",
+    pending: "66920.9840",
+    found: true,
+    bills: [
+      {
+        ref_name: "EXP-1",
+        pending: "66920.9840",
+        due_date: "2026-07-10",
+        overdue_days: 0,
+        slab: "0-45 days",
+        on_account: false,
+        currency_code: "USD",
+        foreign_pending: "800.0000",
+        currency_conflict: false,
+      },
+    ],
+  };
+  const USD = {
+    currencyId: "cur-usd",
+    currencyCode: "USD",
+    rate: "85.2512345678",
+  };
+
+  it("shows what the bill is carried at in BOTH currencies", async () => {
+    render(
+      <Harness
+        client={{ getPartyOpenBills: vi.fn(async () => FOREIGN_BILLS) }}
+        mode="settle"
+        initial={[againstRef("EXP-1")]}
+        forex={USD}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("billrefs-billforex:0")).toBeTruthy(),
+    );
+    const line = screen.getByTestId("billrefs-billforex:0").textContent ?? "";
+    // ⛔ BOTH FIGURES. The rupee one alone is what the picker already showed and
+    // is not enough to state a settlement the server will accept.
+    expect(line).toMatch(/USD 800\.0000/);
+    expect(line).toMatch(/66920\.9840/);
+    // ⭐ AND IT SAYS WHERE THE DIFFERENCE GOES, because the realised leg is a
+    // POSTING and no picker can write one — the operator has to add the line.
+    expect(line).toMatch(/needs its own line on the grid/);
+    expect(line).toMatch(/refuses any other/);
+  });
+
+  it("⛔ WARNS when the bill is open under TWO currencies", async () => {
+    render(
+      <Harness
+        client={{
+          getPartyOpenBills: vi.fn(async () => ({
+            ...FOREIGN_BILLS,
+            bills: [{ ...FOREIGN_BILLS.bills[0]!, currency_conflict: true }],
+          })),
+        }}
+        mode="settle"
+        initial={[againstRef("EXP-1")]}
+        forex={USD}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("billrefs-billforex:0")).toBeTruthy(),
+    );
+    // Step 6 discloses the conflict; this is the form acting on the disclosure
+    // rather than leaving it on a report the operator may never open.
+    expect(screen.getByTestId("billrefs-billforex:0").textContent).toMatch(
+      /open under TWO currencies/,
+    );
+  });
+
+  it("⛔ tells an operator settling a FOREIGN bill on a RUPEE line what will happen", async () => {
+    render(
+      <Harness
+        client={{ getPartyOpenBills: vi.fn(async () => FOREIGN_BILLS) }}
+        mode="settle"
+        initial={[againstRef("EXP-1")]}
+        /* NO forex — the grid line is in the company's own currency. This is the
+           case step 5 deliberately does NOT refuse (L36 item 2), on the stated
+           grounds that the report discloses it; the form can say so FIRST. */
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("billrefs-billforex:0")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("billrefs-billforex:0").textContent).toMatch(
+      /the rupee side will clear while the foreign exposure stays open/,
+    );
+  });
+
+  it("completes the WHOLE triple from the leg when the foreign amount is keyed", async () => {
+    const onRefs = vi.fn();
+    render(
+      <Harness
+        client={{ getPartyOpenBills: vi.fn(async () => FOREIGN_BILLS) }}
+        mode="settle"
+        initial={[againstRef("EXP-1")]}
+        onRefs={onRefs}
+        forex={USD}
+      />,
+    );
+    const box = await waitFor(() => screen.getByTestId("billrefs-foreign:0"));
+    fireEvent.change(box, { target: { value: "800.00" } });
+    const last = onRefs.mock.calls.at(-1)?.[0] as DraftBillRef[];
+    // ⛔ ALL THREE IN ONE EDIT. 0080's CHECK refuses a two-of-three row, so a
+    // reference carrying a foreign amount and no currency would 422 a request
+    // that looks complete on this side.
+    expect(last[0]?.foreignAmount).toBe("800.00");
+    expect(last[0]?.currencyId).toBe("cur-usd");
+    expect(last[0]?.rate).toBe("85.2512345678");
+  });
+
+  it("CONTROL: a base leg renders no foreign field at all", async () => {
+    render(
+      <Harness
+        client={{ getPartyOpenBills: vi.fn(async () => FOREIGN_BILLS) }}
+        mode="settle"
+        initial={[againstRef("EXP-1")]}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId("billrefs-bill:0")).toBeTruthy());
+    // Every voucher in the field today is one of these, and a permanently blank
+    // box on all of them is noise on the form an operator uses most.
+    expect(screen.queryByTestId("billrefs-foreign:0")).toBeNull();
   });
 });

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { AuthInvalidError, AuthLockedError } from "../api/auth";
 import { useAuth } from "./AuthContext";
+import { ArrowIcon, Brand, Button, Keycap } from "../design-system/components";
+import "./auth.css";
 
 /**
  * The sign-in screen. Rendered INSTEAD of the shell when there is no session,
@@ -142,18 +144,15 @@ export function LoginScreen() {
     <section
       data-testid="login-screen"
       aria-label="Sign In"
-      className="flex h-full w-full items-center justify-center bg-tally-bg p-4 font-mono text-tally-field"
+      className="auth-page"
     >
-      <form className="w-full max-w-sm bg-tally-panel p-4" onSubmit={onSubmit}>
-        <h1 className="text-lg font-bold text-tally-title">
-          TallyPrime — Sign In
-        </h1>
-        <p className="mt-1 text-xs text-tally-field">
-          Enter your user name and password. Enter signs in.
-        </p>
+      <header className="auth-header"><Brand /><a href="/">Back to home</a></header>
+      <main className="auth-main">
+      <div className="auth-intro"><h1>Back to the books.</h1><p>Sign in to your Tallyweb workspace.</p></div>
+      <form className="auth-form" onSubmit={onSubmit} aria-label="Sign in to Tallyweb">
 
-        <label className="mt-4 block text-sm text-tally-field">
-          <span className="inline-block w-24">User name</span>
+        <label className="tw-field">
+          <span>User name</span>
           <input
             // eslint-disable-next-line jsx-a11y/no-autofocus -- see the header:
             // the e2e types with page.keyboard and never focuses a locator.
@@ -161,20 +160,24 @@ export function LoginScreen() {
             aria-label="User name"
             name="subject"
             autoComplete="username"
-            className="ml-2 w-40 bg-tally-field px-1 text-tally-fieldText outline-none"
+            className="tw-input"
+            aria-invalid={failure?.kind === "invalid" || undefined}
+            aria-describedby={failure ? "login-error" : undefined}
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
           />
         </label>
 
-        <label className="mt-2 block text-sm text-tally-field">
-          <span className="inline-block w-24">Password</span>
+        <label className="tw-field">
+          <span>Password</span>
           <input
             type="password"
             aria-label="Password"
             name="password"
             autoComplete="current-password"
-            className="ml-2 w-40 bg-tally-field px-1 text-tally-fieldText outline-none"
+            className="tw-input"
+            aria-invalid={failure?.kind === "invalid" || undefined}
+            aria-describedby={failure ? "login-error" : undefined}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
@@ -183,22 +186,29 @@ export function LoginScreen() {
         {failure ? (
           <p
             role="alert"
+            id="login-error"
             data-testid="login-error"
             data-failure={failure.kind}
-            className="mt-3 bg-tally-field px-2 py-1 text-sm text-tally-barKey"
+            className="tw-alert"
           >
             {failureText(failure)}
           </p>
         ) : null}
 
-        <button
+        <Button
           type="submit"
           disabled={busy}
-          className="mt-4 bg-tally-bar px-3 py-1 text-sm font-bold text-tally-barText disabled:opacity-60"
+          className="auth-submit"
+          aria-busy={busy}
         >
           {busy ? "Signing in…" : "Sign In"}
-        </button>
+          <ArrowIcon />
+        </Button>
+        <p className="auth-key-hint">Press <Keycap>Enter</Keycap> to sign in.</p>
       </form>
+      <p className="auth-help">Need access? Ask your company administrator<br />to arrange your Tallyweb account.</p>
+      </main>
+      <footer className="auth-footer">Your books. Your shortcuts. Your workspace.</footer>
     </section>
   );
 }

@@ -54,6 +54,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,6 +89,11 @@ type StockPositionRow struct {
 	// report can say which valuer produced it (RESEARCH sec 8: a statement must
 	// be able to state its own basis).
 	ValuationMethod string
+	// StockGroupName is the item's group (T10), or "" for an ungrouped item.
+	// It is carried on the POSITION as well as on the rollup so that a client
+	// reading the flat `Rows` list (the export does) can group it without a
+	// second lookup.
+	StockGroupName string
 
 	// Position carries the whole Opening/Inward/Outward/Closing quartet. Its
 	// fields are promoted, so row.ClosingValue reads naturally while row.Position
@@ -109,6 +115,33 @@ type StockItemRollup struct {
 	StockItemID uuid.UUID
 	ItemName    string
 	UnitSymbol  string
+	// ValuationMethod is the basis every figure BELOW this line was derived on,
+	// and it belongs on the item rather than on a position because that is where
+	// stock_item.valuation_method lives: one item is valued one way in every
+	// godown it sits in.
+	//
+	// ⛔ IT IS HERE BECAUSE T9 MADE IT MEAN SOMETHING. While WEIGHTED_AVG was the
+	// only method, a rollup that omitted it was merely incomplete; with three
+	// methods in one company (they can differ item by item) a Stock Summary that
+	// prints values and NOT the basis is a report whose numbers cannot be
+	// reproduced or compared — the same item total means different things on two
+	// lines and nothing on the page says which.
+	ValuationMethod string
+	// StockGroupName is the item's group (T10), "" for an ungrouped item.
+	StockGroupName string
+	// BaseUnitSymbol and ClosingBaseQty RESTATE the closing quantity in the
+	// unit's base unit when the item's unit is COMPOUND: 5 BOX of a "BOX of 12
+	// NOS" unit closes at 5.0000 BOX and 60.0000 NOS.
+	//
+	// ⛔ IT IS A DERIVED FIGURE AND THE STORED QUANTITY IS THE OTHER ONE. Nothing
+	// converts a quantity on the way in (migration 0079's header says why: an
+	// inbound conversion loses the number that was keyed and cannot be restated
+	// when a factor changes), so this is multiplication at READ time — exactly
+	// like value. Both are empty/zero for a simple unit, and a client must render
+	// nothing rather than "0.0000 " in that case.
+	BaseUnitSymbol   string
+	ClosingBaseQty   decimal.Decimal
+	ConversionFactor decimal.Decimal
 
 	OpeningQty   decimal.Decimal
 	OpeningValue decimal.Decimal
@@ -120,6 +153,42 @@ type StockItemRollup struct {
 	ClosingValue decimal.Decimal
 
 	Positions []StockPositionRow
+}
+
+// StockGroupRollup is one STOCK GROUP's total across every item in it AND in
+// every group beneath it (T10) — the third level of the Stock Summary's tree,
+// above the items.
+//
+// ⛔⛔ THE TOTAL IS THE WHOLE BRANCH, AND THAT IS WHAT A STOCK GROUP IS FOR. A
+// group total that counted only its DIRECT items would be a number no operator
+// asked for: "Raw Materials" exists so that a company with four hundred items
+// can read one line, and if that line excluded "Raw Materials > Packing" it
+// would be smaller than the sum of what is printed underneath it and nothing on
+// the page would explain the difference. The branch is resolved through the
+// ltree path, which is why loadStockNames reads it.
+//
+// ⚠️ AN ITEM APPEARS IN EVERY ANCESTOR'S TOTAL, so these totals DO NOT SUM to
+// the company's closing stock — TotalValue is the sum of the POSITIONS, never of
+// the groups. A client that adds the group rows up will double-count every
+// nested branch. (The same rule the Cost Category Summary states for its axes,
+// for the same reason.)
+type StockGroupRollup struct {
+	// GroupName is "" for the UNGROUPED bucket, which is a real bucket: every
+	// item that predates T10 has no group, and a report that hid them would show
+	// a company holding less stock than it does.
+	GroupName string
+	// Path is the ltree ancestry, "" for the ungrouped bucket. Depth is the
+	// number of labels in it, so a client can indent the tree without parsing.
+	Path  string
+	Depth int
+
+	OpeningValue decimal.Decimal
+	InwardValue  decimal.Decimal
+	OutwardValue decimal.Decimal
+	ClosingValue decimal.Decimal
+	// ItemCount is how many items are in this branch — the figure that says
+	// whether reading the group line saved you anything.
+	ItemCount int
 }
 
 // StockSummary is the position of every stock item as at one date: item-wise
@@ -136,8 +205,15 @@ type StockSummary struct {
 	// value, and it used to print "As at today (everything posted)" over an
 	// unbounded report — 72,837.15 under that caption where the position as at
 	// that day was 96,168.18.
-	AsOn       string
-	Items      []StockItemRollup
+	AsOn  string
+	Items []StockItemRollup
+	// Groups are the STOCK GROUP subtotals (T10), in tree order — a parent
+	// always precedes its children — with the UNGROUPED bucket last.
+	//
+	// ⚠️ THEY DO NOT SUM TO TotalValue. Every item counts in every ancestor's
+	// total, which is what makes a branch total useful and what makes adding the
+	// rows up wrong. See StockGroupRollup.
+	Groups     []StockGroupRollup
 	Rows       []StockPositionRow
 	TotalValue decimal.Decimal
 }
@@ -224,11 +300,33 @@ type StockMovementReport struct {
 // off-by-one on every stock report and it survived undetected on the accounting
 // side until a test placed a voucher exactly on a bound — which is what
 // TestStockPeriodBoundsAreInclusiveOnBothEnds now does.
+//
+// ⛔⛔ THE voucher_type JOIN IS D103, AND IT IS THE ONLY THING THAT TELLS THE
+// VALUER A DOCUMENT MUST CONSERVE VALUE. A Stock Journal moves goods between
+// the company's OWN shelves and posts NO accounting lines, so whatever its
+// inward legs are carried at must be exactly what its outward legs consumed —
+// see inventory/conserving.go for what a FIFO transfer did to the Balance Sheet
+// without this. The class is NOT a column on the voucher: it lives on the TYPE
+// (voucher_type.parent_class, UPPER_SNAKE, seeded by migration 0029 as the
+// form ledger.defaultVoucherTypeID resolves), so the flag has to be joined in
+// here or the leaf cannot know.
+//
+// The join is LEFT and the comparison COALESCEd because voucher_type_id is
+// NULLABLE (see migration 0034's header on what a missing seeded type does):
+// a movement whose type cannot be resolved is treated as NOT conserving, which
+// is the same behaviour every class other than the Stock Journal already has.
+//
+// ⚠️ IF THE STRING DRIFTS, VALUE CREATION COMES BACK SILENTLY. The literal is
+// pinned end-to-end by TestAFifoTransferBetweenOurOwnGodownsConservesValue,
+// which posts a real Stock Journal through ledger.PostVoucher and reads the
+// Stock Summary back: a renamed parent_class fails it, rather than quietly
+// turning the rule off.
 const stockMovementSQL = `
 	SELECT sm.stock_item_id, sm.godown_id, sm.batch_id,
 	       sm.direction::text, sm.qty, sm.rate, sm.discount_pct,
 	       vv.voucher_date, COALESCE(vv.voucher_no, ''), vv.voucher_id,
 	       vv.created_at, sm.line_no, vv.id,
+	       COALESCE(vt.parent_class, '') = 'STOCK_JOURNAL' AS voucher_conserves,
 	       COALESCE($1::date IS NULL OR vv.voucher_date >= $1::date, true) AS in_window
 	  FROM stock_movement sm
 	  JOIN voucher_version vv ON vv.id = sm.voucher_version_id
@@ -236,6 +334,7 @@ const stockMovementSQL = `
 	    ON vh.company_id = vv.company_id
 	   AND vh.voucher_id = vv.voucher_id
 	   AND vh.current_version_id = vv.id
+	  LEFT JOIN voucher_type vt ON vt.id = vv.voucher_type_id
 	 WHERE vh.is_deleted = false
 	   AND ($2::date IS NULL OR vv.voucher_date <= $2::date)`
 
@@ -277,6 +376,7 @@ func queryStockMovements(ctx context.Context, tx pgx.Tx, from, to any) ([]stockM
 			&direction, &r.movement.Qty, &r.movement.Rate, &r.movement.DiscountPct,
 			&date, &r.movement.VoucherNo, &voucherID,
 			&r.movement.VersionCreatedAt, &r.movement.LineNo, &versionID,
+			&r.movement.VoucherConserves,
 			&r.inWindow); err != nil {
 			return nil, fmt.Errorf("reporting: scan stock movement: %w", err)
 		}
@@ -421,6 +521,21 @@ type stockItemMeta struct {
 	Name            string
 	UnitSymbol      string
 	ValuationMethod string
+	// StockGroupName is the item's group (T10), or "" for an UNGROUPED item —
+	// which is a real state and not a missing value, so the rollup renders it as
+	// a stated bucket rather than dropping the item or filing it under a group
+	// nobody created.
+	StockGroupName string
+	// StockGroupPath is the group's ltree ancestry, which is what makes the
+	// group tree sort into tree order (a parent always precedes its children)
+	// without the report sorting anything itself.
+	StockGroupPath string
+	// BaseUnitSymbol / ConversionFactor describe a COMPOUND unit (1 BOX = 12
+	// NOS). They are how a quantity stored in BOX is RESTATED in NOS at report
+	// time; nothing converts a quantity on the way in. Empty/zero for a simple
+	// unit.
+	BaseUnitSymbol   string
+	ConversionFactor decimal.Decimal
 }
 
 // stockNames is the master-data a stock report renders with, read once per
@@ -431,19 +546,35 @@ type stockNames struct {
 	items   map[uuid.UUID]stockItemMeta
 	godowns map[uuid.UUID]string
 	batches map[uuid.UUID]string
+	// groupNames maps a stock group's LTREE PATH to its name (T10). It is keyed
+	// by path rather than by id because the group rollup walks an item's ancestry
+	// as path prefixes — every prefix is an ancestor — and would otherwise need a
+	// second map from path to id to get there.
+	groupNames map[string]string
 }
 
 func loadStockNames(ctx context.Context, tx pgx.Tx) (stockNames, error) {
 	n := stockNames{
-		items:   map[uuid.UUID]stockItemMeta{},
-		godowns: map[uuid.UUID]string{},
-		batches: map[uuid.UUID]string{},
+		items:      map[uuid.UUID]stockItemMeta{},
+		godowns:    map[uuid.UUID]string{},
+		batches:    map[uuid.UUID]string{},
+		groupNames: map[string]string{},
 	}
 
+	// ⚠️ THREE LEFT JOINS, AND EVERY ONE OF THEM IS A LEFT JOIN FOR A REASON. An
+	// item may carry no unit (the server allows unit_id NULL), no stock group
+	// (ungrouped is a real state), and its unit may be simple (no base). An inner
+	// join on any of the three would make the ITEM VANISH from the report — its
+	// stock would exist in the movement ledger and appear nowhere, which is worse
+	// than any wrong figure because nothing on the page would be missing.
 	rows, err := tx.Query(ctx,
-		`SELECT si.id, si.name, COALESCE(u.symbol, ''), si.valuation_method
+		`SELECT si.id, si.name, COALESCE(u.symbol, ''), si.valuation_method,
+		        COALESCE(sg.name, ''), COALESCE(sg.path::text, ''),
+		        COALESCE(bu.symbol, ''), COALESCE(u.conversion_factor, 0)
 		   FROM stock_item si
-		   LEFT JOIN unit u ON u.id = si.unit_id`)
+		   LEFT JOIN unit u         ON u.id  = si.unit_id
+		   LEFT JOIN stock_group sg ON sg.id = si.stock_group_id
+		   LEFT JOIN unit bu        ON bu.id = u.base_unit_id`)
 	if err != nil {
 		return n, fmt.Errorf("reporting: query stock items: %w", err)
 	}
@@ -453,7 +584,8 @@ func loadStockNames(ctx context.Context, tx pgx.Tx) (stockNames, error) {
 			id uuid.UUID
 			m  stockItemMeta
 		)
-		if err := rows.Scan(&id, &m.Name, &m.UnitSymbol, &m.ValuationMethod); err != nil {
+		if err := rows.Scan(&id, &m.Name, &m.UnitSymbol, &m.ValuationMethod,
+			&m.StockGroupName, &m.StockGroupPath, &m.BaseUnitSymbol, &m.ConversionFactor); err != nil {
 			return n, fmt.Errorf("reporting: scan stock item: %w", err)
 		}
 		n.items[id] = m
@@ -462,6 +594,24 @@ func loadStockNames(ctx context.Context, tx pgx.Tx) (stockNames, error) {
 		return n, fmt.Errorf("reporting: iterate stock items: %w", err)
 	}
 	rows.Close()
+
+	grows, err := tx.Query(ctx, `SELECT path::text, name FROM stock_group`)
+	if err != nil {
+		return n, fmt.Errorf("reporting: query stock groups: %w", err)
+	}
+	for grows.Next() {
+		var path, name string
+		if err := grows.Scan(&path, &name); err != nil {
+			grows.Close()
+			return n, fmt.Errorf("reporting: scan stock group: %w", err)
+		}
+		n.groupNames[path] = name
+	}
+	if err := grows.Err(); err != nil {
+		grows.Close()
+		return n, fmt.Errorf("reporting: iterate stock groups: %w", err)
+	}
+	grows.Close()
 
 	if err := scanNames(ctx, tx, `SELECT id, name FROM godown`, n.godowns); err != nil {
 		return n, err
@@ -495,20 +645,31 @@ func scanNames(ctx context.Context, tx pgx.Tx, sql string, into map[uuid.UUID]st
 // The replay
 // --------------------------------------------------------------------------
 
-// replayPositions groups the openings and movements BY ITEM, selects that item's
-// valuer, and replays each of its positions.
+// replayPositions replays EVERY position of EVERY item in ONE coupled pass,
+// handing the leaf a selector that resolves each item's own valuer.
 //
-// Grouping by item first is not an optimisation: stock_item.valuation_method is
-// per item, so two items in the same report can be valued on different bases.
+// PER-ITEM VALUERS ARE NOT AN OPTIMISATION: stock_item.valuation_method is per
+// item, so two items in the same report are valued on different bases.
 // ValuerFor returns an ERROR for a method it does not implement and this
-// propagates it — a report that quietly fell back to weighted average for a FIFO
-// item would print a plausible number under the wrong heading, which is the
-// failure mode the leaf's default arm exists to prevent.
+// propagates it — a report that quietly fell back to weighted average for a
+// FIFO item would print a plausible number under the wrong heading, which is
+// the failure mode the leaf's default arm exists to prevent.
+//
+// ⛔⛔ IT USED TO REPLAY EACH ITEM SEPARATELY, AND THAT WAS HALF OF D103. The
+// legs of a Stock Journal land in different POSITIONS and, on a manufacture, in
+// different ITEMS; an inward leg cannot be carried at what its paired outward
+// leg consumed if the outward was valued in a replay this one never sees. One
+// pass is what makes the coupling expressible at all — inventory.ReplayCompany
+// owns the rule itself.
+//
+// ⚠️ EVERY ITEM IS RESOLVED UP FRONT, IN A DETERMINISTIC ORDER, rather than
+// lazily inside the replay. Two items can BOTH be unvaluable, and a report that
+// named whichever one the movement stream happened to reach first would produce
+// a different error message on the same data from one call to the next — an
+// irreproducible failure, which is the worst property a refusal can have.
 func replayPositions(
 	openings []inventory.Opening, movements []inventory.Movement, names stockNames,
 ) (map[inventory.PositionKey]inventory.Position, error) {
-	openingsByItem := map[string][]inventory.Opening{}
-	movementsByItem := map[string][]inventory.Movement{}
 	var itemOrder []string
 	seen := map[string]bool{}
 	note := func(item string) {
@@ -518,15 +679,13 @@ func replayPositions(
 		}
 	}
 	for _, o := range openings {
-		openingsByItem[o.Position.StockItemID] = append(openingsByItem[o.Position.StockItemID], o)
 		note(o.Position.StockItemID)
 	}
 	for _, m := range movements {
-		movementsByItem[m.Position.StockItemID] = append(movementsByItem[m.Position.StockItemID], m)
 		note(m.Position.StockItemID)
 	}
 
-	out := map[inventory.PositionKey]inventory.Position{}
+	valuers := make(map[string]inventory.Valuer, len(itemOrder))
 	for _, item := range itemOrder {
 		meta, ok := names.items[uuidOrNil(item)]
 		if !ok {
@@ -538,11 +697,17 @@ func replayPositions(
 		if err != nil {
 			return nil, fmt.Errorf("reporting: cannot value stock item %q: %w", meta.Name, err)
 		}
-		for key, pos := range inventory.ReplayAll(openingsByItem[item], movementsByItem[item], valuer) {
-			out[key] = pos
-		}
+		valuers[item] = valuer
 	}
-	return out, nil
+
+	return inventory.ReplayCompany(openings, movements, func(item string) (inventory.Valuer, error) {
+		v, ok := valuers[item]
+		if !ok {
+			// Unreachable: itemOrder above is built from these exact inputs.
+			return nil, fmt.Errorf("reporting: stock item %s reached the replay unresolved", item)
+		}
+		return v, nil
+	})
 }
 
 // movementsOf projects the leaf-shaped movements out of the query rows, keeping
@@ -597,9 +762,14 @@ func (s *Service) StockSummary(ctx context.Context, companyID uuid.UUID, asOn st
 		if err != nil {
 			return err
 		}
+		names, err := loadStockNames(ctx, tx)
+		if err != nil {
+			return err
+		}
 		out.Rows = rows
 		out.TotalValue = totalClosingValue(out.Rows)
-		out.Items = rollupStockItems(out.Rows)
+		out.Items = rollupStockItems(out.Rows, names)
+		out.Groups = rollupStockGroups(out.Items, names)
 		return nil
 	})
 	if err != nil {
@@ -625,6 +795,7 @@ func dimensionsOf(key inventory.PositionKey, names stockNames) StockPositionRow 
 		BatchID:         batchID,
 		BatchName:       names.batches[batchID],
 		ValuationMethod: meta.ValuationMethod,
+		StockGroupName:  meta.StockGroupName,
 	}
 }
 
@@ -669,7 +840,12 @@ func sortStockRows(rows []StockPositionRow) {
 // roll up into must be the same arithmetic, which is what
 // TestPerGodownAndPerBatchPositionsSumToTheItemTotal asserts in quantity AND in
 // value.
-func rollupStockItems(rows []StockPositionRow) []StockItemRollup {
+// ⚠️ IT TAKES `names` FOR T10 AND FOR NOTHING ELSE. The group, the base unit and
+// the conversion factor are properties of the ITEM MASTER, not of a movement, so
+// they cannot come off the rows the way the valuation method does — and the
+// alternative (a second query here) is the one this function's own doc forbids.
+// The names map has already been read once for this report.
+func rollupStockItems(rows []StockPositionRow, names stockNames) []StockItemRollup {
 	var out []StockItemRollup
 	idx := map[uuid.UUID]int{}
 	for _, r := range rows {
@@ -678,17 +854,24 @@ func rollupStockItems(rows []StockPositionRow) []StockItemRollup {
 			i = len(out)
 			idx[r.StockItemID] = i
 			out = append(out, StockItemRollup{
-				StockItemID:  r.StockItemID,
-				ItemName:     r.ItemName,
-				UnitSymbol:   r.UnitSymbol,
-				OpeningQty:   decimal.Zero,
-				OpeningValue: decimal.Zero,
-				InwardQty:    decimal.Zero,
-				InwardValue:  decimal.Zero,
-				OutwardQty:   decimal.Zero,
-				OutwardValue: decimal.Zero,
-				ClosingQty:   decimal.Zero,
-				ClosingValue: decimal.Zero,
+				StockItemID: r.StockItemID,
+				ItemName:    r.ItemName,
+				UnitSymbol:  r.UnitSymbol,
+				// Taken from the position rows, which is where the replay put
+				// it: every position of one item shares the item's method, so
+				// the first row to arrive states it for the rollup. Re-querying
+				// stock_item here would be a second read of the same fact, able
+				// to disagree with the basis the figures were actually derived on.
+				ValuationMethod: r.ValuationMethod,
+				StockGroupName:  r.StockGroupName,
+				OpeningQty:      decimal.Zero,
+				OpeningValue:    decimal.Zero,
+				InwardQty:       decimal.Zero,
+				InwardValue:     decimal.Zero,
+				OutwardQty:      decimal.Zero,
+				OutwardValue:    decimal.Zero,
+				ClosingQty:      decimal.Zero,
+				ClosingValue:    decimal.Zero,
 			})
 		}
 		g := &out[i]
@@ -701,6 +884,96 @@ func rollupStockItems(rows []StockPositionRow) []StockItemRollup {
 		g.ClosingQty = g.ClosingQty.Add(r.ClosingQty)
 		g.ClosingValue = g.ClosingValue.Add(r.ClosingValue)
 		g.Positions = append(g.Positions, r)
+	}
+	// THE COMPOUND-UNIT RESTATEMENT, once per item, after the fold — because it
+	// is a function of the item's FINAL closing quantity and doing it per row
+	// would restate each position separately and then add up the roundings.
+	for i := range out {
+		meta := names.items[out[i].StockItemID]
+		if meta.BaseUnitSymbol == "" || !meta.ConversionFactor.IsPositive() {
+			continue
+		}
+		out[i].BaseUnitSymbol = meta.BaseUnitSymbol
+		out[i].ConversionFactor = meta.ConversionFactor
+		// Rounded to the money/quantity scale the columns carry, exactly as every
+		// other derived quantity in this package is: 4 dp.
+		out[i].ClosingBaseQty = out[i].ClosingQty.Mul(meta.ConversionFactor).Round(4)
+	}
+	return out
+}
+
+// rollupStockGroups folds the item rollups into STOCK GROUP subtotals (T10),
+// with every item counted in EVERY ANCESTOR of its group.
+//
+// ⛔ THE BRANCH, NOT THE LEVEL. A group total that counted only its direct items
+// would print a figure smaller than the rows beneath it whenever a group has
+// children, with nothing on the page to explain the gap. The ltree path is what
+// makes "every ancestor" cheap: "g1.s2.s3" contains its own ancestors as
+// prefixes, so one pass over the labels adds an item to each.
+//
+// ⚠️ THE RESULT DOES NOT SUM TO THE COMPANY'S CLOSING STOCK, deliberately, and
+// StockGroupRollup's doc says so out loud: an item in a nested group is in two
+// totals. The company total is the sum of the POSITIONS.
+//
+// The UNGROUPED bucket comes LAST and is named "" — every item that predates T10
+// is in it, and a report that dropped it would show a company holding less stock
+// than it does.
+func rollupStockGroups(items []StockItemRollup, names stockNames) []StockGroupRollup {
+	byPath := map[string]*StockGroupRollup{}
+	ungrouped := &StockGroupRollup{}
+
+	for _, it := range items {
+		meta := names.items[it.StockItemID]
+		if meta.StockGroupPath == "" {
+			ungrouped.ItemCount++
+			ungrouped.OpeningValue = ungrouped.OpeningValue.Add(it.OpeningValue)
+			ungrouped.InwardValue = ungrouped.InwardValue.Add(it.InwardValue)
+			ungrouped.OutwardValue = ungrouped.OutwardValue.Add(it.OutwardValue)
+			ungrouped.ClosingValue = ungrouped.ClosingValue.Add(it.ClosingValue)
+			continue
+		}
+		// Every prefix of the path is an ancestor group, including the path
+		// itself. names.groupsByPath gives each one its NAME; a path with no
+		// group behind it cannot happen (the FK guarantees it) and is skipped
+		// rather than invented.
+		labels := strings.Split(meta.StockGroupPath, ".")
+		for i := range labels {
+			prefix := strings.Join(labels[:i+1], ".")
+			name, ok := names.groupNames[prefix]
+			if !ok {
+				continue
+			}
+			g, seen := byPath[prefix]
+			if !seen {
+				g = &StockGroupRollup{
+					GroupName:    name,
+					Path:         prefix,
+					Depth:        i,
+					OpeningValue: decimal.Zero,
+					InwardValue:  decimal.Zero,
+					OutwardValue: decimal.Zero,
+					ClosingValue: decimal.Zero,
+				}
+				byPath[prefix] = g
+			}
+			g.ItemCount++
+			g.OpeningValue = g.OpeningValue.Add(it.OpeningValue)
+			g.InwardValue = g.InwardValue.Add(it.InwardValue)
+			g.OutwardValue = g.OutwardValue.Add(it.OutwardValue)
+			g.ClosingValue = g.ClosingValue.Add(it.ClosingValue)
+		}
+	}
+
+	out := make([]StockGroupRollup, 0, len(byPath)+1)
+	for _, g := range byPath {
+		out = append(out, *g)
+	}
+	// PATH ORDER IS TREE ORDER: a parent's path is a prefix of its children's, so
+	// sorting the paths as strings puts every parent immediately above its own
+	// subtree. Nothing else needs to know the shape of the tree.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	if ungrouped.ItemCount > 0 {
+		out = append(out, *ungrouped)
 	}
 	return out
 }

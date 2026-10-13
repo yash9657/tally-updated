@@ -54,6 +54,21 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   "Alt+F1": { kind: "detailed" }, // Detailed / condensed
   "Ctrl+F": { kind: "filter" }, // Filter rows
   "Alt+E": { kind: "exportScreen" }, // Export the active screen
+  // Alt+M — E-MAIL THIS DOCUMENT (B2). TALLY'S OWN E-MAIL KEY, not an invented
+  // one: the TallyPrime top menu carries `E: Export` and `M: E-mail` as two
+  // SEPARATE entries (RESEARCH.md:361), Alt+M is listed among the top-menu
+  // globals (:415), the report key table has it (:774), and the export page says
+  // "Alt+M e-mails the report" alongside rather than among Alt+E's formats (:817).
+  //
+  // ⛔ IT IS NOT A FOURTH EXPORT FORMAT, which is why it is here and not in
+  // `ExportTarget`. Every export target writes a file and stops; this writes a
+  // file and then leaves the application for the operator's mail client.
+  //
+  // ⚠️ macOS COMPOSES Option+M INTO "µ". It needs no special case — `baseKeyOf`
+  // resolves every Alt+<letter> on `ev.code` precisely so that layout-specific
+  // composition cannot kill a binding — but drive it in a test with the harness's
+  // altMac("m") and never press("Alt+m").
+  "Alt+M": { kind: "emailDocument" },
   // ---- PRINT. Two combos, two DIFFERENT Tally actions (RESEARCH.md:2165:
   // ERP 9 Alt+P; TallyPrime "Ctrl+P (voucher) / Alt+P (print menu)").
   //
@@ -74,6 +89,56 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   F1: { kind: "help" }, // Help
   "Ctrl+F1": { kind: "help" }, // Context help
   F11: { kind: "features" }, // Company Features
+  // Alt+Y — DATA (backup / restore). Tally's own surface is `Alt+Y (Data) >
+  // Backup / Restore` (RESEARCH.md:993), and Alt+Y was COMPLETELY UNBOUND in
+  // this build before T14, so the real key was free to take rather than invented.
+  //
+  // ⚠️ macOS COMPOSES Option+Y INTO "¥". Every Alt binding in this product was
+  // once found dead on a Mac while every browser test passed, which is why
+  // combos resolve on `code` and not on `key`; drive it in a test with the
+  // harness's altMac("y"), never press("Alt+y").
+  "Alt+Y": { kind: "dataScreen" },
+  // Alt+O — MIGRATE FROM TALLY: import a TallyPrime XML export (T32). This is
+  // TALLY'S OWN IMPORT KEY, not an invented one: "O: Import" from the top
+  // horizontal menu (RESEARCH.md:361), and `Gateway of Tally > Import`
+  // (RESEARCH.md:415, :1221).
+  //
+  // ⛔ IT DOES NOT SHADOW THE BANK-STATEMENT IMPORT, AND THAT IS GUARANTEED BY
+  // resolveAction RATHER THAN BY LUCK: `Alt+O` is in RAW_SCREEN_BINDINGS for
+  // `bank-reconciliation`, screen bindings are consulted FIRST, so the narrower
+  // meaning wins on the one screen that has one. Both are Tally's same
+  // "O: Import"; the statement one is scoped because a statement belongs to one
+  // bank account, and a Tally export belongs to the company.
+  //
+  // ⚠️ macOS COMPOSES Option+O INTO "ø" (see normalize.test.ts, which already
+  // pins that mapping for this very combo). Combos resolve on `code`, so drive
+  // it in a test with the harness's altMac("o") and never press("Alt+o").
+  "Alt+O": { kind: "tallyImport" },
+  // "R: Reconcile" — the queue of refused alters and deletes (track D).
+  //
+  // ⚠️ macOS COMPOSES Option+R INTO "®". Combos resolve on `code`, so drive it in
+  // a test with the harness's altMac("r") and NEVER press("Alt+r") — every Alt
+  // binding in this product was once found dead on macOS while every browser
+  // test passed (HANDOFF rule 6).
+  "Alt+R": { kind: "reconciliationQueue" },
+  // "Q: Outbox" — the vouchers this machine is holding because the server could
+  // not be reached (track D).
+  //
+  // ⚠️ Alt+Q WAS FREE, MEASURED: the bound Alt letters are A C D E G I L M O P R
+  // S V W X Y Z (plus Alt+2), and RESEARCH pins no documented TallyPrime global
+  // to Q — there is no offline outbox in Tally to have a key for. So nothing
+  // shadows this and it shadows nothing.
+  //
+  // ⚠️ macOS COMPOSES Option+Q INTO "œ". Combos resolve on `code`, so drive it in
+  // a test with the harness's altMac("q") and NEVER press("Alt+q") — every Alt
+  // binding in this product was once found dead on macOS while every browser
+  // test passed (HANDOFF rule 6).
+  "Alt+Q": { kind: "offlineOutbox" },
+  // Ctrl+K — the AGENT SIDE PANEL (W2). ⚠️ NOT Alt+K: that is TallyPrime's
+  // `K: Company` top-menu key (RESEARCH.md:361, :415). RESEARCH documents no
+  // Ctrl+K, and no screen in this build binds it. The panel is the SHELL's
+  // (AgentPanel.tsx registers the handler), because it survives screen changes.
+  "Ctrl+K": { kind: "agentPanel" },
   F12: { kind: "configure" }, // Configure (screen/report settings)
   // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
   // The default master is a ledger, the by-far most common inline create; the
@@ -141,11 +206,24 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // 0031), so the key opens the screen for everyone and the POST is what
   // answers 403 — with a stated reason, not a blank form.
   "Alt+F10": { kind: "voucher", voucherType: "physical-stock" },
-  "Ctrl+F4": {
-    kind: "unavailable",
-    feature: "Payroll voucher (Ctrl+F4)",
-    note: "The payroll module is not built yet.",
-  },
+  // ---- THE PAY RUN (Track 3). `unavailable` ("The payroll module is not built
+  // yet") for the whole life of the project up to here, in TWO stages and for two
+  // different reasons — the same two-stage history the four stock voucher keys
+  // above have.
+  //
+  // First there was no engine. Then the engine, the statutory rates, both
+  // reports, all three statutory file emitters, EIGHT mounted routes and every
+  // one of their PDP mappings existed and there was NO SCREEN — so a
+  // keyboard-only operator could not create an employee, let alone pay one,
+  // while the note below still said the module was not built.
+  //
+  // ⛔ IT IS A SCREEN AND NOT `{ kind: "voucher", voucherType: "payroll" }`.
+  // VoucherScreen resolves its layout through configFor(voucherType), which has
+  // no payroll entry: the key would not have "partly worked", it would have
+  // taken the operator to an undefined config. And a pay run genuinely is not a
+  // voucher FORM — its lines are computed from the masters for a whole wage
+  // month, so there are no particulars to key. RESEARCH.md:903 pins the combo.
+  "Ctrl+F4": { kind: "payRun" },
   // Ctrl+F7 was ERP 9's Physical Stock key. TallyPrime moved it to Alt+F10
   // (bound above), so this profile keeps Ctrl+F7 bound — an operator with ERP 9
   // in their fingers WILL press it — but says where the key went rather than
@@ -268,6 +346,21 @@ const RAW_SCREEN_BINDINGS: Partial<
     F5: { kind: "ledgerWise" },
     "Ctrl+H": { kind: "changeView" },
     "Alt+F5": { kind: "detailed" },
+    // Alt+V — the COSTING METHOD of a stock item (T9), on the Stock Summary.
+    //
+    // ⚠️ IT IS BOUND FOR EVERY REPORT AND MEANINGFUL ON ONE, and that is a
+    // limitation of this table rather than a choice: bindings are keyed by
+    // ScreenKind, and a report reached as `report:stock-summary` has no key of
+    // its own here. Only StockSummaryScreen registers the handler, so on any
+    // other report the shell answers "does not apply on this screen" — the same
+    // way F5 (ledger-wise) already behaves on the reports that have no
+    // ledger-wise view. The alternative, leaving it unbound, is worse: the ONLY
+    // other way to re-value an item is to have chosen its method when it was
+    // created, which no existing company's items were.
+    //
+    // V for Valuation. Tally leaves Alt+V unbound in the global table, and the
+    // letter is not used by anything else in this build.
+    "Alt+V": { kind: "setValuationMethod" },
   },
   "report-detail": {
     F2: { kind: "period" },
@@ -332,47 +425,28 @@ const RAW_SCREEN_BINDINGS: Partial<
     // documented global for import; scoped to this screen because a statement
     // belongs to ONE bank account and only the screen knows which is selected.
     "Alt+O": { kind: "importBankStatement" },
-    // The MATCHING keys (:879) belong to slice 2b and are still refusals — but
-    // their notes now name 2b, not "slice 2", because HALF of slice 2 has
-    // shipped: the import is real and only the matching is missing. A key that
-    // says "import is not built" on a screen with a working import teaches an
-    // operator to distrust every other refusal in the product.
-    F8: {
-      kind: "unavailable",
-      feature: "Modify match (F8)",
-      note: "Statements now import (Alt+O), but MATCHING them to vouchers is T4 slice 2b and is not built, so there are no matches to modify yet.",
-    },
-    F9: {
-      kind: "unavailable",
-      feature: "Set status manually (F9)",
-      note: "Statuses come from matching imported rows to vouchers, which is T4 slice 2b and not built. Enter a Bank Date against a row instead — that IS the manual reconciliation.",
-    },
-    "Alt+F8": {
-      kind: "unavailable",
-      feature: "Unlink a match (Alt+F8)",
-      note: "Nothing is matched yet: statements import (Alt+O) but matching is T4 slice 2b, so there is nothing to unlink.",
-    },
-    "Alt+S": {
-      kind: "unavailable",
-      feature: "Potential matches (Alt+S)",
-      note: "Automatic matching is T4 slice 2b. Note its governing rule when it lands: an AMBIGUOUS match is never auto-cleared — it surfaces BOTH candidates and waits for you.",
-    },
-    // Ctrl+J and Ctrl+B are at RESEARCH.md:879 and are bound to NEITHER an
-    // action nor a refusal anywhere in this file — so they are inert TODAY and
-    // would silently inherit any future global binding for the same combo. The
-    // slice-2 memo §6 asks for them to be bound while their absence is still
-    // harmless, and Ctrl+J especially: an "exception report" is a matching
-    // concept and will be reached for the week matching ships.
-    "Ctrl+J": {
-      kind: "unavailable",
-      feature: "Exception report (Ctrl+J)",
-      note: "The reconciliation exception report is not built. It reports on MATCHING, which is T4 slice 2b.",
-    },
-    "Ctrl+B": {
-      kind: "unavailable",
-      feature: "Basis of values (Ctrl+B)",
-      note: "The basis-of-values panel is not built on this screen. The statement's own arithmetic is on its face: book balance, un-cleared items, bank balance, and a difference that must be exactly zero.",
-    },
+    // ⭐ THE MATCHING KEYS (:879) ARE REAL AS OF T4 SLICE 2b. They were
+    // refusals for two rounds, and the notes they carried promised exactly what
+    // the actions below now do — including §0's governing rule, which Alt+S's
+    // old note stated in advance: an AMBIGUOUS match is never auto-cleared, it
+    // surfaces BOTH candidates and waits for you.
+    //
+    // ⛔ NONE OF THESE KEYS RECONCILES ANYTHING. Alt+S derives PROPOSALS and
+    // writes nothing. A bank date is written only when the operator accepts a
+    // proposal by name — through the same write the Bank Date column makes,
+    // which is why matching cannot become a second way to acquire the authority
+    // to assert a clearance.
+    F8: { kind: "modifyBankMatch" },
+    F9: { kind: "setAsideBankRow" },
+    "Alt+F8": { kind: "unlinkBankMatch" },
+    "Alt+S": { kind: "matchBankRows" },
+    // Ctrl+J and Ctrl+B were bound to REFUSALS by slice 2a, on the memo §6
+    // reasoning that a combo bound to neither an action nor a refusal silently
+    // inherits any future global for the same combo. Ctrl+J was the one called
+    // out — "an exception report is a matching concept and will be reached for
+    // the week matching ships" — and this is that week.
+    "Ctrl+J": { kind: "bankExceptionReport" },
+    "Ctrl+B": { kind: "bankBasisOfValues" },
   },
   // THE TDS CHALLAN REGISTER (T6). This screen carries an ENTRY FORM, and that
   // is what every binding below is about: AN UNBOUND KEY HERE IS NOT INERT.
@@ -469,6 +543,86 @@ const RAW_SCREEN_BINDINGS: Partial<
   // NOT INERT. Without these entries the global voucher keys fire — F5 a Payment,
   // F9 a Purchase, F8 a Sales — over a half-keyed cost centre, and the frame that
   // held the panel goes with it.
+  // ---- THE TWO T11 BUDGET SCREENS.
+  //
+  // Both are ScreenKinds and not `report` frames, so NOTHING from the `report`
+  // table applies to them: every key they need is bound here or it falls through
+  // to the global voucher keys.
+  budgets: {
+    // Alt+C — CREATE a plan, or a line on the open one. See the `createBudget`
+    // action comment for why the global createMaster must not claim this key.
+    "Alt+C": { kind: "createBudget" },
+    // F2 would read as "Date" from the global table, and a master list has no date
+    // dimension. ⛔ THE NOTE IS NOT THE COST-MASTERS NOTE, because a budget DOES
+    // carry dates and saying "a budget has no period" would be false: what is true
+    // is that the period belongs to the PLAN and is keyed on the create panel, not
+    // set by F2. A note that is nearly right about a date is worse than none.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A budget carries its OWN period — from and to are part of the plan and are keyed on the create panel (Alt+C). F2 does not set it, and could not: changing a plan's period changes which movement every nett-transactions line is measured over and which date every closing-balance line is measured as at, so it is an audited alteration of the plan rather than a view setting.",
+    },
+    F4: {
+      kind: "unavailable",
+      feature: "Contra voucher (F4) — not from this screen",
+      note: "The voucher keys are held back on the budgets screen: opening a voucher over it would abandon the plan or line you are keying. Esc leaves the panel, then F4 works as it always does. Note that a voucher could not affect a budget anyway — a budget posts nothing and is not in the books.",
+    },
+  },
+  "budget-variance": {
+    // F4 — CHOOSE THE PLAN. Same provenance as the Cost Centre Summary's axis
+    // picker: ours, placed where RESEARCH.md:879 puts the analogous account picker,
+    // never claimed as documented. Binding it is protective twice over, because the
+    // global F4 is a Contra voucher.
+    F4: { kind: "selectBudget" },
+    // ⛔ F2 IS REFUSED ON THIS REPORT, WHICH IS UNUSUAL AND DELIBERATE. Every other
+    // report in the product takes a period from F2. This one cannot: the period is
+    // the PLAN's own, and narrowing it would compare a full-period budget against
+    // part-period actuals — which needs a spread rule (straight-line, monthly,
+    // seasonal) that Tally makes the operator choose and that these books give no
+    // basis to invent. Apportioning silently by day count is confidently wrong every
+    // October for any festival-weighted business. So the key says so rather than
+    // setting dates the report ignores — which is the failure the cost-masters F2
+    // note above exists to prevent, one screen over.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2) — fixed by the plan",
+      note: "This report's period is the BUDGET's own and cannot be narrowed. Comparing a full-period budget against a shorter window needs a spread rule — straight-line, monthly or seasonal — that nobody has chosen, and apportioning by day count would be confidently wrong for any business with a seasonal year. To report on a different period, budget for that period: F4 chooses which plan.",
+    },
+    // Alt+C inside a report is Tally's NEW COLUMN (RESEARCH.md:771). Not built, and
+    // bound anyway: the global Alt+C would push a LEDGER-CREATE frame over the
+    // report.
+    "Alt+C": {
+      kind: "unavailable",
+      feature: "New Column (Alt+C)",
+      note: "Comparison columns are not built. In Tally this adds a second period or budget column side by side; here one plan at a time is the whole report. ⛔ Note that a column comparing two BUDGETS ON DIFFERENT BASES would be the one comparison this report must never offer — a closing balance is a position and nett transactions are a flow, so the two columns would not be comparable and their difference would not be a quantity.",
+    },
+  },
+  gstr9: {
+    // F4 — CHOOSE THE FINANCIAL YEAR. Same provenance as the budget-variance plan
+    // picker: ours, never claimed as documented. Binding it is protective twice
+    // over, because the global F4 is a Contra voucher.
+    F4: { kind: "selectFinancialYear" },
+    // ⛔ F2 IS REFUSED HERE, FOR A DIFFERENT REASON FROM BUDGET-VARIANCE'S REFUSAL
+    // ABOVE, AND THE DIFFERENCE IS WORTH THE WORDS. That report refuses a period
+    // because apportioning a plan needs a spread rule nobody has chosen. This one
+    // refuses because THE DOCUMENT DOES NOT EXIST for any other window: GSTR-9 is
+    // an annual return for a financial year, cored answers 400 to anything else,
+    // and a period frame here would let an operator set a range the report can
+    // only refuse.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2) — this report is annual",
+      note: "GSTR-9 covers a FINANCIAL YEAR, 1 April to 31 March, and no other window exists — a shorter one is not a smaller GSTR-9, it is a different document that has no name. F4 chooses which year. For a month, read the GSTR-3B.",
+    },
+    // Alt+C inside a report is Tally's NEW COLUMN (RESEARCH.md:771). Not built,
+    // and bound anyway: the global Alt+C would push a LEDGER-CREATE frame over the
+    // report.
+    "Alt+C": {
+      kind: "unavailable",
+      feature: "New Column (Alt+C)",
+      note: "Comparison columns are not built. ⛔ Note what this report ALREADY does instead: it puts three independently-computed views of the same year beside each other and states where they disagree. A fourth column comparing two YEARS would be a different report, and adding one without the same month-by-month divergence treatment would reintroduce the netting this report exists to prevent.",
+    },
+  },
   "cost-centres": {
     // Alt+C — CREATE an axis (cost category) or a centre. Tally's own route to
     // these masters is Alt+G > Create Master > Cost Centre (RESEARCH.md:525) and
@@ -731,12 +885,106 @@ const RAW_SCREEN_BINDINGS: Partial<
     // already on is answered by pushOnce plus ALWAYS_MEANINGFUL, not a refusal.
     ...voucherKeysHeldBack("the e-invoice screen", "invoice"),
   },
+  // =========================================================================
+  // THE FIVE PAYROLL SCREENS (Track 3).
+  //
+  // Three of them carry a FORM (the employee master, the pay run and Form 138),
+  // so all three hold the voucher keys back for the reason every form-carrying
+  // screen above does: AN UNBOUND KEY HERE IS NOT INERT — F5 opens a Payment
+  // over a half-keyed record and the frame holding it goes too.
+  //
+  // ⚠️ THE TWO READERS (the register and the payslip) DELIBERATELY DO NOT hold
+  // them back. There is no form on either to lose, and an operator reading a
+  // payslip who presses F5 to key the payment that pays it should get a Payment
+  // voucher — which is exactly what Tally does. A holdback there would be
+  // friction invented by us.
+  // =========================================================================
+  employees: {
+    // Alt+C — CREATE AN EMPLOYEE. Scoped, because the global `createMaster`
+    // pushes a LEDGER-create frame: an employee is deliberately not a member of
+    // the MasterKind union, for the same reason a cost centre is not — the
+    // server serves it under its own `employee` token and not under `master`.
+    "Alt+C": { kind: "createEmployee" },
+    // Alt+S — SET THE HIGHLIGHTED EMPLOYEE'S PAY: the salary structure and the
+    // statutory election.
+    //
+    // ⛔ A SECOND WRITE KEY ON A MASTER SCREEN, AND IT IS NOT A CONVENIENCE. An
+    // employee with neither child cannot be paid at all — cored refuses the
+    // WHOLE pay run with "no salary structure is in force" / "no statutory
+    // election is in force" — and that refusal arrives on the RUN, long after
+    // the operator left this screen believing they had created an employee.
+    // Alt+C creates the person; Alt+S is what makes them payable.
+    //
+    // ⚠️ Alt+S IS NOT A DOCUMENTED TallyPrime COMBO and is not claimed as one.
+    // The global table leaves it unbound (checked), so scoping it here takes
+    // nothing away from an operator's muscle memory.
+    "Alt+S": { kind: "setEmployeePay" },
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "The employee master has no period — it is a list of people, and each row carries its own date of joining and date of leaving. What a period applies to is the PAY RUN (Ctrl+F4) and the Payroll Register, whose dimension is a WAGE MONTH typed on the screen itself.",
+    },
+    ...voucherKeysHeldBack("the employee master", "employee record"),
+  },
+  "payroll-run": {
+    // ⚠️ Ctrl+F4 IS DELIBERATELY LEFT LIVE HERE rather than held back, exactly as
+    // Alt+Z is on the e-way bill screen: pressing the key for the screen you are
+    // already on is answered by pushOnce, not by a refusal.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A pay run has no period and no voucher date to set. Its dimension is a WAGE MONTH, typed on the screen itself, and the voucher's date is DERIVED from it by the server (the last day of that month) — which is also the date the back-dated cutoff judges. Setting a date here would be setting one the server overwrites.",
+    },
+    ...voucherKeysHeldBack("the pay run", "wage month"),
+  },
+  "payroll-register": {
+    // Alt+S — THE STATUTORY FILES PANEL (the EPFO ECR and the ESIC monthly
+    // return, both for the month on screen). Not a documented Tally combo; the
+    // global table leaves Alt+S unbound, and it is the same letter this build
+    // already uses for "set the pay" on the employee master, which keeps one
+    // letter meaning one family of things.
+    "Alt+S": { kind: "payrollStatutoryFiles" },
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "The payroll register has no From/To period. Every social-security scheme keys off a WAGE MONTH — contributions, the ECR, the ESI return and the whole-month tests are all functions of it — so a range would be asking for a span no scheme has an answer for. Type the month (YYYY-MM) on the screen itself; the server refuses \"2026-13\" and \"2026-1\" rather than coercing either to a neighbouring month.",
+    },
+  },
+  "payroll-payslip": {
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A payslip has no period. It is ONE person's pay for ONE wage month, and the month came with you from the register — press Esc to go back and change it there, so the payslip and the register can never disagree about which month you are reading.",
+    },
+  },
+  "payroll-form-138": {
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "Form 138 has no From/To period. Its dimension is a TAX YEAR and a QUARTER, both typed on the screen — a quarterly statement covers whole wage months by definition, and a range would let you ask for a span the department has no return for. Q4 is refused by the server: the Annexure II record structure is not published, and guessing it would mis-file every employee's whole-year salary detail.",
+    },
+    ...voucherKeysHeldBack("the Form 138 statement", "return"),
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
   // than claimed as a documented global binding — see the KeymapAction comment.
   voucher: {
     "Alt+L": { kind: "editLog" },
+  },
+  // THE APPROVAL INBOX (W2). Ctrl+A (approve as previewed) and Enter (open the
+  // proposal in its native voucher screen) are the GLOBAL keys and mean here what
+  // they mean everywhere — accept, and drill into the highlighted row — so they
+  // are not restated. Only the two decisions Tally has no word for are scoped.
+  "approval-inbox": {
+    // Alt+X — REJECT. The global Alt+X is `cancelVoucher` ("cancel the voucher
+    // being entered"); a proposal IS a voucher nobody has accepted, so this is the
+    // same key with the same meaning, scoped to the one screen where the thing
+    // being cancelled is somebody else's.
+    "Alt+X": { kind: "rejectApproval" },
+    // Alt+B — ASK BACK. Not a Tally key (Tally has no agent to ask); Alt+B is
+    // unbound globally in this build, so nothing is shadowed. See the KeymapAction.
+    "Alt+B": { kind: "askBackApproval" },
   },
 };
 
@@ -864,6 +1112,39 @@ export function actionLabel(action: KeymapAction): string {
       // government one — from the button bar, where there is no room for the
       // disclosure the screen carries.
       return "e-Invoice (report to IRP)";
+    case "dataScreen":
+      // "Data (backup / restore)" AND NOT "Backup". The screen is Tally's Data
+      // menu; naming the key after one of the two things on it would leave an
+      // operator looking for restore under a different key that does not exist.
+      return "Data (backup / restore)";
+    case "tallyImport":
+      // ⛔ "Import from Tally" AND NOT "Import". The label appears on the button
+      // bar and in the F1 keyboard help, next to a bank-statement import that
+      // is also reached with Alt+O — a bare "Import" would make the two
+      // indistinguishable in the one place an operator goes to tell them apart.
+      return "Import from Tally (XML export)";
+    case "reconciliationQueue":
+      // ⛔ "Reconciliation (refused changes)" AND NOT "Reconciliation". This
+      // product already has a BANK reconciliation screen, reached from a
+      // different key, and a bare "Reconciliation" in the F1 keyboard help would
+      // make the two indistinguishable in the one place an operator goes to tell
+      // them apart. What this one holds is refused alters and deletes.
+      return "Reconciliation (refused changes)";
+    case "offlineOutbox":
+      // ⛔ THE LABEL SAYS "not posted", AND THAT IS THE WHOLE POINT OF IT. This
+      // string is what the button bar and the F1 keyboard help show, and it is
+      // the only description of this screen an operator sees before opening it. A
+      // bare "Outbox" reads like a sent-items folder — the opposite of the truth.
+      return "Offline Outbox (queued, not posted)";
+    // ⛔ "Reject the agent's proposal" AND NOT "Reject". This is what the F1
+    // help and the status line say, and a bare "Reject" beside a list of
+    // vouchers reads as "refuse a voucher already in the books".
+    case "agentPanel":
+      return "Agent panel (runs and proposals)";
+    case "rejectApproval":
+      return "Reject the agent's proposal";
+    case "askBackApproval":
+      return "Ask the agent back (with a note)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":
@@ -882,6 +1163,14 @@ export function actionLabel(action: KeymapAction): string {
       return "Ledger-wise / group-wise";
     case "filter":
       return "Filter rows";
+    case "emailDocument":
+      // ⛔ "opens your mail client" IS THE LOAD-BEARING HALF OF THIS LABEL. It
+      // appears on the button bar and in the F1 keyboard help, and an operator who
+      // reads a bare "E-Mail this document" will believe this application sends
+      // the mail. It does not — it saves the PDF and hands a draft to their own
+      // client, which they must then attach the file to. The label is the first
+      // place that can be said, so it is said here.
+      return "E-Mail this document (saves the PDF, opens your mail client)";
     case "exportScreen":
       // "the rows on screen" and NOT "this report": Alt+E writes what is
       // displayed AFTER Ctrl+F and F12 have been applied, which is the opposite
@@ -911,6 +1200,21 @@ export function actionLabel(action: KeymapAction): string {
       return "Bank Reconciliation (tick items off the bank statement)";
     case "importBankStatement":
       return "Import a bank statement (CSV)";
+    // T4 slice 2b. ⛔ EVERY LABEL SAYS "PROPOSED" OR NAMES THE ASSERTION,
+    // because the one thing an operator must not conclude from a key's name is
+    // that pressing it reconciled something.
+    case "matchBankRows":
+      return "Match imported bank rows to vouchers (proposals — nothing is cleared)";
+    case "modifyBankMatch":
+      return "Re-match this bank row (withdraws the current match first)";
+    case "unlinkBankMatch":
+      return "Withdraw this match, and the bank date it recorded";
+    case "setAsideBankRow":
+      return "Set this bank row aside — it matches nothing in the books";
+    case "bankExceptionReport":
+      return "Exception report — what is still unmatched, and why";
+    case "bankBasisOfValues":
+      return "Basis of values — how these proposals were arrived at";
     case "recordTDSChallan":
       return "Record a TDS deposit (challan)";
     case "allocateTDSChallan":
@@ -923,6 +1227,20 @@ export function actionLabel(action: KeymapAction): string {
       // "cost centre" would hide the axis — the master an operator has to create
       // FIRST, since a centre cannot exist without one.
       return "Create a cost category (axis) or a cost centre";
+    case "createBudget":
+      // Both, named, because one key creates either — and a label saying only
+      // "budget line" would hide the PLAN, which has to exist first.
+      return "Create a budget, or add a line to the open one";
+    case "selectBudget":
+      // "Budget" and not "plan": it is the word on the master screen and on the
+      // Gateway entry, and a key labelled with a synonym is a key an operator does
+      // not connect to the thing they created.
+      return "Choose the budget this variance report compares against";
+    case "selectFinancialYear":
+      // "Financial year" spelled in full, and NOT "period": the whole point of
+      // this key is that the window is not a period an operator may compose. An
+      // operator told "period" looks for a from/to and finds a list of years.
+      return "Choose the financial year this annual return reconciles";
     case "selectCostCategory":
       // "Axis" is spelled out: this key is what stops one axis's figures being
       // read under another's heading, and every figure on that report is scoped
@@ -943,6 +1261,33 @@ export function actionLabel(action: KeymapAction): string {
       // would be pressed by an operator who thinks they are marking it delivered —
       // which is the one thing it does not do.
       return "Pre-close (abandon) this order, with a reason — NOT 'mark it delivered'";
+    case "payRun":
+      // ⛔ "Pay run" AND NOT "Payroll voucher". The label reaches the button bar
+      // and the F1 help, and an operator told "voucher" would be looking for a
+      // form with particulars to key — there is none. A pay run computes a whole
+      // WAGE MONTH from the masters and posts one voucher at the end of it.
+      return "Pay run — compute and post a whole wage month";
+    case "createEmployee":
+      return "Create an employee";
+    case "setEmployeePay":
+      // The label says what the key is FOR, not what it edits. "Salary structure"
+      // alone reads as a refinement; it is the thing without which this person
+      // cannot be paid at all.
+      return "Set this employee's salary and statutory election (needed before they can be paid)";
+    case "setValuationMethod":
+      // ⛔ IT NAMES THE CONSEQUENCE, NOT THE FIELD. This label reaches the F1
+      // help and the "does not apply on this screen" message, and an operator
+      // told "change the valuation method" would read it as a display option
+      // (which is what Tally's own Alt+N on the Balance Sheet is). This one
+      // RESTATES the books: every period the item has traded in comes back on
+      // the new basis.
+      return "Costing method of a stock item — re-values its whole history (Avg. Cost / FIFO / LIFO)";
+    case "payrollStatutoryFiles":
+      // ⛔ IT NAMES THE TWO FILES AND SAYS THEY ARE NOT VALIDATED. Neither the
+      // EPFO portal nor the ESIC portal can run in this environment, so nothing
+      // this key produces has been through one — and a label reading "file the
+      // returns" would be a claim about a filing that has not happened.
+      return "Statutory files for this month — the EPFO ECR and the ESIC return (generated, not validated)";
     case "createBom":
       return "Define a bill of materials (a recipe)";
     case "explodeBom":

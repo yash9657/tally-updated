@@ -12,6 +12,12 @@ import type {
 } from "./types";
 import { resolveAction, resolveKeymap } from "./keymaps/tallyprime";
 import { parseVoucherRowKey } from "./voucherClass";
+import {
+  OPEN_AGENT_PROPOSAL_PREFIX,
+  PROPOSAL_ROW_PREFIX,
+  parseProposalKey,
+  type ProposalKey,
+} from "./proposalKey";
 
 /**
  * navMachine — a deterministic XState v5 model of Tally's SCREEN STACK
@@ -83,6 +89,21 @@ const REPORT_ALIASES: Readonly<Record<string, string>> = {
   // deliberately refused to add for "cash flow statement" (§6.5). It could not be
   // fixed before D94, because there was no payables report to point it at.
   "bills payable": "Bills Payable",
+  // ---- THE UNADJUSTED-FOREX REPORT (T8 step 7). Tally's own name for the figure is
+  // "Unadjusted Forex Gain/Loss", which is what it puts on the Balance Sheet, so
+  // that is the canonical name — and these are the words an operator actually types
+  // for it. ⚠️ "forex" ALONE IS INCLUDED DELIBERATELY: there is exactly one forex
+  // screen in this build, so the short word is unambiguous today. If a second one
+  // ever ships, this alias must be re-decided rather than pointed at whichever came
+  // first — an alias that silently answers a different question is the defect the
+  // "bills payable" comment above records.
+  "unadjusted forex": "Unadjusted Forex Gain/Loss",
+  "unadjusted forex gain/loss": "Unadjusted Forex Gain/Loss",
+  "forex gain/loss": "Unadjusted Forex Gain/Loss",
+  "unrealised gain/loss": "Unadjusted Forex Gain/Loss",
+  "unrealized gain/loss": "Unadjusted Forex Gain/Loss",
+  "exchange difference": "Unadjusted Forex Gain/Loss",
+  forex: "Unadjusted Forex Gain/Loss",
   payables: "Bills Payable",
   "accounts payable": "Bills Payable",
   "creditors ageing": "Bills Payable",
@@ -166,9 +187,94 @@ export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
   "Create Ledger": "ledger",
   "Create Group": "group",
   "Create Stock Item": "stock-item",
+  // T10. Listed AFTER "Create Stock Item" so typing "stock" offers the item
+  // first — the master an operator reaches for forty times a day — and the group
+  // second.
+  "Create Stock Group": "stock-group",
   "Create Unit": "unit",
   "Create Voucher Type": "voucher-type",
+  // T8. A currency master is reached the same way every other master is. Named
+  // "Create Currency" rather than "Currency" so the type-ahead groups it with
+  // the other Create entries, per the note above.
+  "Create Currency": "currency",
 };
+
+/**
+ * Go To entries that open a SCREEN KIND rather than a report frame or a master
+ * form (T11).
+ *
+ * ⛔⛔ WHY THIS MAP HAS TO EXIST, AND WHAT GOES WRONG WITHOUT IT. The picker's
+ * fallback is `canonicalReportName(label) ?? label`, which pushes
+ * `{screen:"report", reportName}` for ANY label it does not recognise — and a
+ * `report` frame with an unregistered name renders UnwiredReportScreen, politely
+ * announcing that the thing the operator just asked for "is not available in this
+ * build". So a screen-kind destination cannot simply be added to
+ * {@link GOTO_ENTRIES}: it needs a branch in `resolveGotoSelection` that fires
+ * BEFORE that fallback, exactly as the master entries do. This is the third time
+ * that shape has bitten (the five master entries, then "Vouchers"/D80), and it is
+ * why the machine owns the list.
+ *
+ * ⚠️ "Budget Variance" IS a report name on the SERVER (`report:budget-variance`,
+ * refused to Data Entry by migration 0086) and is deliberately NOT in
+ * REPORT_NAMES. The two are different things: REPORT_NAMES drives the generic
+ * report frame, and this screen takes a PLAN and a GRAIN that such a frame cannot
+ * carry. The ACL name and the navigation mechanism are independent, and conflating
+ * them is what would put a dead screen in front of a live report.
+ *
+ * ⚠️ THE THREE COST SCREENS (T2) HAVE THE SAME SHAPE AND ARE NOT LISTED HERE.
+ * They are Gateway-only today and this map would give them an Alt+G door too;
+ * adding them is a change to T2's reachability and belongs to whoever owns that,
+ * not to a budgets lane quietly widening it. The mechanism is here when they want
+ * it.
+ */
+export const SCREEN_GOTO_ENTRIES: Readonly<Record<string, ScreenKind>> = {
+  // The MASTER first, so typing "budget" offers the thing that has to exist
+  // before the report means anything — the same ordering argument
+  // MASTER_GOTO_ENTRIES makes for "Create Stock Item" over "Create Stock Group".
+  Budgets: "budgets",
+  "Budget Variance": "budget-variance",
+  // ⚠️ "GSTR-9" IS a report name on the SERVER (`report:gstr9`, refused to Data
+  // Entry by migration 0087) and is deliberately NOT in REPORT_NAMES, for the same
+  // reason "Budget Variance" is not: that list pushes a generic report frame, and
+  // this screen takes a FINANCIAL YEAR and six TAX LEDGERS such a frame cannot
+  // carry.
+  //
+  // ⛔ LABELLED "GSTR-9" WITH THE HYPHEN, THOUGH THE ACL TOKEN IS `gstr9`. The
+  // label is what a human types and reads, and the statutory document is written
+  // with a hyphen everywhere it appears; the token follows its two siblings
+  // `gstr1`/`gstr3b` instead. The two are independent and neither should be
+  // "made consistent" with the other — see the migration 0087 header.
+  "GSTR-9": "gstr9",
+  // W2 — THE APPROVAL INBOX. PLAN-AGENTIC names both doors ("reachable from the
+  // Gateway and Alt+G"); this entry is the Alt+G one, and the Gateway arm below
+  // is the other. ⚠️ Literal rather than APPROVAL_INBOX_LABEL because that const
+  // is declared further down this module and a Record initialiser runs at load.
+  "Approval Inbox": "approval-inbox",
+  // W2 breadth — AGENT SETTINGS, the owner's half of the agent plane. Literal
+  // for the reason the entry above gives.
+  "Agent Settings": "agent-settings",
+  // W4 — THE INSIGHTS INBOX (Alt+G door; the Gateway arm below is the other).
+  Insights: "insights",
+};
+
+/** Case-insensitive index of {@link SCREEN_GOTO_ENTRIES}, built once. */
+const SCREEN_GOTO_BY_LABEL: ReadonlyMap<string, ScreenKind> = new Map(
+  Object.entries(SCREEN_GOTO_ENTRIES).map(([label, kind]) => [
+    label.toLowerCase(),
+    kind,
+  ]),
+);
+
+/**
+ * The {@link ScreenKind} a Go To label opens, or undefined for anything else.
+ * Matched case-insensitively, exactly as every Gateway label above is.
+ */
+export function screenKindForGotoLabel(
+  label: string | undefined,
+): ScreenKind | undefined {
+  if (!label) return undefined;
+  return SCREEN_GOTO_BY_LABEL.get(label.trim().toLowerCase());
+}
 
 /**
  * Everything the Alt+G / Ctrl+G picker offers, in the order it offers it.
@@ -183,6 +289,7 @@ export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
 export const GOTO_ENTRIES: readonly string[] = [
   "Vouchers",
   ...Object.keys(MASTER_GOTO_ENTRIES),
+  ...Object.keys(SCREEN_GOTO_ENTRIES),
   ...REPORT_NAMES,
 ];
 
@@ -273,6 +380,85 @@ export const BANK_RECON_LABEL = "Bank Reconciliation";
 export const TDS_CHALLANS_LABEL = "TDS Challans";
 
 /**
+ * The Gateway entry that opens the MIGRATE-FROM-TALLY import screen (T32).
+ *
+ * Tally's own path is `Gateway of Tally > Import` (RESEARCH.md:1221), so this
+ * door is the documented one and not a convenience. The screen also has Tally's
+ * documented KEY (Alt+O), and it has both because Tally has both — unlike the
+ * Data screen (Alt+Y), which deliberately has no Gateway entry because Alt+Y is
+ * global in Tally too.
+ *
+ * ⚠️ Alt+G Go To IS NOT A THIRD DOOR AND CANNOT BE MADE ONE HERE. That picker is
+ * hard-wired to ["Vouchers", ...REPORT_NAMES], so every screen that is not a
+ * report name is absent from it — which is exactly why the Gateway entry is
+ * needed rather than optional.
+ *
+ * Same ordering requirement as every label above: it MUST be matched BEFORE the
+ * canonicalReportName fallback. The trap is milder than Bank Reconciliation's
+ * ("Import from Tally" is not a report name) but the fallback would still push a
+ * report frame with that literal name, which renders as a screen politely
+ * announcing that a built, reachable importer is "not available in this build".
+ */
+export const TALLY_IMPORT_LABEL = "Import from Tally";
+
+/**
+ * The Gateway entry that opens the RECONCILIATION QUEUE (track D).
+ *
+ * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, or selecting it
+ * pushes a `report` frame of that literal name, which renders as a screen
+ * politely announcing that a built, reachable queue is "not available in this
+ * build".
+ *
+ * ⛔⛔ AND IT IS "Reconciliation QUEUE" RATHER THAN "Reconciliation" BECAUSE THE
+ * SHORT NAME WAS A COLLISION, FOUND IN A REAL BROWSER. The Gateway is reached by
+ * typing into its search box, and "Bank Reconciliation" — a screen that has
+ * shipped for as long as T4 has — CONTAINS the word. Typing "Reconciliation" and
+ * pressing Enter opened the BANK screen, every time. Nothing errored: the
+ * operator simply arrived somewhere else, at a screen that says "this company has
+ * no bank accounts", which reads as an empty queue rather than as a wrong turn.
+ *
+ * ⚠️ THE DRIVE'S FIRST VERSION OF THIS PROBE COULD NOT SEE IT EITHER: it asserted
+ * /Reconciliation/i against the page, and "Bank Reconciliation" matches that
+ * happily. An oracle that cannot see the defect is not an oracle (HANDOFF rule
+ * 4); the probe now asserts it is NOT the bank screen.
+ */
+export const RECONCILIATION_LABEL = "Reconciliation Queue";
+
+/**
+ * The Gateway entry that opens the OFFLINE OUTBOX (track D).
+ *
+ * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, exactly as the
+ * three labels around it must, or selecting it pushes a `report` frame named
+ * "Offline Outbox" that announces a built, reachable screen is "not available in
+ * this build".
+ *
+ * ⚠️ CHECKED FOR THE COLLISION THAT COST THE LABEL ABOVE TWO BROWSER RUNS. The
+ * Gateway is driven by typing into its search box, so a new label that is a
+ * SUBSTRING of a shipped one silently opens the shipped one. Measured against
+ * GatewayScreen's list — Vouchers, Bill Inbox, Query, Day Book, Balance Sheet,
+ * Profit & Loss A/c, Stock Summary, Bank Reconciliation, TDS Challans, Import
+ * from Tally, Print Templates, Reconciliation Queue, the three cost screens, the
+ * three T3 screens, the four payroll ones, Users & Roles, Display More Reports —
+ * and against REPORT_NAMES. "Offline Outbox" is a substring of none of them and
+ * contains none of them. ⛔ CHECK BOTH LISTS BEFORE ADDING A LABEL.
+ */
+export const OFFLINE_OUTBOX_LABEL = "Offline Outbox";
+
+/**
+ * The Gateway entry that opens the PRINT TEMPLATES screen (track C).
+ *
+ * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, which falls back
+ * to the RAW LABEL for anything it does not recognise — so without the match
+ * below this label pushes a `report` frame named "Print Templates", which renders
+ * "not available in this build" over a screen that exists and works.
+ *
+ * ⚠️ IT IS NOT IN Alt+G GO TO AND CANNOT BE: that picker is generated from
+ * ["Vouchers", ...REPORT_NAMES], and this is not a report name. The Gateway entry
+ * and the F11 Company Features row are its two doors.
+ */
+export const PRINT_TEMPLATES_LABEL = "Print Templates";
+
+/**
  * The Gateway entries that open the three T2 COST screens.
  *
  * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE, and it bites harder here
@@ -294,6 +480,46 @@ export const TDS_CHALLANS_LABEL = "TDS Challans";
 export const COST_CENTRES_LABEL = "Cost Centres";
 export const COST_CENTRE_SUMMARY_LABEL = "Cost Centre Summary";
 export const COST_CATEGORY_SUMMARY_LABEL = "Cost Category Summary";
+
+/**
+ * The Gateway entries that open the BUDGET MASTER and the BUDGET VARIANCE report
+ * (T11, migrations 0085/0086).
+ *
+ * ⛔⛔ `BUDGET_VARIANCE_LABEL` IS *NOT* IN REPORT_NAMES, AND THAT IS THE SAME
+ * DECISION THE TWO COST SUMMARIES MADE — read it before "fixing" the omission.
+ * The server DOES serve it as `report:budget-variance`, so the temptation is
+ * obvious. But this build's second-level report menu is generated from
+ * REPORT_NAMES and pushes a `report` FRAME, and a `report` frame renders
+ * UnwiredReportScreen — "not available in this build" — over a report that IS
+ * built and IS ACL-gated. The screen also takes a PLAN and a GRAIN (and an AXIS at
+ * the cost-centre grain), none of which a reportName frame can carry.
+ *
+ * So it is a ScreenKind reached from the Gateway, exactly as Bank Reconciliation,
+ * the TDS Challan register and the two cost summaries are. The ACL name and the
+ * navigation mechanism are different things, and conflating them is what put a
+ * dead screen in front of a live report once already.
+ */
+export const BUDGETS_LABEL = "Budgets";
+export const BUDGET_VARIANCE_LABEL = "Budget Variance";
+
+/**
+ * The Gateway entry that opens the GSTR-9 ANNUAL RECONCILIATION (T12, migration
+ * 0087).
+ *
+ * ⛔ IT IS NOT IN REPORT_NAMES EITHER, and the reason is the one stated above for
+ * the budget variance — but the temptation is stronger here, so it is worth
+ * stating again: `report:gstr1` and `report:gstr3b` are ALREADY in REPORT_NAMES,
+ * and putting their annual sibling beside them looks obviously right. It would
+ * render UnwiredReportScreen — "not available in this build" — over a report that
+ * IS built and IS ACL-gated, and the frame could carry neither the FINANCIAL YEAR
+ * nor the six TAX LEDGERS the screen needs before it can ask cored anything.
+ *
+ * ⚠️ THE LABEL CARRIES THE HYPHEN AND THE ACL TOKEN DOES NOT (`report:gstr9`).
+ * The label is what a human types into Go To and reads on the Gateway, and the
+ * statutory document is written "GSTR-9" everywhere it appears; the token follows
+ * its two siblings instead. Migration 0087's header records that split.
+ */
+export const GSTR9_LABEL = "GSTR-9";
 
 /**
  * The prefix the Cost CATEGORY Summary puts on the row keys it publishes through
@@ -321,9 +547,88 @@ export const COST_CATEGORY_ROW_PREFIX = "cost-category:";
  * Ctrl+F8/F9) versus BOOK (what is outstanding as at a date, a report name). One
  * is where an order is created; the other is where the commitments are read.
  */
+/**
+ * The Gateway entries that open the FOUR PAYROLL screens (Track 3).
+ *
+ * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE, and two of these are the
+ * most dangerous strings in the whole set: "Payroll Register" and "Payslip" are
+ * report-SHAPED, and `payroll-register` and `payroll-payslip` genuinely ARE names
+ * in authz.KnownReportNames (migration 0035 refuses all five payroll reports to
+ * the seeded Data Entry level, which needs a name to refuse). So a frame pushed
+ * by the canonicalReportName fallback would be a `report` frame named "Payroll
+ * Register" — resolving to UnwiredReportScreen, i.e. a screen politely announcing
+ * that a built, ACL-gated, PRINTABLE report is "not available in this build".
+ *
+ * WHY THE GATEWAY AND NOT "Display More Reports": that menu is generated from
+ * REPORT_NAMES, and none of these four is reachable as a reportName frame. The
+ * register's dimension is a wage MONTH and the payslip's is a month plus an
+ * EMPLOYEE — neither is the period a `report` frame carries. Same door Bank
+ * Reconciliation, the TDS challan register and the three cost screens use.
+ *
+ * ⚠️ "Employees" IS FIRST, and that ordering is the same argument "Cost Centres"
+ * comes before the two cost reports: until an employee exists with a salary
+ * structure and a statutory election, a pay run refuses outright and both reports
+ * below can only say so.
+ */
+export const EMPLOYEES_LABEL = "Employees";
+export const PAY_RUN_LABEL = "Pay Run";
+export const PAYROLL_REGISTER_LABEL = "Payroll Register";
+export const FORM_138_LABEL = "Form 138 (Salary TDS)";
+
+/**
+ * The prefix the PAYROLL REGISTER puts on the row keys it publishes through
+ * `onSelect`, so Enter opens THAT employee's payslip — "no report is a dead end"
+ * (RESEARCH sec 8), applied to the one drill this report has.
+ *
+ * ⚠️ IT CARRIES THE EMPLOYEE'S CODE AND NEVER THEIR ID. The machine stays pure:
+ * it has no database, so it cannot know an employee uuid, and smuggling one
+ * through a frame would be the first step to a screen asking an operator for a
+ * UUID. The payslip screen resolves the code against the SERVED register,
+ * exactly as the Bank Reconciliation screen resolves a drilled ledger name and
+ * the Cost Centre Summary resolves an axis name.
+ *
+ * ⛔ THE CODE AND NOT THE NAME, which is the one place this differs from those
+ * two. `employee.code` is UNIQUE in the company (the server refuses a duplicate);
+ * a NAME is not, and two people called the same thing would make the drill open
+ * whichever the resolver met first — one person's whole pay under another
+ * person's heading.
+ */
+export const EMPLOYEE_ROW_PREFIX = "employee:";
+
 export const SALES_ORDERS_LABEL = "Sales Orders";
 export const PURCHASE_ORDERS_LABEL = "Purchase Orders";
 export const BOMS_LABEL = "Bills of Materials";
+
+/**
+ * The Gateway (and Alt+G Go To) entry that opens THE APPROVAL INBOX (W2).
+ *
+ * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE: matched BEFORE the
+ * canonicalReportName fallback, or selecting it pushes a `report` frame named
+ * "Approval Inbox" that renders "not available in this build" over a screen
+ * that is the only place an agent's proposals can be decided.
+ *
+ * ⚠️ CHECKED FOR THE SUBSTRING COLLISION THAT COST "Reconciliation Queue" TWO
+ * BROWSER RUNS. The Gateway is driven by typing into its search box, so a label
+ * that CONTAINS a shipped one (or is contained by one) opens the wrong screen.
+ * "Approval Inbox" contains neither "Bill Inbox" nor any other shipped label or
+ * REPORT_NAMES entry, and none of them contains it. Typing "inbox" offers BOTH
+ * inboxes — the Bill Inbox first, as the list is ordered — which is a choice
+ * the operator makes, not a wrong turn.
+ */
+export const APPROVAL_INBOX_LABEL = "Approval Inbox";
+
+/** The Gateway label of the Insights inbox (W4). Same ordering rule as above. */
+export const INSIGHTS_LABEL = "Insights";
+
+/**
+ * AGENT SETTINGS (W2 breadth): the autonomy table, the agent-created ledgers
+ * waiting to be unblocked, and the intent log's verification.
+ *
+ * ⚠️ CHECKED FOR THE SUBSTRING COLLISION like every label above: "Agent
+ * Settings" contains no shipped label or REPORT_NAMES entry and none contains
+ * it. Typing "agent" offers only this; typing "settings" offers only this.
+ */
+export const AGENT_SETTINGS_LABEL = "Agent Settings";
 
 /**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
@@ -466,6 +771,25 @@ function newVoucherFrame(
   };
 }
 
+/**
+ * The native CREATE frame an agent proposal is reviewed in (W2).
+ *
+ * ⛔ THE APPROVAL ID RIDES ON `detailOf`, AND THAT IS WHAT BINDS THE PREFILL TO
+ * THIS ONE FRAME. The approval itself sits in the LoadedProposal slot, which
+ * outlives the frame; VoucherScreen treats the slot as live only while the top
+ * frame names the same approval. Without the binding, Esc out of a proposal and
+ * a plain F5 later would open the SAME proposal again — prefilled, with Ctrl+A
+ * meaning "approve" on a screen the operator opened to key their own payment.
+ * The accept reducer's fresh frame after Ctrl+A carries no `detailOf`, so bulk
+ * entry after an approval is ordinary entry again.
+ */
+function proposalFrame(key: ProposalKey): ScreenFrame {
+  return {
+    ...newVoucherFrame(key.voucherType, "create", key.entryMode),
+    detailOf: key.approvalID,
+  };
+}
+
 function rootFrame(screen: ScreenKind): ScreenFrame {
   if (screen === "voucher") return newVoucherFrame(DEFAULT_LAST_VOUCHER);
   return { screen };
@@ -585,6 +909,17 @@ function resolveGotoSelection(
   // unconditionally and really does return to it. Pinned in masterGoto.test.ts.
   if (overlay.selectedItem?.trim().toLowerCase() === "vouchers") {
     return [baseFrame, newVoucherFrame(DEFAULT_LAST_VOUCHER)];
+  }
+  // ⛔ THE SCREEN-KIND ENTRIES, MATCHED BEFORE THE REPORT FALLBACK BELOW, for the
+  // reason the master arm above records at length: the fallback takes ANY
+  // unrecognised label and pushes a `report` frame, which renders "not available
+  // in this build" over a screen that is built and registered. See
+  // SCREEN_GOTO_ENTRIES.
+  const screenKind = screenKindForGotoLabel(overlay.selectedItem);
+  if (screenKind) {
+    const target: ScreenFrame = { screen: screenKind };
+    if (overlay.gotoMode === "switchTo") target.replaced = true;
+    return [baseFrame, target];
   }
   const reportName =
     canonicalReportName(overlay.selectedItem) ?? overlay.selectedItem ?? "";
@@ -790,6 +1125,62 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         });
         return { stack };
       }
+      if (active.screen === "payroll-register") {
+        // ENTER OPENS THE HIGHLIGHTED EMPLOYEE'S PAYSLIP — the one drill the
+        // register has, and the reason it is not a dead end: the register says
+        // what each person was paid in total, and this is how you get from that
+        // to WHICH COMPONENTS made it up and what was deducted.
+        //
+        // The row key carries the employee's CODE (see EMPLOYEE_ROW_PREFIX) and
+        // never their id: the machine has no database. With no row highlighted
+        // Enter is a no-op rather than a frame for "some employee" — the same
+        // rule every statement report follows for an empty selection, and it
+        // matters more here, because a payslip opened for the wrong person is one
+        // individual's entire pay under another individual's name.
+        const sel = active.selectedItem ?? "";
+        if (!sel.startsWith(EMPLOYEE_ROW_PREFIX)) return {};
+        // ⛔ THE WAGE MONTH TRAVELS WITH THE DRILL, for the reason the period
+        // travels with the cost-category drill: a payslip frame without one lands
+        // on "type a month", and the operator re-keys the month they just chose —
+        // or, worse, re-keys it slightly differently and reads one person's July
+        // payslip under a register for June with nothing on either page saying so.
+        //
+        // ONLY the month is copied, never the rest of the frame: the register's
+        // own highlighted row and its toggles belong to the register.
+        stack.push({
+          screen: "payroll-payslip",
+          detailOf: sel,
+          config: { wageMonth: active.config?.wageMonth },
+        });
+        return { stack };
+      }
+      if (active.screen === "insights") {
+        // ENTER OPENS THE HIGHLIGHTED VOUCHER BEHIND THE INSIGHT, in alteration,
+        // by the Day Book's rule: the class comes from the row key, and a row
+        // with no renderable class (or no row at all) is not drilled.
+        const row = parseVoucherRowKey(active.selectedItem);
+        if (!row) return {};
+        stack.push(newVoucherFrame(row.voucherType, "alter"));
+        return { stack };
+      }
+      if (active.screen === "approval-inbox") {
+        // ENTER OPENS THE HIGHLIGHTED PROPOSAL IN ITS NATIVE VOUCHER SCREEN — a
+        // CREATE frame of the proposal's own class, in the entry mode that
+        // restates its postings line for line. VoucherScreen finds the approval
+        // in the LoadedProposal slot (the inbox filled it before publishing the
+        // row key) and prefills; Ctrl+A THERE records the approval, never a post.
+        //
+        // ⛔ A ROW WITH NO PROPOSAL KEY IS NOT DRILLED. The inbox publishes a key
+        // only for a proposal the native form can restate; for any other (a GST
+        // invoice body, which the accounting-invoice form would RE-DERIVE tax on)
+        // Enter is a no-op and the screen says why. Pushing a frame anyway would
+        // be the create-in-disguise hazard: a prefilled-looking voucher whose
+        // Ctrl+A posts something other than what was previewed.
+        const key = parseProposalKey(active.selectedItem, PROPOSAL_ROW_PREFIX);
+        if (!key) return {};
+        stack.push(proposalFrame(key));
+        return { stack };
+      }
       if (active.screen === "master-create") {
         // Enter advances the master-create field cursor.
         active.field = nextMasterField(active.field);
@@ -850,6 +1241,54 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "tds-challans" });
           return { stack };
         }
+        // "Import from Tally" drills into the T32 migration import screen.
+        // Ordering as above: BEFORE the canonicalReportName fallback, which
+        // would otherwise push a report frame named "Import from Tally".
+        if (
+          active.selectedItem?.toLowerCase() ===
+          TALLY_IMPORT_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "tally-import" });
+          return { stack };
+        }
+        // "Reconciliation" drills into the refused-changes queue (track D).
+        // Ordering as above, and it matters MORE here: the canonicalReportName
+        // fallback would resolve this to something report-shaped rather than the
+        // screen, because a bank-reconciliation report really does exist.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          RECONCILIATION_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "reconciliation" });
+          return { stack };
+        }
+        // "Offline Outbox" drills into the queue this machine holds (track D).
+        // Ordering as above: BEFORE the canonicalReportName fallback, which would
+        // otherwise push a report frame named "Offline Outbox" — and there is no
+        // such report, so it would render "not available in this build" over a
+        // screen that is the only way to see un-posted work.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          OFFLINE_OUTBOX_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "offline-outbox" });
+          return { stack };
+        }
+        // "Print Templates" drills into the per-company document layouts (track
+        // C). Ordering as above: BEFORE the canonicalReportName fallback, which
+        // would otherwise push a report frame named "Print Templates".
+        //
+        // ⛔ THIS IS ONE OF THE THREE POINTS THAT SHIP THE SCREEN DEAD. Without
+        // it the label falls through to the fallback and the operator gets a
+        // report frame that says the report is not available — over a screen that
+        // is built.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          PRINT_TEMPLATES_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "print-templates" });
+          return { stack };
+        }
         // The three T2 COST screens. Ordering as above, and load-bearing: two of
         // these labels ARE report names on the server, so the fallback would push
         // a `report` frame that renders "not available in this build" over a
@@ -878,6 +1317,42 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "cost-category-summary" });
           return { stack };
         }
+        // THE TWO T11 BUDGET SCREENS. Ordering as above, and load-bearing for the
+        // SECOND of them: "Budget Variance" IS a report name on the server, so the
+        // fallback would push a `report` frame that renders "not available in this
+        // build" over a built, ACL-gated report. See BUDGET_VARIANCE_LABEL.
+        //
+        // The MASTER comes first of the two on purpose: until a plan with lines
+        // exists, the variance report has nothing in its second column and can only
+        // say so — the same ordering argument the three cost screens make.
+        if (
+          active.selectedItem?.toLowerCase() === BUDGETS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "budgets" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          BUDGET_VARIANCE_LABEL.toLowerCase()
+        ) {
+          // No plan and no grain on the frame: the screen opens its PICKER (or
+          // resolves the company's only plan) and defaults the GRAIN to ledger,
+          // which it states on its face. The machine cannot choose a plan — it has
+          // no database — and there is no default plan for it to choose.
+          stack.push({ screen: "budget-variance" });
+          return { stack };
+        }
+        // THE ANNUAL RECONCILIATION (T12). Same shape as the budget variance
+        // above: no year and no ledgers on the frame, because the machine has no
+        // database and cannot choose either. The screen defaults to the CURRENT
+        // financial year, pre-selects the tax ledgers by name, and refuses to load
+        // until all six are confirmed — every one of which it states on its face.
+        if (
+          active.selectedItem?.toLowerCase() === GSTR9_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "gstr9" });
+          return { stack };
+        }
         // The two ORDER REGISTERS and the BOM screen (T3). Ordering as above.
         // These are the screens Ctrl+F8 / Ctrl+F9 reach; the Gateway is the other
         // door, and it is the only door to the BOM screen (RESEARCH pins no key
@@ -896,8 +1371,65 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "purchase-orders" });
           return { stack };
         }
+        // ---- THE FOUR PAYROLL SCREENS (Track 3). Ordering as above, and it is
+        // load-bearing for two of them: "Payroll Register" and the payslip are
+        // report-SHAPED and both ARE real report names on the server, so the
+        // fallback would push a `report` frame that renders "not available in
+        // this build" over a built, ACL-gated, printable report. See
+        // EMPLOYEES_LABEL.
+        if (
+          active.selectedItem?.toLowerCase() === EMPLOYEES_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "employees" });
+          return { stack };
+        }
+        if (active.selectedItem?.toLowerCase() === PAY_RUN_LABEL.toLowerCase()) {
+          // The same frame Ctrl+F4 pushes. A Gateway drill and a key on one
+          // destination must land on ONE frame, which is the rule the "Vouchers"
+          // entry's own arm exists to keep.
+          stack.push({ screen: "payroll-run" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          PAYROLL_REGISTER_LABEL.toLowerCase()
+        ) {
+          // No month on the frame: the screen asks for it on its own face, the
+          // way the TDS challan register asks for a tax year. The machine cannot
+          // choose a wage month, and defaulting one would answer a question
+          // nobody asked while looking like the one they did.
+          stack.push({ screen: "payroll-register" });
+          return { stack };
+        }
+        if (active.selectedItem?.toLowerCase() === FORM_138_LABEL.toLowerCase()) {
+          stack.push({ screen: "payroll-form-138" });
+          return { stack };
+        }
         if (active.selectedItem?.toLowerCase() === BOMS_LABEL.toLowerCase()) {
           stack.push({ screen: "boms" });
+          return { stack };
+        }
+        // THE APPROVAL INBOX (W2). Ordering as above: BEFORE the report fallback,
+        // which would push a `report` frame named "Approval Inbox".
+        if (
+          active.selectedItem?.toLowerCase() ===
+          APPROVAL_INBOX_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "approval-inbox" });
+          return { stack };
+        }
+        // AGENT SETTINGS (W2 breadth), before the report fallback for the
+        // same reason.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          AGENT_SETTINGS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "agent-settings" });
+          return { stack };
+        }
+        // THE INSIGHTS INBOX (W4). Same ordering, same reason.
+        if (active.selectedItem?.toLowerCase() === INSIGHTS_LABEL.toLowerCase()) {
+          stack.push({ screen: "insights" });
           return { stack };
         }
         // "Display More Reports" opens the second-level report MENU (Tally's
@@ -986,6 +1518,57 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
 
     case "features": {
       return pushOnce("features");
+    }
+
+    case "tallyImport": {
+      // Alt+O — MIGRATE FROM TALLY (T32). pushOnce so pressing it twice does not
+      // stack two copies, the same treatment Help, Features and the Data screen
+      // get.
+      //
+      // ⛔ THIS CASE IS ONE OF THE THREE REGISTRATION POINTS THAT SHIP THE KEY
+      // COMPLETELY DEAD WITH NO ERROR AND NO STATUS LINE (the keymap binding and
+      // the screen-registry entry are the others). It is mutation-proved
+      // separately in TallyImportScreen.test.tsx for that reason.
+      //
+      // ⚠️ IT IS REACHABLE FROM ANY SCREEN, and unlike the voucher keys it is NOT
+      // held back on the create forms — Esc brings the operator straight back to
+      // a half-keyed voucher, and an import is a thing decided rather than
+      // navigated to. The narrower `importBankStatement` still owns Alt+O on the
+      // reconciliation screen; resolveAction gives screen bindings priority, so
+      // this global never reaches it.
+      return pushOnce("tally-import");
+    }
+
+    case "reconciliationQueue": {
+      // Alt+R — the refused-changes queue. pushOnce so pressing it twice does not
+      // stack two frames, the same treatment every other reader screen gets.
+      return pushOnce("reconciliation");
+    }
+
+    case "offlineOutbox": {
+      // Alt+Q — the offline outbox. pushOnce so pressing it twice does not stack
+      // two frames, the same treatment every other reader screen gets.
+      //
+      // ⛔ REACHABLE FROM A HALF-KEYED VOUCHER, DELIBERATELY, and this is the one
+      // global where that matters most. The moment an operator most wants this
+      // screen is immediately after an accept failed — while the form is still
+      // full — because that is when they need to know whether their work was
+      // kept. Holding the key back on voucher screens would hide the answer at
+      // exactly the moment it is asked for. Esc brings them straight back.
+      return pushOnce("offline-outbox");
+    }
+
+    case "dataScreen": {
+      // Alt+Y — DATA (backup / restore). pushOnce so pressing it twice does not
+      // stack two of them, the same treatment Help, Features and the company
+      // picker get.
+      //
+      // It is reachable from ANY screen, deliberately: a backup is a thing an
+      // operator decides to take, not a thing they navigate to, and Tally's own
+      // Alt+Y is global too. The voucher-key hold-back that guards the create
+      // forms does not apply in reverse — leaving a half-keyed voucher to take a
+      // backup is the operator's call, and Esc brings them straight back.
+      return pushOnce("data");
     }
 
     case "switchCompany": {
@@ -1107,6 +1690,23 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "matchBankRows":
+    case "modifyBankMatch":
+    case "unlinkBankMatch":
+    case "setAsideBankRow":
+    case "bankExceptionReport":
+    case "bankBasisOfValues": {
+      // NO NAVIGATION — T4 slice 2b. Matching is a panel ON the reconciliation
+      // screen and not a screen of its own, because it is inherently a
+      // two-column view of statement rows beside book legs: splitting them would
+      // make the operator hold one column in their head while looking at the
+      // other, which is the exact judgement the feature asks them to make.
+      //
+      // The screen owns the panel and fires these through the ScreenActions
+      // bridge, exactly as F4 owns its picker and Alt+O owns its import panel.
+      return {};
+    }
+
     case "importBankStatement": {
       // NO NAVIGATION. Importing happens in a panel ON the reconciliation
       // screen, because slice 2b's matching is inherently a two-column view of
@@ -1127,12 +1727,16 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     }
 
     case "createCostMaster":
+    case "selectBudget":
     case "selectCostCategory": {
       // NO NAVIGATION, for the reason `recordTDSChallan` above gives. The create
       // panel lives ON the cost masters screen (the list beside it is what tells
       // an operator the name is not taken, and on which axis it is not taken), and
       // the axis picker lives ON the Cost Centre Summary (choosing an axis does
-      // not leave the report — it IS the report's subject). Both are screen-owned
+      // not leave the report — it IS the report's subject). The BUDGET picker is
+      // the same shape one report over: choosing which plan the variance is
+      // measured against does not leave the report, it IS the report's subject,
+      // and there is no default plan to fall back to. All three are screen-owned
       // side effects fired through the ScreenActions bridge.
       //
       // ⚠️ A `default: return {}` below would already produce this answer. The
@@ -1216,6 +1820,57 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       // SCREEN_ACTIONS entry looks exactly like a key meant to be inert. Writing
       // the inertness down is what makes the difference reviewable — and this is
       // the registration point that shipped Alt+O completely dead.
+      return {};
+    }
+
+    case "payRun": {
+      // Ctrl+F4 — THE PAY RUN (RESEARCH.md:903).
+      //
+      // pushOnce, so pressing it twice does not stack a second identical frame;
+      // `payRun` is in ALWAYS_MEANINGFUL in AppShell so the shell does not
+      // additionally report it as a key that does not apply here.
+      //
+      // ⛔ IT PUSHES A SCREEN AND NOT A VOUCHER FRAME, and the difference is not
+      // cosmetic: VoucherScreen resolves its layout through configFor(voucherType)
+      // and there is no payroll VoucherConfig, so a voucher frame would take the
+      // operator to an undefined config. A pay run has no particulars to key —
+      // its lines are computed from the masters for a whole WAGE MONTH.
+      return pushOnce("payroll-run");
+    }
+
+    case "setValuationMethod":
+      // NO NAVIGATION, and here that is the whole point: the operator is looking
+      // at the figure that is about to change, and the panel opens OVER the
+      // report so the table redraws underneath it. Navigating anywhere would
+      // take away the only evidence that the switch did anything.
+      //
+      // ⚠️ Written out rather than left to a `default: return {}` for the reason
+      // the payroll block below gives: the shell reports "does not apply on this
+      // screen" for a key that neither ran a screen action nor moved the stack,
+      // so a MISSING entry here is indistinguishable from a key meant to be
+      // inert — which is how Alt+O once shipped completely dead.
+      return {};
+
+    case "createEmployee":
+    case "setEmployeePay":
+    case "payrollStatutoryFiles": {
+      // NO NAVIGATION — the same answer, and the same reasons, as
+      // `createCostMaster` and `createOrder` above:
+      //
+      //  - the create FORM lives on the employee list, because the list beside it
+      //    is what tells an operator the code is already taken;
+      //  - Alt+S sets the pay of the employee HIGHLIGHTED in that list, which is a
+      //    fact only the screen holds;
+      //  - Alt+S on the register opens a panel for the month ON SCREEN, and the
+      //    ESIC return additionally needs a LEAVING REASON per leaver — a question
+      //    only that panel can ask, and one the server refuses to guess (a leaver
+      //    with a blank reason is a row the portal accepts and reads as empty).
+      //
+      // ⚠️ Written out rather than left to a `default: return {}` for the reason
+      // every block above gives: the shell reports "does not apply on this screen"
+      // for a key that neither ran a screen action nor moved the stack, so a
+      // MISSING SCREEN_ACTIONS entry is indistinguishable from a key meant to be
+      // inert — which is how Alt+O once shipped completely dead.
       return {};
     }
 
@@ -1388,6 +2043,31 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
   const stack = ctx.stack.slice();
   const active = { ...top(stack) };
 
+  // THE AGENT SIDE PANEL OPENS A PROPOSAL (W2). Checked FIRST because the panel
+  // is not a screen: it sits beside whatever frame is on top, so this is the one
+  // SELECT that is not interpreted by the active frame's own arm below. The
+  // panel has already put the approval in the LoadedProposal slot; the machine
+  // only pushes the native create frame, exactly as Enter on the inbox does.
+  //
+  // ⛔ REFUSED OVER A FORM BEING KEYED — a voucher, a master create, or the Go To
+  // picker. VoucherScreen's form is React state on ONE component instance, so a
+  // second voucher frame pushed over a half-keyed one would either inherit its
+  // lines or throw them away, and neither is something the operator asked for.
+  // The panel says so on its face (it reads the same snapshot); the machine's
+  // part is to not move.
+  const opened = parseProposalKey(menuItem, OPEN_AGENT_PROPOSAL_PREFIX);
+  if (opened) {
+    if (
+      active.screen === "voucher" ||
+      active.screen === "master-create" ||
+      active.screen === "goto-overlay"
+    ) {
+      return {};
+    }
+    stack.push(proposalFrame(opened));
+    return { stack };
+  }
+
   // CTRL+H CHANGE MODE: picking a mode applies it and closes the overlay.
   //
   // Unlike the Go To pick-list below, this needs no confirming Enter — Tally's
@@ -1482,9 +2162,18 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === COST_CENTRES_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === COST_CENTRE_SUMMARY_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === COST_CATEGORY_SUMMARY_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === BUDGETS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === BUDGET_VARIANCE_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === SALES_ORDERS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === PURCHASE_ORDERS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === BOMS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === EMPLOYEES_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === PAY_RUN_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === PAYROLL_REGISTER_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === FORM_138_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === APPROVAL_INBOX_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === AGENT_SETTINGS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === INSIGHTS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
@@ -1515,6 +2204,45 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       return { stack: [stack[0] as ScreenFrame] };
     }
     return {};
+  }
+
+  // THE PAYROLL REGISTER: a selection highlights the EMPLOYEE Enter will open the
+  // payslip for. Its own branch rather than the report branch below, because this
+  // screen is a ScreenKind — see keystroke/types.ts for why the register is not a
+  // `report` frame despite `payroll-register` being a real report NAME.
+  if (active.screen === "payroll-register") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // THE APPROVAL INBOX: a selection highlights the proposal Enter will open.
+  // Recorded verbatim, including a non-proposal key — the Enter arm is what
+  // refuses to drill one, so a highlight of an un-prefillable row is a no-op on
+  // Enter rather than a stale highlight of the previous row.
+  if (active.screen === "approval-inbox") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // THE INSIGHTS INBOX: the screen publishes the highlighted VOUCHER of the
+  // insight as a Day Book row key; Enter's arm drills it (or ignores a key
+  // that is not one).
+  if (active.screen === "insights") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // THE EMPLOYEE MASTER: a selection highlights the employee that Alt+S sets the
+  // salary structure and the statutory election of. Enter does NOT navigate from
+  // here — there is nothing below an employee to drill into — so this branch only
+  // records the highlight, which is what the screen's own write key acts on.
+  if (active.screen === "employees") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
   }
 
   // The Cost CATEGORY Summary: a selection highlights the AXIS Enter will open.

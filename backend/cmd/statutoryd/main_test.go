@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/khata/cored/internal/platform/testdb"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,12 +26,36 @@ import (
 // Every DB-touching case is connect-or-skip, so `go test ./cmd/...` stays green
 // offline and with CORED_SKIP_DB set.
 
-const (
-	testAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	testAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	testAdminDSN = testdb.AdminDSNValue()
+	testAppDSN   = testdb.AppDSNValue()
 	// Same server, a database that will never hold statutory_step.
-	testNoTableDSN = "postgres://tally_app:tally_app@localhost:5433/postgres?sslmode=disable"
+	testNoTableDSN = withDatabase(testAppDSN, "", "postgres")
+	// The database the app DSN names: the probe role is granted CONNECT on
+	// THIS one, never on a hardcoded "tally" (every lane and the integrator
+	// run on a private database; wave-2 merge, HANDOFF-AGENTIC-WAVE-2 §4).
+	testDBName = strings.TrimPrefix(mustParse(testAppDSN).Path, "/")
 )
+
+func mustParse(dsn string) *url.URL {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		panic("statutoryd test: unparseable DSN: " + err.Error())
+	}
+	return u
+}
+
+// withDatabase is dsn on the same server, with its user replaced (when
+// userinfo is non-empty, "user:password") and its database set to db.
+func withDatabase(dsn, userinfo, db string) string {
+	u := mustParse(dsn)
+	if userinfo != "" {
+		name, pass, _ := strings.Cut(userinfo, ":")
+		u.User = url.UserPassword(name, pass)
+	}
+	u.Path = "/" + db
+	return u.String()
+}
 
 // captureLog redirects the standard logger for the duration of fn.
 func captureLog(fn func()) string {
@@ -89,7 +116,7 @@ func TestNewStepStore_NoDSNKeepsMemStoreWithLoudLog(t *testing.T) {
 // so a DSN pointing at an unmigrated database must fail at BOOT with actionable
 // guidance — never start and fail on the first Append.
 func TestNewStepStore_MissingTableFailsWithMigrateHint(t *testing.T) {
-	adminConn(t) // skip-guard: needs a live server (and proves 0013 IS applied to `tally`)
+	adminConn(t) // skip-guard: needs a live server (and proves 0013 IS applied to the app DSN's database)
 
 	store, closeFn, err := newStepStore(context.Background(), testNoTableDSN)
 	if err == nil {
@@ -136,7 +163,7 @@ func TestNewStepStore_UnprivilegedRoleFailsAtBoot(t *testing.T) {
 	// swallowed.
 	t.Cleanup(func() {
 		bg := context.Background()
-		if _, err := admin.Exec(bg, `REVOKE ALL ON DATABASE tally FROM `+role); err != nil {
+		if _, err := admin.Exec(bg, `REVOKE ALL ON DATABASE `+pgx.Identifier{testDBName}.Sanitize()+` FROM `+role); err != nil {
 			t.Errorf("cleanup: revoke database privileges from %s: %v", role, err)
 		}
 		if _, err := admin.Exec(bg, `DROP OWNED BY `+role); err != nil {
@@ -146,13 +173,13 @@ func TestNewStepStore_UnprivilegedRoleFailsAtBoot(t *testing.T) {
 			t.Errorf("cleanup: drop probe role %s: %v", role, err)
 		}
 	})
-	if _, err := admin.Exec(ctx, `GRANT CONNECT ON DATABASE tally TO `+role); err != nil {
+	if _, err := admin.Exec(ctx, `GRANT CONNECT ON DATABASE `+pgx.Identifier{testDBName}.Sanitize()+` TO `+role); err != nil {
 		t.Skipf("cannot grant connect to the probe role: %v", err)
 	}
 	// Deliberately NO grant on statutory_step.
 
 	store, closeFn, err := newStepStore(ctx,
-		"postgres://"+role+":probe@localhost:5433/tally?sslmode=disable")
+		withDatabase(testAppDSN, role+":probe", testDBName))
 	if err == nil {
 		closeFn()
 		t.Fatalf("a role without SELECT on statutory_step must fail boot, got store %T", store)
@@ -190,7 +217,7 @@ func TestNewStepStore_GoodDSNYieldsDurableStore(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), `DELETE FROM statutory_step WHERE workflow_id = $1`, wf)
 	})
-	if err := pg.Append(wf, statutory.StepResult{Name: "build", Output: []byte(`{"ok":true}`)}); err != nil {
+	if err := pg.Append(context.Background(), wf, statutory.StepResult{Name: "build", Output: []byte(`{"ok":true}`)}); err != nil {
 		t.Fatalf("Append through the booted store: %v", err)
 	}
 	var n int

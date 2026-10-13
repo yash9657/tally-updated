@@ -46,6 +46,8 @@ import pytest
 
 from insightd.api.app import create_app
 
+from route_table import flat_routes
+
 PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -63,11 +65,7 @@ def test_the_forecast_modules_are_not_importable(module: str):
 def test_no_route_serves_a_forecast():
     """The ROUTE TABLE carries nothing forecast-shaped, by any verb."""
     app = create_app()
-    offenders = [
-        f"{sorted(getattr(r, 'methods', None) or [])} {getattr(r, 'path', '')}"
-        for r in app.routes
-        if "forecast" in getattr(r, "path", "")
-    ]
+    offenders = [f"{sorted(methods)} {path}" for path, methods in flat_routes(app) if "forecast" in path]
     assert offenders == [], f"the forecast plane is back on the route table: {offenders}"
 
 

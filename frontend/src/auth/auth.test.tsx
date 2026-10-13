@@ -211,6 +211,18 @@ describe("api/auth", () => {
 // ---------------------------------------------------------------------------
 
 describe("the auth gate", () => {
+  it("notifies browser routing when the real session starts and ends", async () => {
+    const onSessionChange = vi.fn();
+    render(<App auth={gate(loginTransport("pw"))} client={createMockClient({ seed: false })} company={COMPANY} onSessionChange={onSessionChange} />);
+    expect(onSessionChange).toHaveBeenLastCalledWith(false);
+    signIn("browser-dev-owner", "pw");
+    const signOut = await screen.findByRole("button", { name: "Sign Out" });
+    expect(onSessionChange).toHaveBeenLastCalledWith(true);
+    fireEvent.click(signOut);
+    await waitFor(() => expect(onSessionChange).toHaveBeenLastCalledWith(false));
+    expect(screen.getByTestId("login-screen")).toBeTruthy();
+  });
+
   // NON-VACUITY GUARD for every case below: without a gate the shell renders
   // immediately, so a test that forgot to pass `auth` would "pass" while
   // asserting nothing about the login. This case pins BOTH sides of that.

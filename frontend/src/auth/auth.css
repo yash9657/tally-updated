@@ -1,0 +1,21 @@
+.auth-page { display: flex; flex-direction: column; min-height: 100dvh; padding: var(--tw-space-8) var(--tw-page-gutter); }
+.auth-header { display: flex; align-items: center; justify-content: space-between; gap: var(--tw-space-4); width: 100%; max-width: var(--tw-content-width); margin-inline: auto; }
+.auth-header > a:last-child { color: rgb(var(--tw-color-muted)); font-size: var(--tw-text-sm); padding-block: var(--tw-space-3); text-underline-offset: 5px; }
+.auth-header > a:last-child:hover { color: rgb(var(--tw-color-text)); text-decoration: underline; }
+.auth-main { width: 100%; max-width: 26rem; margin: auto; padding-block: var(--tw-space-16); }
+.auth-intro { margin-bottom: var(--tw-space-8); }
+.auth-intro h1 { font-size: 2.5rem; line-height: 1.15; font-weight: 500; letter-spacing: var(--tw-tracking-display); color: rgb(var(--tw-color-accent)); }
+.auth-intro p { color: rgb(var(--tw-color-muted)); margin-top: var(--tw-space-3); }
+.auth-form { display: grid; gap: var(--tw-space-5); padding: var(--tw-space-8); background: rgb(var(--tw-color-panel)); border-radius: var(--tw-radius-md); }
+.auth-submit { margin-top: var(--tw-space-1); justify-content: space-between; }
+.auth-key-hint { display: flex; justify-content: center; align-items: center; gap: var(--tw-space-2); color: rgb(var(--tw-color-muted)); font-size: var(--tw-text-xs); }
+.auth-help { color: rgb(var(--tw-color-muted)); font-size: var(--tw-text-sm); text-align: center; margin-top: var(--tw-space-6); }
+.auth-footer { text-align: center; font-size: var(--tw-text-xs); color: rgb(var(--tw-color-muted)); }
+.route-message { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: var(--tw-space-6); padding: var(--tw-space-8); text-align: center; }
+.route-message h1 { font-size: var(--tw-text-2xl); color: rgb(var(--tw-color-accent)); }
+@media (max-width: 480px) {
+  .auth-page { padding-top: var(--tw-space-5); }
+  .auth-form { padding: var(--tw-space-6); }
+  .auth-header > a:last-child { font-size: var(--tw-text-xs); }
+  .auth-main { padding-block: var(--tw-space-12); }
+}

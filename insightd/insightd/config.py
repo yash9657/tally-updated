@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -77,6 +77,17 @@ class Settings(BaseSettings):
     # Pinned model ids surfaced on Settings for adapters to read.
     classifier_model: str = CLASSIFIER_MODEL
     inferencer_model: str = INFERENCER_MODEL
+
+    # W5 — WHICH real inferencer ``use_real_inferencer`` selects. ⛔ "opus"
+    # STAYS THE DEFAULT until W1b's bake-off measures the open-weight path at or
+    # above it on field-level F1 (adapters/inferencer_openai_compat.py). The
+    # open-weight endpoint is any OpenAI-compatible json_schema server
+    # (Fireworks, DeepInfra, vLLM); its key is read from the env var NAMED here,
+    # at call time, so the key itself never sits on Settings or in /healthz.
+    inferencer_backend: Literal["opus", "openai_compat"] = "opus"
+    openweight_base_url: str = ""
+    openweight_model: str = ""
+    openweight_api_key_env: str = "INSIGHTD_OPENWEIGHT_API_KEY"
     ruleset_version: str = RULESET_VERSION
 
     def validate_boundary(self) -> None:
@@ -104,7 +115,11 @@ def active_adapter_set(settings: Settings) -> dict[str, str]:
         "ocr": "real" if settings.use_real_ocr else "fake",
         "pii": "real" if settings.use_real_pii else "fake",
         "classifier": "real" if settings.use_real_classifier else "fake",
-        "inferencer": "real" if settings.use_real_inferencer else "fake",
+        "inferencer": (
+            ("real:openai_compat" if settings.inferencer_backend == "openai_compat" else "real")
+            if settings.use_real_inferencer
+            else "fake"
+        ),
         "mapper": "pure",  # mapper is always the one pure implementation
     }
 
@@ -155,6 +170,13 @@ class StageFactory:
         return FakeClassifier(boundary=boundary)
 
     def inferencer(self, boundary) -> "Inferencer":
+        if self.settings.use_real_inferencer and self.settings.inferencer_backend == "openai_compat":
+            return _load("inferencer_openai_compat", "OpenAICompatInferencer")(
+                boundary=boundary,
+                base_url=self.settings.openweight_base_url,
+                model=self.settings.openweight_model,
+                api_key_env=self.settings.openweight_api_key_env,
+            )
         if self.settings.use_real_inferencer:
             return _load("inferencer_opus", "OpusInferencer")(
                 boundary=boundary, model=self.settings.inferencer_model

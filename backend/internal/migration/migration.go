@@ -21,6 +21,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -29,12 +30,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/compliance"
+	"github.com/khata/cored/internal/gststate"
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
+	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/reporting"
 )
 
@@ -56,13 +60,50 @@ var classByVchType = map[string]ledger.Class{
 type Importer struct {
 	masters *masters.Service
 	ledger  *ledger.Service
+	// runner opens the ONE transaction the voucher pass runs inside (D98). It is
+	// the same tenant-scoped runner the two services above are built over.
+	runner TxRunner
 }
 
-// NewImporter constructs an Importer over the masters and ledger services. Both
-// must be backed by the same tenant-scoped pool; the importer never opens its
-// own database connection.
-func NewImporter(m *masters.Service, l *ledger.Service) *Importer {
-	return &Importer{masters: m, ledger: l}
+// TxRunner is the transaction seam the voucher pass needs. It is deliberately
+// the SAME one-method interface ledger.Service and masters.Service are built
+// over, which is what makes an atomic import possible without either package
+// changing: an implementation that hands out an already-open transaction turns
+// every nested write into part of one unit of work.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn db.TxFunc) error
+}
+
+// NewImporter constructs an Importer over the masters and ledger services and
+// the runner they are both backed by. All three must be the same tenant-scoped
+// pool; the importer never opens its own database connection.
+func NewImporter(m *masters.Service, l *ledger.Service, runner TxRunner) *Importer {
+	return &Importer{masters: m, ledger: l, runner: runner}
+}
+
+// txPin enrols every nested RunInTx call in ONE already-open transaction (D98).
+//
+// ⛔ THIS IS THE WHOLE ATOMICITY MECHANISM AND IT IS SEVEN LINES, because
+// ledger.Service and masters.Service take a one-method TxRunner rather than a
+// *pgxpool.Pool. Handing them a runner that returns the SAME pgx.Tx every time
+// makes the voucher pass one transaction — the hash chain included, since it is
+// computed inside that transaction rather than against committed state.
+//
+// ⛔ IT DOES NOT COMMIT AND IT DOES NOT ROLL BACK. Both belong to whoever opened
+// the transaction — here db.Pool.RunInTx, which is also why the company GUC and
+// the ErrNoCompany short-circuit are not reimplemented: the outer RunInTx has
+// already done both, once, for the lifetime of this transaction.
+//
+// ⚠️ A nested call that FAILS therefore poisons the whole transaction rather
+// than just itself, which is exactly the semantics wanted here — the first
+// refused voucher must take the whole pass down. If a future caller ever wants
+// to tolerate one failure and continue, that is what pgx's savepoint-backed
+// tx.Begin() is for; do not reach for it to paper over an error that should
+// abort the run.
+type txPin struct{ tx pgx.Tx }
+
+func (p txPin) RunInTx(ctx context.Context, fn db.TxFunc) error {
+	return fn(ctx, p.tx)
 }
 
 // ImportResult summarises an import run.
@@ -75,9 +116,19 @@ type ImportResult struct {
 	// messages that were routed (by Tally GUID) to AlterVoucher / DeleteVoucher.
 	VouchersAltered int
 	VouchersDeleted int
+	// GroupsEnsured names the account groups created from GROUP masters, in
+	// document order. Groups already present (Tally's own built-ins, which every
+	// cored company is seeded with) are resolved, not created, and not listed.
+	GroupsEnsured []string
 	// LedgersEnsured is the set of distinct ledger names referenced (created or
 	// already present), in stable order.
 	LedgersEnsured []string
+	// Warnings records everything the import decided to carry on through rather
+	// than abort over — a ledger whose Tally group is not in the export, an
+	// opening bill-wise breakup that does not add up to its own opening balance.
+	// ⛔ A CLEAN IMPORT IS NOT THE SAME AS AN EMPTY Warnings, and an operator who
+	// never reads them has migrated something subtly different from their books.
+	Warnings []string
 	// Posted holds one PostResult per posted voucher, in document order.
 	Posted []ledger.PostResult
 	// Skipped is the count of vouchers that were NOT posted because a voucher with
@@ -85,6 +136,56 @@ type ImportResult struct {
 	// re-import). SkippedGUIDs lists those GUIDs in document order.
 	Skipped      int
 	SkippedGUIDs []string
+
+	// ---- MONEY THE SOURCE BOOKS EXCLUDE (D101) -----------------------------
+	//
+	// ⛔ THIS IS DELIBERATELY *NOT* THE Skipped BUCKET ABOVE, AND THE REASON IS
+	// THE OPERATOR. Skipped means "a voucher with this GUID was already imported"
+	// — a re-import that changed nothing. These vouchers were never imported and
+	// never will be: Tally keeps a CANCELLED or OPTIONAL voucher out of the books
+	// (RESEARCH.md:2225 — only Cash Flow's "Include Scenarios" pulls optional
+	// entries in), so posting them would put money in these books that the source
+	// company excludes. Folding the two counts together would tell an operator
+	// their voided sales were "already imported", which is worse than silence.
+	//
+	// ⛔ IT MUST BE REPORTED, NOT SILENTLY DROPPED. "3 posted" against a file of 5
+	// is the same class of silence the stock counts exist to prevent.
+	VouchersVoided int
+	// VoidedVouchers describes each excluded voucher in document order, e.g.
+	// "voucher 2 (Sales 7595 dated 20190402): cancelled". One line per voucher:
+	// an operator reconciling a migration against Tally needs to find them.
+	VoidedVouchers []string
+	// LedgersTombstoned names LEDGER masters marked ISDELETED in the export and
+	// therefore NOT created. Five other master kinds already honoured this flag.
+	LedgersTombstoned []string
+
+	// ---- THE GOODS (inventory.go) ------------------------------------------
+	//
+	// ⛔ THESE COUNTS ARE THE ONLY VISIBLE EVIDENCE THAT THE IMPORT BROUGHT IN ANY
+	// STOCK AT ALL, and that is why they are reported rather than left to a query.
+	// Quantity is INVISIBLE IN A TRIAL BALANCE: an import that reads every stock
+	// line and throws it away produces books that balance perfectly and a Stock
+	// Summary with nothing in it — which is exactly what this importer did until
+	// the lane that added them. A migration whose report says "227 stock lines"
+	// can be checked; one that says "121 vouchers posted" cannot.
+	//
+	// Each name list holds the masters CREATED (not merely referenced), sorted
+	// and de-duplicated, so a 121-voucher file does not report one item forty
+	// times.
+	StockItemsEnsured []string
+	// StockGroupsEnsured are the item-hierarchy nodes created (T10).
+	StockGroupsEnsured []string
+	UnitsEnsured       []string
+	GodownsEnsured     []string
+	BatchesEnsured     []string
+	// OpeningPositions is the number of stock_opening rows written from STOCKITEM
+	// masters. ⚠️ ZERO HERE ON A FILE WITH STOCK LINES IS A WARNING SIGN, not a
+	// clean result: it means the export carried no opening stock, so every
+	// position starts at nil and the first issue of older goods has nothing to
+	// consume. See describeNegativeStock.
+	OpeningPositions int
+	// StockLines is the number of stock MOVEMENTS written across every voucher.
+	StockLines int
 }
 
 // ImportReader parses a Tally XML export from r and imports every VOUCHER
@@ -109,10 +210,19 @@ func (im *Importer) ImportFile(ctx context.Context, path, createdBy string) (Imp
 }
 
 // ImportEnvelope imports an already-parsed Tally envelope. Vouchers are posted
-// in document order; the first error aborts the run (each voucher is its own
-// transaction, so vouchers committed before the failure remain — callers
-// migrating production data should import into a fresh company and reconcile
-// before going live).
+// in document order and the first error aborts the run.
+//
+// ⭐ THE VOUCHER PASS IS ATOMIC (D98, 2026-08-27). It runs inside ONE
+// transaction, so a refusal leaves the books exactly as they were and a
+// corrected re-import cannot double-post. This sentence used to read "each
+// voucher is its own transaction, so vouchers committed before the failure
+// remain" — which was true, was never disclosed to the operator, and made the
+// natural recovery duplicate real money on a GUID-less export.
+//
+// ⚠️ THE MASTER PASSES ARE NOT ATOMIC AND THAT IS DELIBERATE — groups, inventory
+// masters and ledger masters commit as they are read and SURVIVE a refused
+// voucher pass. They are facts about the file rather than claims about the
+// trade, and an operator who fixes one voucher and re-imports wants them there.
 func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEnvelope, createdBy string) (ImportResult, error) {
 	if env == nil {
 		return ImportResult{}, fmt.Errorf("migration: nil envelope")
@@ -120,7 +230,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	if createdBy == "" {
 		createdBy = "tally-import"
 	}
-	res := ImportResult{SourceCompany: env.Body.Desc.StaticVariables.CurrentCompany}
+	res := ImportResult{SourceCompany: env.SourceCompany()}
 
 	// ledgerIDs memoises name->id within this run so a ledger referenced by
 	// several vouchers is resolved/created once.
@@ -131,18 +241,61 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// supply when the voucher itself does not carry one.
 	ledgerState := make(map[string]string)
 
+	// PASS ZERO — GROUP masters, before any ledger can name one as its parent.
+	// A real export carries the whole chart of accounts, and a company that has
+	// been trading for years has ADDED to it: the file tested against declared 37
+	// groups, 9 of them the user's own ("DALALI EXPS.", "SUNDRY DEBTORS -
+	// OUTSTATION", "PURCHASES-OMS"), and 217 ledgers hung off those nine. Without
+	// this pass every one of them failed to create — masters.CreateLedger
+	// resolves the group by name and refuses ErrNotFound — and the import died on
+	// the first of them.
+	groupCanon, groupsMade, groupWarns, err := im.importGroups(ctx, env.Messages(), createdBy)
+	if err != nil {
+		return res, err
+	}
+	res.GroupsEnsured = groupsMade
+	res.Warnings = append(res.Warnings, groupWarns...)
+
+	// PASS ZERO-AND-A-HALF — THE INVENTORY MASTERS, before any voucher can name
+	// one: units, then locations, then items with their OPENING POSITIONS.
+	//
+	// ⛔ IT RUNS BEFORE THE LEDGER PASS AS WELL AS BEFORE THE VOUCHERS, and the
+	// reason is the opening stock. An opening position must exist before the first
+	// issue of that item, and the first issue is a voucher; putting this after the
+	// ledgers costs nothing and putting it after the vouchers would mean every
+	// position was already negative by the time its opening arrived — with the
+	// issues already valued at nil cost, which no later row can repair, because
+	// the cost of goods sold is derived from the state AT THE MOVEMENT.
+	//
+	// ⚠️ A file with no inventory masters at all (a Day Book export — the real one
+	// this was built against) does nothing here and imports its goods from the
+	// vouchers themselves. See inventory.go.
+	run := cctx{ctx: ctx, createdBy: createdBy, inv: newInventoryCache()}
+	if err := im.importInventoryMasters(run, env.Messages(), &res); err != nil {
+		return res, err
+	}
+
 	// FIRST PASS — LEDGER masters: opening balances + GST master attributes. These
 	// must land before any voucher posts so (a) reporting folds the opening
 	// balances into TB/BS/P&L and (b) the GSTR-1 party join classifies B2B vs B2C.
 	// A master whose ledger already exists is left unchanged (resolve-first).
-	for i, msg := range env.Body.Data.Messages {
+	for i, msg := range env.Messages() {
 		if msg.Ledger == nil {
 			continue
 		}
-		id, name, state, err := im.importLedgerMaster(ctx, i, msg.Ledger, ledgerIDs, createdBy)
+		// D101: a master Tally has tombstoned is not a master. Five other master
+		// kinds already skip on this flag; the ledger master is the one it never
+		// reached. Named in the report rather than dropped, because a ledger the
+		// operator expected to see and cannot find is a support call.
+		if msg.Ledger.Deleted() {
+			res.LedgersTombstoned = append(res.LedgersTombstoned, msg.Ledger.Name())
+			continue
+		}
+		id, name, state, warns, err := im.importLedgerMaster(ctx, i, msg.Ledger, ledgerIDs, groupCanon, createdBy)
 		if err != nil {
 			return res, err
 		}
+		res.Warnings = append(res.Warnings, warns...)
 		if state != "" {
 			ledgerState[name] = state
 		}
@@ -153,6 +306,75 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 		ledgerIDs[name] = id
 	}
 
+	// ---- THE VOUCHER PASS IS ONE UNIT OF WORK (D98) ------------------------
+	//
+	// ⛔ THE DEFECT THIS CLOSES: the loop below used to run each voucher in its
+	// OWN transaction and `return res, err` on the first failure, so a refused
+	// import left every voucher BEFORE the bad one committed, said nothing about
+	// them, and the operator's natural recovery — fix the file, import again —
+	// posted them a SECOND time on a GUID-less export. Real money duplicated,
+	// with no delete path anywhere in this product.
+	//
+	// ⛔ SCOPE IS DELIBERATE AND IT IS THE VOUCHER PASS ONLY. The three master
+	// passes above keep committing per-master and keep SURVIVING a refusal,
+	// because a master is a fact about the FILE and a voucher is a claim about
+	// the TRADE — the distinction inventory_shapes_test.go already states. What
+	// changes here is that money no longer lands by halves.
+	//
+	// ⚠️ MASTERS ENSURED *INSIDE* THIS PASS (the 72 ledgers a real export's
+	// vouchers name but its masters file omits, plus any stock item met on a
+	// voucher line) DO roll back with it, and that is the honest outcome: they
+	// were created to carry a voucher that no longer exists.
+	//
+	// The outer RunInTx belongs to the pool, which is what sets the company GUC
+	// and short-circuits ErrNoCompany — see txPin's note.
+	committed := res
+	if err := im.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		pin := txPin{tx: tx}
+		enrolled := &Importer{
+			masters: masters.NewService(pin),
+			ledger:  ledger.NewService(pin),
+			runner:  im.runner,
+		}
+		// run carries the ctx the enrolled services will be handed. RunInTx passes
+		// ctx through unchanged, so the inventory cache and createdBy are the same
+		// run's — only the SERVICES differ.
+		return enrolled.postVouchers(cctx{ctx: ctx, createdBy: createdBy, inv: run.inv},
+			env.Messages(), &res, ledgerIDs, ledgerState, seenLedger, createdBy)
+	}); err != nil {
+		// ⛔ THE RESULT MUST NOT CLAIM WHAT THE ROLLBACK TOOK BACK. Everything the
+		// voucher pass accumulated into res is gone from the database, so the
+		// report is restored to what actually COMMITTED — the master passes. A
+		// caller that rendered res.VouchersPosted here would be reporting posts
+		// that no longer exist, which is the same silence this defect is about.
+		res = committed
+		return res, err
+	}
+
+	// One item named on forty invoices is ONE line in the report. Sorted so two
+	// runs of the same file produce the same report and a diff means something.
+	res.StockItemsEnsured = sortedUnique(res.StockItemsEnsured)
+	res.StockGroupsEnsured = sortedUnique(res.StockGroupsEnsured)
+	res.UnitsEnsured = sortedUnique(res.UnitsEnsured)
+	res.GodownsEnsured = sortedUnique(res.GodownsEnsured)
+	res.BatchesEnsured = sortedUnique(res.BatchesEnsured)
+	return res, nil
+}
+
+// postVouchers runs the voucher pass. It is a method rather than a loop inside
+// ImportEnvelope so that it can be invoked on an ENROLLED Importer — one whose
+// masters and ledger services share a single open transaction (D98). The
+// receiver is named ip to make that non-obvious fact visible at every call: the
+// services this uses are NOT necessarily the ones ImportEnvelope was built with.
+//
+// ⛔ EVERY `return err` IN HERE ABORTS THE WHOLE IMPORT AND ROLLS IT BACK. That
+// is the contract; a failure that should be tolerated must be turned into a
+// warning or a skip BEFORE it becomes an error, the way a voided voucher is.
+func (ip *Importer) postVouchers(run cctx, msgs []integration.TallyMessage,
+	res *ImportResult, ledgerIDs map[string]uuid.UUID, ledgerState map[string]string,
+	seenLedger map[string]bool, createdBy string) error {
+
+	ctx := run.ctx
 	// recordLedgers folds the names referenced by a posted/altered voucher into
 	// the run's distinct ensured-ledger set, in stable first-seen order.
 	recordLedgers := func(names []string) {
@@ -169,11 +391,24 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// new immutable version to the voucher previously imported under that GUID,
 	// and Delete tombstones it. Alter/Delete resolve their target by the stable
 	// Tally GUID, mirroring how Tally itself re-syncs an edited/removed voucher.
-	for i, msg := range env.Body.Data.Messages {
+	for i, msg := range msgs {
 		if msg.Voucher == nil {
 			continue // ledger masters handled in the first pass
 		}
 		v := msg.Voucher
+		// D101: MONEY THE SOURCE BOOKS EXCLUDE DOES NOT ENTER THESE BOOKS.
+		// Checked BEFORE the ACTION dispatch on purpose — a cancelled voucher is
+		// not money whether it arrives as a Create, an Alter or a Delete, and an
+		// ALTER that resolved to a cancelled source would otherwise append a live
+		// version to a voucher the source company had voided.
+		if reason := v.VoidReason(); reason != "" {
+			res.VouchersVoided++
+			res.VoidedVouchers = append(res.VoidedVouchers, fmt.Sprintf(
+				"voucher %d (%s %s dated %s): %s",
+				i+1, strings.TrimSpace(v.VchType), strings.TrimSpace(v.VoucherNumber),
+				strings.TrimSpace(v.Date), reason))
+			continue
+		}
 		action := strings.ToUpper(strings.TrimSpace(v.Action))
 		if action == "" {
 			action = "CREATE"
@@ -186,40 +421,40 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			// GUID there is nothing to resolve; with an unknown GUID there is
 			// nothing to delete (recorded as skipped).
 			if guid == "" {
-				return res, fmt.Errorf("migration: voucher %d: ACTION=Delete requires a GUID", i+1)
+				return fmt.Errorf("migration: voucher %d: ACTION=Delete requires a GUID", i+1)
 			}
-			vid, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid)
+			vid, found, err := ip.ledger.VoucherIDBySourceGUID(ctx, guid)
 			if err != nil {
-				return res, fmt.Errorf("migration: voucher %d: delete lookup: %w", i+1, err)
+				return fmt.Errorf("migration: voucher %d: delete lookup: %w", i+1, err)
 			}
 			if !found {
 				res.Skipped++
 				res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
 				continue
 			}
-			if _, err := im.ledger.DeleteVoucher(ctx, vid, createdBy); err != nil {
-				return res, fmt.Errorf("migration: voucher %d: delete: %w", i+1, err)
+			if _, err := ip.ledger.DeleteVoucher(ctx, vid, createdBy); err != nil {
+				return fmt.Errorf("migration: voucher %d: delete: %w", i+1, err)
 			}
 			res.VouchersDeleted++
 
 		case "ALTER":
-			in, names, err := im.buildVoucherInput(ctx, i, v, ledgerIDs, ledgerState, createdBy)
+			in, names, err := ip.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, res)
 			if err != nil {
-				return res, err
+				return err
 			}
 			var (
 				vid   uuid.UUID
 				found bool
 			)
 			if guid != "" {
-				if vid, found, err = im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
-					return res, fmt.Errorf("migration: voucher %d: alter lookup: %w", i+1, err)
+				if vid, found, err = ip.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+					return fmt.Errorf("migration: voucher %d: alter lookup: %w", i+1, err)
 				}
 			}
 			if found {
-				posted, err := im.ledger.AlterVoucher(ctx, vid, in)
+				posted, err := ip.ledger.AlterVoucher(ctx, vid, in)
 				if err != nil {
-					return res, fmt.Errorf("migration: voucher %d: alter: %w", i+1, err)
+					return postError(i, v, "alter", err)
 				}
 				recordLedgers(names)
 				res.Posted = append(res.Posted, posted)
@@ -227,9 +462,9 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			} else {
 				// No prior version under this GUID: an Alter with nothing to amend
 				// is treated as a create (the voucher simply did not arrive first).
-				posted, err := im.ledger.PostVoucher(ctx, in)
+				posted, err := ip.ledger.PostVoucher(ctx, in)
 				if err != nil {
-					return res, fmt.Errorf("migration: voucher %d: post: %w", i+1, err)
+					return postError(i, v, "post", err)
 				}
 				recordLedgers(names)
 				res.Posted = append(res.Posted, posted)
@@ -241,65 +476,198 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			// company is skipped (no re-post), matching Tally's same-GUID
 			// semantics. A GUID-less voucher is never deduped — it always posts.
 			if guid != "" {
-				if _, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
-					return res, fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
+				if _, found, err := ip.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+					return fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
 				} else if found {
 					res.Skipped++
 					res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
 					continue
 				}
 			}
-			in, names, err := im.buildVoucherInput(ctx, i, v, ledgerIDs, ledgerState, createdBy)
+			in, names, err := ip.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, res)
 			if err != nil {
-				return res, err
+				return err
 			}
-			posted, err := im.ledger.PostVoucher(ctx, in)
+			posted, err := ip.ledger.PostVoucher(ctx, in)
 			if err != nil {
-				return res, fmt.Errorf("migration: voucher %d: post: %w", i+1, err)
+				return postError(i, v, "post", err)
 			}
 			recordLedgers(names)
 			res.Posted = append(res.Posted, posted)
 			res.VouchersPosted++
 		}
 	}
-	return res, nil
+	return nil
+}
+
+// postError decorates a post/alter failure. A NEGATIVE-STOCK refusal gets its own
+// sentence, because it is the one failure a REAL export causes routinely and the
+// one an operator can do something about — see describeNegativeStock. Everything
+// else keeps the message it always had.
+func postError(idx int, v *integration.TallyVoucher, verb string, err error) error {
+	var neg *ledger.NegativeStockError
+	if errors.As(err, &neg) {
+		return describeNegativeStock(idx, v, err)
+	}
+	return fmt.Errorf("migration: voucher %d: %s: %w", idx+1, verb, err)
+}
+
+// importGroups ensures every GROUP master in the export exists as an account
+// group, parents before children, and returns a map from the Tally spelling
+// (lower-cased) to the name as STORED — which is what every later lookup must
+// use, because masters resolves a ledger's group by exact name.
+//
+// Tally's own built-in groups are seeded into every cored company already, so
+// they resolve rather than create. That resolution is deliberately
+// case-insensitive: Tally exports "Cash-in-hand" and "Stock-in-hand" where the
+// seed spells them "Cash-in-Hand" and "Stock-in-Hand", and account_group has no
+// normalised unique index to stop a second copy landing beside the first.
+//
+// A group whose parent is missing from the export is REPORTED, not invented: a
+// primary group needs a nature (Balance Sheet vs P&L) that nothing in the file
+// supplies, and guessing it would misfile every ledger beneath it.
+func (im *Importer) importGroups(ctx context.Context, msgs []integration.TallyMessage,
+	createdBy string) (map[string]string, []string, []string, error) {
+
+	canon := make(map[string]string)
+	var made, warns []string
+
+	pending := make([]*integration.TallyGroupMaster, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Group == nil || m.Group.Deleted() || m.Group.Name() == "" {
+			continue
+		}
+		pending = append(pending, m.Group)
+	}
+
+	// resolve returns the stored spelling of a group already known to the
+	// company (or to this run), and whether it was found.
+	resolve := func(name string) (string, bool, error) {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if stored, ok := canon[key]; ok {
+			return stored, true, nil
+		}
+		_, stored, err := im.masters.GroupIDByName(ctx, name)
+		switch {
+		case err == nil:
+			canon[key] = stored
+			return stored, true, nil
+		case errors.Is(err, masters.ErrNotFound):
+			return "", false, nil
+		default:
+			return "", false, err
+		}
+	}
+
+	// Parents before children, without assuming the export is ordered that way:
+	// keep sweeping while any group resolves, then report whatever is left.
+	for len(pending) > 0 {
+		var deferred []*integration.TallyGroupMaster
+		progress := false
+		for _, g := range pending {
+			name := g.Name()
+			if _, found, err := resolve(name); err != nil {
+				return nil, nil, nil, fmt.Errorf("migration: group %q: %w", name, err)
+			} else if found {
+				progress = true
+				continue
+			}
+			parent := strings.TrimSpace(g.Parent)
+			if parent == "" {
+				// A primary group cored does not already have. Its nature is not in
+				// the file, and a wrong nature moves ledgers between the Balance
+				// Sheet and the P&L, so this one is named rather than guessed.
+				warns = append(warns, fmt.Sprintf(
+					"group %q is a primary group this company does not have and the export "+
+						"does not state its nature; ledgers under it will be grouped by inference", name))
+				progress = true
+				continue
+			}
+			storedParent, found, err := resolve(parent)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("migration: group %q: parent %q: %w", name, parent, err)
+			}
+			if !found {
+				deferred = append(deferred, g) // parent may be declared later in the file
+				continue
+			}
+			_, stored, err := im.masters.EnsureGroup(ctx,
+				masters.Group{Name: name, ParentName: storedParent}, createdBy)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("migration: group %q under %q: %w", name, storedParent, err)
+			}
+			canon[strings.ToLower(strings.TrimSpace(name))] = stored
+			made = append(made, stored)
+			progress = true
+		}
+		if !progress {
+			for _, g := range deferred {
+				warns = append(warns, fmt.Sprintf(
+					"group %q names a parent %q that is neither in this company nor in the export; "+
+						"ledgers under it will be grouped by inference", g.Name(), strings.TrimSpace(g.Parent)))
+			}
+			break
+		}
+		pending = deferred
+	}
+	return canon, made, warns, nil
+}
+
+// groupNameFor maps a Tally PARENT onto the account group name as stored in this
+// company, resolving case-insensitively and consulting the groups this run
+// created. It returns ok=false when the group is not in the company at all —
+// which happens when the export carried ledgers but not the GROUP masters they
+// name (an "Accounting Masters only" export, or a Day Book on its own).
+func (im *Importer) groupNameFor(ctx context.Context, parent string,
+	canon map[string]string) (string, bool, error) {
+
+	parent = strings.TrimSpace(parent)
+	if parent == "" {
+		return "", false, nil
+	}
+	if stored, ok := canon[strings.ToLower(parent)]; ok {
+		return stored, true, nil
+	}
+	_, stored, err := im.masters.GroupIDByName(ctx, parent)
+	switch {
+	case err == nil:
+		canon[strings.ToLower(parent)] = stored
+		return stored, true, nil
+	case errors.Is(err, masters.ErrNotFound):
+		return "", false, nil
+	default:
+		return "", false, err
+	}
 }
 
 // importLedgerMaster applies one Tally LEDGER master: it ensures the ledger
 // exists with its opening balance (set as ledger.opening_balance/opening_dc so
-// reporting folds it into the statements with zero reporting change) and its GST
-// master attributes (GSTIN / state_code / registration_type). An already-present
-// ledger is left unchanged. It returns the ledger id, resolved name, and the
-// declared state code (empty if none).
+// reporting folds it into the statements with zero reporting change), its
+// opening bill-wise breakup, and its GST master attributes (GSTIN / state_code /
+// registration_type). An already-present ledger is left unchanged. It returns the
+// ledger id, resolved name, the declared state code (empty if none) and any
+// warnings raised.
 func (im *Importer) importLedgerMaster(ctx context.Context, idx int, m *integration.TallyLedgerMaster,
-	cache map[string]uuid.UUID, createdBy string) (uuid.UUID, string, string, error) {
+	cache map[string]uuid.UUID, groupCanon map[string]string, createdBy string) (
+	uuid.UUID, string, string, []string, error) {
 
+	var warns []string
 	name := m.Name()
 	if name == "" {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: empty NAME", idx+1)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: empty NAME", idx+1)
 	}
+	stateCode := stateCodeFor(m)
 	if id, ok := cache[name]; ok {
-		return id, name, masterStateCode(m), nil
+		return id, name, stateCode, nil, nil
 	}
 
 	debit, hasOpening, err := m.OpeningSide()
 	if err != nil {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
 	}
 	mag, err := m.OpeningMagnitude()
 	if err != nil {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
-	}
-
-	group := strings.TrimSpace(m.Parent)
-	if group == "" {
-		// No Tally parent: infer a home from the opening side (debit-natured =>
-		// asset bucket, credit-natured => liability bucket) by name.
-		side := ledger.Credit
-		if debit {
-			side = ledger.Debit
-		}
-		group = inferGroup(name, ledger.Journal, side)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
 	}
 
 	openDC := "C"
@@ -311,41 +679,215 @@ func (im *Importer) importLedgerMaster(ctx context.Context, idx int, m *integrat
 		openBal = mag
 	}
 
+	group, found, err := im.groupNameFor(ctx, m.Parent, groupCanon)
+	if err != nil {
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: group: %w", idx+1, err)
+	}
+	if !found {
+		// No usable Tally parent: infer a home from the opening side (debit-natured
+		// => asset bucket, credit-natured => liability bucket) by name.
+		side := ledger.Credit
+		if debit {
+			side = ledger.Debit
+		}
+		group = inferGroup(name, ledger.Journal, side)
+		if p := strings.TrimSpace(m.Parent); p != "" {
+			warns = append(warns, fmt.Sprintf(
+				"ledger %q names Tally group %q, which is not in this company and not in the "+
+					"export; it was grouped under %q by inference", name, p, group))
+		}
+	}
+
 	l := masters.Ledger{
 		Name:             name,
 		GroupName:        group,
 		OpeningBalance:   openBal,
 		OpeningDC:        openDC,
 		GSTIN:            m.GSTINValue(),
-		StateCode:        masterStateCode(m),
+		StateCode:        stateCode,
 		RegistrationType: masterRegType(m),
 	}
 	id, err := im.masters.EnsureLedgerWithOpening(ctx, l, createdBy)
 	if err != nil {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: ensure %q: %w", idx+1, name, err)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: ensure %q: %w", idx+1, name, err)
 	}
-	return id, name, l.StateCode, nil
-}
 
-// masterStateCode returns the two-digit GST state code declared on a LEDGER
-// master, accepting the STATE / STATENAME / LEDSTATENAME spellings (a two-digit
-// code is taken verbatim; a state NAME is not resolved here — corpora carry the
-// numeric code in STATE).
-func masterStateCode(m *integration.TallyLedgerMaster) string {
-	for _, s := range []string{m.State, m.StateName, m.LedgerStateName} {
-		s = strings.TrimSpace(s)
-		if len(s) == 2 {
-			return s
+	if hasOpening {
+		w, err := im.applyOpening(ctx, m, id, openBal, openDC, createdBy)
+		if err != nil {
+			return uuid.Nil, "", "", nil, fmt.Errorf(
+				"migration: ledger master %d: opening for %q: %w", idx+1, name, err)
+		}
+		if w != "" {
+			warns = append(warns, w)
 		}
 	}
+	return id, name, l.StateCode, warns, nil
+}
+
+// applyOpeningBills writes the bill-wise breakup of a ledger's OPENING balance.
+//
+// ⛔ WITHOUT IT A MIGRATED DEBTOR HAS THE RIGHT TOTAL AND NO AGEING AT ALL. The
+// opening balance is one number; the Outstandings report buckets by BILL, so
+// every rupee a business was owed on the day it switched would sit outside
+// 0-30/31-60/61-90 with no invoice against it — which is precisely the report a
+// migrating business checks first.
+//
+// The breakup is attached only when it actually reconciles: masters requires it
+// to sum to the opening balance on one side, and a real file does not always
+// oblige. Of the 156 ledgers carrying named opening bills in the export tested
+// against, 139 summed exactly, 17 did not, and 5 mixed debit and credit refs on
+// one ledger (a debtor holding advances — a position cored's opening cannot
+// express). Those are reported and the TOTAL is kept: a right balance with a
+// blank ageing beats a wrong balance.
+func (im *Importer) applyOpening(ctx context.Context, m *integration.TallyLedgerMaster,
+	ledgerID uuid.UUID, openBal decimal.Decimal, openDC, createdBy string) (string, error) {
+
+	// ⛔ THE OPENING MUST BE WRITTEN EVEN WHEN THE LEDGER WAS ALREADY THERE, and
+	// that is the whole reason this reads before it writes. Every company is
+	// seeded with a handful of ledgers — Cash among them — so the export's Cash
+	// master resolves to one that exists, EnsureLedgerWithOpening returns it
+	// UNCHANGED, and the opening cash balance is dropped on the floor. In the real
+	// export tested against that was ONE ledger and 14,14,596.01 rupees, and the
+	// only reason it was caught is that a Trial Balance which no longer balances
+	// is impossible to miss. Had it been a debtor rather than cash, the sheet
+	// would still have balanced and simply been wrong.
+	//
+	// An existing NON-ZERO opening is never overwritten: that is somebody's
+	// already-migrated position, and a second import must not restate it.
+	current, _, err := im.masters.LedgerOpening(ctx, ledgerID)
+	if err != nil {
+		return "", err
+	}
+	if !current.IsZero() && !current.Equal(openBal) {
+		return fmt.Sprintf(
+			"ledger %q already carries an opening balance of %s in this company; the export's %s "+
+				"was NOT applied", m.Name(), current.StringFixed(2), openBal.StringFixed(2)), nil
+	}
+
+	var (
+		bills []masters.OpeningBill
+		sum   decimal.Decimal
+	)
+	for _, b := range m.OpeningBills {
+		ref := strings.TrimSpace(b.Name)
+		if ref == "" {
+			continue
+		}
+		raw := strings.TrimSpace(b.OpeningBalance)
+		if raw == "" {
+			continue
+		}
+		amt, err := decimal.NewFromString(raw)
+		if err != nil {
+			return "", fmt.Errorf("bill %q: bad OPENINGBALANCE %q: %w", ref, raw, err)
+		}
+		if amt.IsZero() {
+			continue
+		}
+		// Same signed convention as the ledger's own opening: negative = debit.
+		dc := "C"
+		if amt.IsNegative() {
+			dc = "D"
+		}
+		if dc != openDC {
+			return fmt.Sprintf(
+					"ledger %q: opening bill %q is a %s against a %s opening balance; cored's opening "+
+						"cannot hold both sides, so the total was kept and the bill-wise breakup dropped "+
+						"(its ageing must be re-entered)", m.Name(), ref, drcrWord(dc), drcrWord(openDC)),
+				im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, nil, createdBy)
+		}
+		bills = append(bills, masters.OpeningBill{
+			RefName: ref,
+			RefType: "NEW",
+			DrCr:    dc,
+			Amount:  amt.Abs(),
+			DueDate: billDueISO(b.CreditPeriod),
+		})
+		sum = sum.Add(amt.Abs())
+	}
+	if len(bills) == 0 {
+		// No usable breakup: still write the balance itself.
+		return "", im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, nil, createdBy)
+	}
+	if !sum.Equal(openBal) {
+		return fmt.Sprintf(
+				"ledger %q: opening bill-wise breakup sums to %s but its opening balance is %s; the "+
+					"total was kept and the breakup dropped (its ageing must be re-entered)",
+				m.Name(), sum.StringFixed(2), openBal.StringFixed(2)),
+			im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, nil, createdBy)
+	}
+	return "", im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, bills, createdBy)
+}
+
+// drcrWord spells a "D"/"C" for a message a human reads.
+func drcrWord(dc string) string {
+	if dc == "D" {
+		return "debit"
+	}
+	return "credit"
+}
+
+// stateCodeFor determines a ledger's two-digit GST state code.
+//
+// ⛔ THE EXPORT DOES NOT CARRY ONE. Tally records the state by NAME
+// ("Maharashtra"), in several places and sometimes in none of them: of the 342
+// GST-registered parties in the file tested against, ZERO carried a two-digit
+// code anywhere, so a reader that insisted on one — as this importer did —
+// migrated every party with a blank state, and a blank state is what decides
+// intra- vs inter-state on every invoice afterwards.
+//
+// The GSTIN is the best source and needs no table: its first two digits ARE the
+// state code, by construction, and they agreed for 340 of those 342. It is
+// validated against the statutory table so a retired code (25, 28) is refused
+// rather than written into a master the invoice printer will later refuse to
+// print. The state NAME is the fallback, and a literal two-digit field — which
+// the hand-authored corpora do use — is honoured ahead of both.
+func stateCodeFor(m *integration.TallyLedgerMaster) string {
+	for _, s := range []string{m.State, m.StateName, m.LedgerStateName} {
+		if s = strings.TrimSpace(s); len(s) == 2 {
+			if _, ok := gststate.Name(s); ok {
+				return s
+			}
+		}
+	}
+	if g := strings.TrimSpace(m.GSTINValue()); len(g) >= 2 {
+		if code := g[:2]; code >= "01" && code <= "99" {
+			if _, ok := gststate.Name(code); ok {
+				return code
+			}
+		}
+	}
+	if code, ok := stateCodeByName(m.GSTStateName()); ok {
+		return code
+	}
 	return ""
+}
+
+// stateCodeByName reverses the statutory state table: a Tally state NAME becomes
+// the code cored stores. Only CURRENT entries answer — a ledger still naming
+// "Daman and Diu" gets no code rather than a retired one.
+func stateCodeByName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	for _, e := range gststate.All() {
+		if strings.EqualFold(e.Name, name) {
+			if _, ok := gststate.Name(e.Code); ok {
+				return e.Code, true
+			}
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // masterRegType maps a Tally GSTREGISTRATIONTYPE onto the cored enum. A blank or
 // unknown value yields UNKNOWN; a GSTIN with an unspecified type is treated as
 // REGULAR so the GSTR-1 join classifies it B2B.
 func masterRegType(m *integration.TallyLedgerMaster) masters.GSTRegistrationType {
-	switch strings.ToUpper(strings.TrimSpace(m.GSTRegistration)) {
+	switch strings.ToUpper(m.RegistrationTypeValue()) {
 	case "REGULAR":
 		return masters.GSTRegular
 	case "COMPOSITION":
@@ -417,8 +959,14 @@ func billDueISO(s string) string {
 // buildVoucherInput assembles the ledger.VoucherInput for one Tally voucher
 // (postings, GST params, bill-wise allocations) WITHOUT posting it — the caller
 // dispatches to PostVoucher/AlterVoucher/DeleteVoucher based on the Tally ACTION.
-func (im *Importer) buildVoucherInput(ctx context.Context, idx int, v *integration.TallyVoucher,
-	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, createdBy string) (ledger.VoucherInput, []string, error) {
+func (im *Importer) buildVoucherInput(run cctx, idx int, v *integration.TallyVoucher,
+	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, res *ImportResult) (ledger.VoucherInput, []string, error) {
+
+	// The accounting half of this function predates the goods entirely and reads
+	// `ctx` and `createdBy` throughout; they now travel together in `run` so the
+	// stock half can reach the master cache. Bound here so the body below is
+	// unchanged.
+	ctx, createdBy := run.ctx, run.createdBy
 
 	class, ok := classByVchType[strings.ToLower(strings.TrimSpace(v.VchType))]
 	if !ok {
@@ -563,6 +1111,15 @@ func (im *Importer) buildVoucherInput(ctx context.Context, idx int, v *integrati
 	// purpose — ledger.post() fills it from the company's home state inside the tx
 	// (WS3). The rate is inferred from total tax over taxable value (a whole
 	// percent), unless an explicit GSTRATE was present on a taxable line.
+	// THE GOODS. Independent of the postings, not derived from them: a 3-item
+	// invoice billed to one Sales ledger is ONE posting and THREE movements, so
+	// the two halves are built from two different parts of the file.
+	stock, err := im.inventoryLinesFor(run, idx, v, class, res)
+	if err != nil {
+		return ledger.VoucherInput{}, nil, err
+	}
+	in.Inventory = stock
+
 	if class == ledger.Sales && !taxTotal.IsZero() && !taxableTotal.IsZero() {
 		rate := inferRate(v.Entries(), taxTotal, taxableTotal)
 		for i := range taxableLines {

@@ -251,10 +251,19 @@ type HSNItem struct {
 }
 
 // TaxTotals is the summed CGST/SGST/IGST across a set of rows.
+//
+// ⚠️ THE JSON TAGS WERE ADDED BY T12 AND THEY CHANGED NOTHING ON THE WIRE. This
+// type had never been marshalled: Reconciliation and Reconciliation3B are
+// internal, and both /gstr1 and /gstr3b send a `reconciliation_ok` BOOLEAN rather
+// than the totals themselves. GSTR-9 is the first response to carry a TaxTotals,
+// and it takes the same `camt`/`samt`/`iamt` spellings Table31Row and Table4Row
+// already use — so one document does not have two conventions for the same three
+// numbers. ⛔ Do not remove them: `{"CGST": ...}` beside `{"camt": ...}` in one
+// payload is how a frontend reads the wrong key and renders a confident zero.
 type TaxTotals struct {
-	CGST decimal.Decimal
-	SGST decimal.Decimal
-	IGST decimal.Decimal
+	CGST decimal.Decimal `json:"camt"`
+	SGST decimal.Decimal `json:"samt"`
+	IGST decimal.Decimal `json:"iamt"`
 }
 
 // Total returns the sum of the three heads.
@@ -475,7 +484,8 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 		return rows.Err()
 	})
 	if err != nil {
-		return GSTR1{}, err
+		// Queries and scans only — see the same marking in Generate3B (D117).
+		return GSTR1{}, dataSource(err)
 	}
 
 	return build(fromT, invoices, hsnRows, opts), nil
@@ -610,7 +620,9 @@ func (s *Service) PostingTaxTotals(ctx context.Context, from, to string, opts Op
 		return nil
 	})
 	if err != nil {
-		return TaxTotals{}, err
+		// Three sums and nothing else in the closure: a failure is the server's
+		// (D117).
+		return TaxTotals{}, dataSource(err)
 	}
 	return out, nil
 }
@@ -937,7 +949,7 @@ func ynFlag(b bool) string {
 
 // ErrNoData is returned by callers that choose to treat an empty period as an
 // error rather than an empty return.
-var ErrNoData = errors.New("gstr: no posted sales in period")
+var ErrNoData = errors.New("no posted sales in period")
 
 // isRegistered reports whether a counter-party is a registered (B2B) recipient.
 // A recipient is registered when it carries a GSTIN and its registration type is

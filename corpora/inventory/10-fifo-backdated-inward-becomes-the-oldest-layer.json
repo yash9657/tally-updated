@@ -1,0 +1,84 @@
+{
+  "id": "10-fifo-backdated-inward-becomes-the-oldest-layer",
+  "description": "A BACK-DATED PURCHASE DOES NOT JUST RE-PRICE A FIFO ISSUE, IT CHANGES WHICH LAYER THE ISSUE CAME OUT OF. PUR-1 is keyed on 20-Apr (its versionCreatedAt is the latest of the three) but DATED 05-Apr, so replay order puts it FIRST and it becomes the OLDEST layer: 10.0000 @ 100.0000 = 1000.0000, then PUR-2 dated 10-Apr 10.0000 @ 200.0000 = 2000.0000. SAL-1 dated 15-Apr issues 5.0000 and, under FIFO, takes them out of PUR-1 at 100.0000 -> consumed 500.0000. Closing 15.0000 units = PUR-1's remaining 5.0000 (500.0000) plus all of PUR-2 (2000.0000) = 2500.0000, rate 2500.0000/15.0000 = 166.6667. WITHOUT the back-dated PUR-1 the very same untouched SAL-1 came out of PUR-2 at 200.0000 and consumed 1000.0000, closing 5.0000 / 1000.0000 @ 200.0000. SO ONE ALREADY-POSTED, UNEDITED ISSUE CHANGED ITS COST BY 500.0000 - twice the 250.0000 the same file moves under weighted average (fixture 03), because FIFO does not blend the shock across the position, it hands the whole issue to the new oldest layer. A materialised value could not express either figure, and a FIFO lot queue that were CACHED rather than replayed could not express this one at all: the queue itself is different once an older voucher exists.",
+  "valuationMethod": "FIFO",
+  "backdatedInward": {
+    "voucherNo": "PUR-1",
+    "expectedWithout": {
+      "openingQty": "0.0000",
+      "openingValue": "0.0000",
+      "inwardQty": "10.0000",
+      "inwardValue": "2000.0000",
+      "outwardQty": "5.0000",
+      "outwardValue": "1000.0000",
+      "closingQty": "5.0000",
+      "closingValue": "1000.0000",
+      "closingRate": "200.0000"
+    }
+  },
+  "movements": [
+    {
+      "voucherDate": "2026-04-10",
+      "voucherNo": "PUR-2",
+      "voucherId": "0195c000-0000-7000-8000-000000001001",
+      "versionCreatedAt": "2026-04-10T09:00:00+05:30",
+      "versionId": "PUR-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "200.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-15",
+      "voucherNo": "SAL-1",
+      "voucherId": "0195c000-0000-7000-8000-000000001002",
+      "versionCreatedAt": "2026-04-15T16:20:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "5.0000",
+      "rate": "400.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-05",
+      "voucherNo": "PUR-1",
+      "voucherId": "0195c000-0000-7000-8000-000000001003",
+      "versionCreatedAt": "2026-04-20T12:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "20.0000",
+        "inwardValue": "3000.0000",
+        "outwardQty": "5.0000",
+        "outwardValue": "500.0000",
+        "closingQty": "15.0000",
+        "closingValue": "2500.0000",
+        "closingRate": "166.6667"
+      }
+    ]
+  }
+}

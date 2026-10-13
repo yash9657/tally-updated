@@ -24,6 +24,7 @@ import (
 	// to be altered or tombstoned. Same reason server.go imports it for the DATE
 	// peek.
 	"github.com/khata/cored/internal/integration"
+	"github.com/khata/cored/internal/mcp"
 	"github.com/khata/cored/internal/platform/db"
 	// sync is imported for its Op CONSTANTS only, so the op filter in
 	// peekSyncSupersededVoucherIDs cannot drift from the switch in
@@ -73,9 +74,67 @@ func stepUpRequired(w http.ResponseWriter) {
 // and returns ok=false. It is the shared front half of both the authn-only path
 // (POST /v1/companies) and the full PDP path ({companyID} subtree).
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*authn.Claims, bool) {
+	// THE IN-PROCESS AGENT CALL (W2, agent_dispatch.go). It carries no token —
+	// there is none cored could mint in production — and it cannot be forged
+	// from outside: the context key is unexported and only the dispatcher sets
+	// it. It becomes the claims of the run's HUMAN, and then goes through
+	// exactly what a token would: the revocation check below, and the whole of
+	// companyAuthMiddleware after it.
+	if call := agentCallFrom(r.Context()); call != nil {
+		claims := call.claims()
+		revoked, rerr := s.sessionRevoked(r.Context(), claims)
+		if rerr != nil {
+			writeError(w, http.StatusUnauthorized, "session state unavailable")
+			return nil, false
+		}
+		if revoked {
+			writeError(w, http.StatusUnauthorized, "session revoked: this account was locked")
+			return nil, false
+		}
+		return claims, true
+	}
 	raw, present := bearerToken(r)
 	if !present {
 		writeError(w, http.StatusUnauthorized, "missing bearer token")
+		return nil, false
+	}
+	// ⛔ THE MCP TRANSPORT HAS ITS OWN CREDENTIAL, AND ONLY IT HAS IT (0106,
+	// the wave-2 review). The transport used to take the person's JWT, which
+	// made "every money commit waits for a human" a boundary against the model
+	// but not against the MCP client: the client held the very token that
+	// decides approvals, so a prompt-injected IDE agent could approve its own
+	// proposal. Now the grant's transport token is accepted on that grant's
+	// transport route and NOWHERE else, and a JWT is refused THERE — so the
+	// thing in the client's config can drive the agent loop and do nothing a
+	// person does. It becomes the grant-maker's claims (issued-at = the
+	// grant's creation) and then passes everything a JWT would: the
+	// revocation check below and the whole of companyAuthMiddleware.
+	companyID, grantID, onTransport := mcpTransportTarget(r)
+	if strings.HasPrefix(raw, mcp.TransportTokenPrefix) {
+		if !onTransport || s.mcp == nil {
+			writeError(w, http.StatusUnauthorized, "an MCP transport token authenticates only its grant's MCP transport")
+			return nil, false
+		}
+		sub, iat, err := s.mcp.TransportIdentity(r.Context(), companyID, grantID, raw)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid MCP transport token")
+			return nil, false
+		}
+		claims := &authn.Claims{Subject: sub, IssuedAt: iat.Unix()}
+		revoked, rerr := s.sessionRevoked(r.Context(), claims)
+		if rerr != nil {
+			writeError(w, http.StatusUnauthorized, "session state unavailable")
+			return nil, false
+		}
+		if revoked {
+			writeError(w, http.StatusUnauthorized, "session revoked: this account was locked")
+			return nil, false
+		}
+		return claims, true
+	}
+	if onTransport {
+		writeError(w, http.StatusUnauthorized, "the MCP transport takes its grant's transport token (returned once when the "+
+			"grant was made), not a person's sign-in token")
 		return nil, false
 	}
 	claims, err := s.verifier.Verify(r.Context(), raw)
@@ -110,6 +169,24 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*authn.Cl
 	return claims, true
 }
 
+// mcpTransportTarget reports whether r addresses an MCP grant's transport,
+// /v1/companies/{companyID}/agent/mcp/{grantID} (any method: the router
+// answers the ones it does not serve), and which. It is read from the path
+// itself because authenticate runs before the {grantID} route is matched;
+// "grants" is not a UUID, so the grant-management routes never match.
+func mcpTransportTarget(r *http.Request) (uuid.UUID, uuid.UUID, bool) {
+	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
+	if len(parts) != 7 || parts[0] != "" || parts[1] != "v1" || parts[2] != "companies" || parts[4] != "agent" || parts[5] != "mcp" {
+		return uuid.Nil, uuid.Nil, false
+	}
+	c, err1 := uuid.Parse(parts[3])
+	g, err2 := uuid.Parse(parts[6])
+	if err1 != nil || err2 != nil {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return c, g, true
+}
+
 // authnOnlyMiddleware guards POST /v1/companies: verify the JWT, set the subject
 // in ctx, and resolve (create-on-first-login) the app_user. It SKIPS membership,
 // the company GUC, and the PDP — the company does not exist yet, so there is no
@@ -121,8 +198,9 @@ func (s *Server) authnOnlyMiddleware(next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
-		// Service principals cannot bootstrap companies.
-		if claims.IsService() {
+		// Service principals cannot bootstrap companies — and neither can an
+		// agent: creating a company is not an action in its registry.
+		if claims.IsService() || agentCallFrom(r.Context()) != nil {
 			writeError(w, http.StatusForbidden, "service principals cannot create companies")
 			return
 		}
@@ -296,8 +374,16 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 		// existingVouchersNamedByRequest returns no names and no transaction is
 		// opened at all. `level` is already in hand here (it was loaded two
 		// statements ago for the rule evaluation), so the gate itself is free.
+		//
+		// ⛔ THE GATE ASKS THE LEVEL, IT DOES NOT READ THE FIELD. There are now
+		// TWO ways a period can be locked — the level's own cutoff and the
+		// company's year-end (migration 0089) — and `level.BackdatedCutoff !=
+		// nil` is blind to the second. A company that has closed a year while
+		// every level's cutoff is still nil is the ORDINARY case, and skipping
+		// the read there let a DELETE (no body, so no date anywhere in the
+		// request) remove a voucher from a closed year with a 200.
 		var storedDate *time.Time
-		if level.BackdatedCutoff != nil {
+		if level.HasCutoff() {
 			storedDate = s.storedCutoffDateForRequest(r, companyID, act)
 		}
 
@@ -322,10 +408,35 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// W2: ACL(user) has just allowed it. An AGENT call must ALSO pass
+		// ACL(agent) ∩ delegation ∩ the structural rules, and the route it
+		// actually reached must be the ActionSpec it declared — so the
+		// intersection is enforced HERE, in the router, for every in-process
+		// request, and not only by the dispatcher that built it.
+		if call := agentCallFrom(r.Context()); call != nil {
+			if reason := agentGate(call, act, res, resName, call.at); reason != "" {
+				writeError(w, http.StatusForbidden, reason)
+				return
+			}
+			// A commit behind an approval: the APPROVER must be able to make
+			// this exact write too (agent.Caller.Approver). Same request, same
+			// PDP, the approver's own level, rules, cutoff and step-up.
+			if call.caller.Approver != uuid.Nil {
+				if reason := s.approverDenies(r, companyID, call.caller.Approver, req, level.HasCutoff(), act); reason != "" {
+					writeError(w, http.StatusForbidden, "the approver may not make this write themselves: "+reason)
+					return
+				}
+			}
+		}
+
 		// (6) Authorized: inject the authz-verified identity + company into ctx.
 		ctx := db.WithSubject(r.Context(), claims.Subject)
 		ctx = db.WithUser(ctx, userID)
 		ctx = db.WithCompany(ctx, companyID)
+		// W2: whether THIS request's token attests a WebAuthn step-up, so an
+		// approval handler can record that the checker stepped up — the fact
+		// the agent's commit then carries (agent_dispatch.go).
+		ctx = withStepUp(ctx, claims.HasWebAuthn())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -1189,7 +1300,7 @@ func peekTallyXMLSupersededGUIDs(body []byte) []string {
 		return nil
 	}
 	var guids []string
-	for _, m := range env.Body.Data.Messages {
+	for _, m := range env.Messages() {
 		if m.Voucher == nil {
 			continue // a LEDGER master message supersedes no voucher.
 		}
@@ -1238,6 +1349,9 @@ func peekTallyXMLSupersededGUIDs(body []byte) []string {
 //	GET   .../payroll-esi-return                             -> Display/report:NAME
 //	GET   .../print/vouchers/{class}/{voucherID}             -> Print/{class}
 //	GET   .../print/reports/{reportName}                     -> Print/report:NAME
+//	GET   .../print-templates/{docKind}                      -> Display/company
+//	PUT   .../print-templates/{docKind}                      -> Alter/company
+//	DELETE .../print-templates/{docKind}                     -> Alter/company
 //
 // An unmatched route returns mapped=false (default-deny).
 func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName string, mapped bool) {
@@ -1274,6 +1388,182 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodPut && (rest == "" || rest == "/"):
 		return authz.Alter, "company", "", true
 
+	// YEAR-END CLOSURE (0089): read it as a Display, set/clear it as an Alter,
+	// both over the SAME `company` token the F11 feature settings use.
+	//
+	// ⛔ ONE TOKEN FOR THE READ AND THE WRITE, for the reason the master
+	// read/write pair below gives: an ACL rule must not be able to govern the
+	// read and miss the write. And `company` specifically because closing a
+	// year IS company configuration — see handler_close_year.go's header for
+	// why neither report:NAME nor a fresh token would be safe.
+	//
+	// The writes are Alter, so they take the Owner level's WebAuthn step-up.
+	// They do NOT take the back-dated cutoff — voucherDateFromRequest returns
+	// nil here — and that is LOAD-BEARING for the DELETE: a year-end lock that
+	// applied to the request lifting the year-end lock could never be lifted.
+	case rest == "/books-closure":
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "company", "", true
+		case http.MethodPost, http.MethodDelete:
+			return authz.Alter, "company", "", true
+		}
+
+	// WHOLE-COMPANY BACKUP (T14): a Display over its OWN `backup` token.
+	//
+	// ⛔ NOT report:NAME, AND THIS IS THE WHOLE SECURITY ARGUMENT FOR THE ROUTE.
+	// Migration 0011 seeds the Data Entry level a coarse `allow display report`,
+	// so any resource spelled report:<something> is GRANTED to every operator in
+	// every tenant the moment it appears. This route answers with every ledger,
+	// every party's PAN and address and every payslip in one file. `backup` is a
+	// token no seeded level mentions and Data Entry's default_access is 'none',
+	// so it is default-DENIED for every seeded non-Owner level — which is why
+	// this line needs NO ACL migration, exactly as tds-challan, cost-centre,
+	// sales-order, purchase-order and bom shipped with zero acl_rule rows.
+	//
+	// ⛔ AND NOT `company` EITHER, even though the token exists and is convenient.
+	// Migration 0022 seeds Data Entry `allow display company` so the client can
+	// read the home state code; folding the backup into that token would hand
+	// every operator the entire book by inheritance, without anybody deciding to.
+	//
+	// A Display, so it does NOT inherit the WebAuthn step-up or the back-dated
+	// write cutoff — both gate on Action.IsWrite(), and a read carries no date.
+	case method == http.MethodGet && rest == "/backup":
+		return authz.Display, "backup", "", true
+
+	// THE AGENT PLANE (W2, D121). Two bare tokens — see authz/vocabulary.go on
+	// why two: starting and reading runs (`agent-run`) is a different authority
+	// from DECIDING their approvals (`agent-approval`), the checker's seat.
+	//
+	// The decision is an ALTER, so a level with RequiresWebAuthn must step up
+	// to approve — and the approver's step-up is what the agent's commit then
+	// carries to a WebAuthn level's write (agent_dispatch.go). The segment
+	// matching is exact: an /agent/... path of any other shape is unmapped and
+	// default-denied.
+	case strings.HasPrefix(rest, "/agent/"):
+		seg := splitPath(rest)
+		switch {
+		// THE MCP SERVER (W6, D126), one bare token `agent-mcp`. Making and
+		// revoking a grant are writes (so a WebAuthn level steps up to grant
+		// — recorded on the grant as its step_up); listing is a read.
+		//
+		// ⛔ THE TRANSPORT (POST/DELETE /agent/mcp/{grantID}) IS A DISPLAY,
+		// and that is not a loophole: the transport itself alters nothing.
+		// Every tools/call it carries becomes an in-process request through
+		// THIS middleware as the grant's user — ACL(user), the cutoff, the
+		// step-up, ACL(agent) ∩ delegation — exactly as the in-app agent's
+		// are. Mapping the transport as a write would demand a WebAuthn
+		// assertion from a desktop program that cannot make one, and prove
+		// nothing the per-call judgement does not.
+		case len(seg) == 3 && seg[1] == "mcp" && seg[2] == "grants" && method == http.MethodGet:
+			return authz.Display, "agent-mcp", "", true
+		case len(seg) == 3 && seg[1] == "mcp" && seg[2] == "grants" && method == http.MethodPost:
+			return authz.Create, "agent-mcp", "", true
+		case len(seg) == 5 && seg[1] == "mcp" && seg[2] == "grants" && seg[4] == "revoke" && method == http.MethodPost:
+			return authz.Alter, "agent-mcp", "", true
+		case len(seg) == 3 && seg[1] == "mcp" && seg[2] != "grants" && (method == http.MethodPost || method == http.MethodDelete):
+			return authz.Display, "agent-mcp", "", true
+		case len(seg) == 2 && seg[1] == "runs" && method == http.MethodGet,
+			len(seg) == 3 && seg[1] == "runs" && method == http.MethodGet,
+			len(seg) == 4 && seg[1] == "runs" && seg[3] == "events" && method == http.MethodGet:
+			return authz.Display, "agent-run", "", true
+		case len(seg) == 2 && seg[1] == "runs" && method == http.MethodPost:
+			return authz.Create, "agent-run", "", true
+		case len(seg) == 4 && seg[1] == "runs" && seg[3] == "cancel" && method == http.MethodPost:
+			return authz.Alter, "agent-run", "", true
+		case len(seg) == 2 && seg[1] == "approvals" && method == http.MethodGet,
+			len(seg) == 3 && seg[1] == "approvals" && method == http.MethodGet:
+			return authz.Display, "agent-approval", "", true
+		case len(seg) == 4 && seg[1] == "approvals" && seg[3] == "decision" && method == http.MethodPost:
+			return authz.Alter, "agent-approval", "", true
+		// W2 breadth. Re-previewing an approver's edit is part of deciding
+		// (the checker's seat, and an Alter so a WebAuthn level steps up).
+		case len(seg) == 4 && seg[1] == "approvals" && seg[3] == "preview" && method == http.MethodPost:
+			return authz.Alter, "agent-approval", "", true
+		// Verifying a run's chain, and the anchors over every chain, are
+		// reads of the agent's record: the `agent-run` reader's.
+		case len(seg) == 4 && seg[1] == "runs" && seg[3] == "verify" && method == http.MethodGet,
+			len(seg) == 3 && seg[1] == "anchors" && seg[2] == "verify" && method == http.MethodGet:
+			return authz.Display, "agent-run", "", true
+		// The autonomy table: a third bare token (authz/vocabulary.go).
+		case len(seg) == 2 && seg[1] == "autonomy" && method == http.MethodGet:
+			return authz.Display, "agent-autonomy", "", true
+		case len(seg) == 2 && seg[1] == "autonomy" && method == http.MethodPut:
+			return authz.Alter, "agent-autonomy", "", true
+		}
+
+	// THE INSIGHT ENGINE (W4, d125): one bare token, `insights`. Reads are
+	// Display; a verdict, a digest composition and a run-now are Create (each
+	// writes a row and none alters one); suppressions — which change what the
+	// owner is shown — are Alter, including lifting one (a DELETE of a
+	// suppression row, not of anything in the books). Unmatched shapes fall
+	// through and default-deny.
+	case rest == "/insights" || strings.HasPrefix(rest, "/insights/"):
+		seg := splitPath(rest)
+		switch {
+		case len(seg) == 1 && method == http.MethodGet,
+			len(seg) == 2 && seg[1] == "digest" && method == http.MethodGet,
+			len(seg) == 2 && seg[1] == "suppressions" && method == http.MethodGet,
+			len(seg) == 2 && method == http.MethodGet,
+			len(seg) == 3 && seg[2] == "evidence" && method == http.MethodGet:
+			return authz.Display, "insights", "", true
+		case len(seg) == 2 && seg[1] == "digest" && method == http.MethodPost,
+			len(seg) == 2 && seg[1] == "run" && method == http.MethodPost,
+			len(seg) == 3 && seg[2] == "feedback" && method == http.MethodPost:
+			return authz.Create, "insights", "", true
+		case len(seg) == 2 && seg[1] == "suppressions" && method == http.MethodPost,
+			len(seg) == 3 && seg[1] == "suppressions" && method == http.MethodDelete:
+			return authz.Alter, "insights", "", true
+		}
+
+	// PER-COMPANY PRINT TEMPLATES (track C): what this company's own documents
+	// SAY — the title, the letterhead lines, the declaration, the terms, the
+	// signature label and the bank block, per document kind.
+	//
+	// TWO-TOUCH RULE: these arms are what make the three routes in server.go
+	// anything other than a 403 for an Owner.
+	// TestEveryCompanyRouteIsMappedAndInVocabulary walks the router and turns the
+	// suite red if one is missing.
+	//
+	// ⛔ THE TOKEN IS `company`, AND NOT report:NAME. A print template is company
+	// CONFIGURATION — the same authority as the F11 feature settings, which the
+	// `PUT ""` arm above already maps to (Alter, "company"). Migration 0011 seeds
+	// the Data Entry level a coarse `allow display report`, so anything spelled
+	// report:<something> is GRANTED to every operator in every tenant the day it
+	// appears — and this write changes what the company's INVOICES say to its
+	// customers. Migration 0022 seeds Data Entry `allow display company`, which is
+	// a Display, so `alter company` stays default-DENIED for every seeded
+	// non-Owner level and this needs NO ACL MIGRATION.
+	//
+	// ⚠️ AND NOT A NEW TOKEN EITHER. A separate `print-template` token would make
+	// "may this level change our invoice layout?" a question no existing rule
+	// answers, which sounds tidier until an administrator who wrote `disallow
+	// alter company` to lock down company configuration discovers it did not
+	// cover the letterhead.
+	//
+	// THE READ IS A Display AND THE WRITES ARE Alter — including DELETE, which
+	// clears an override and returns the company to the built-in layout. That is
+	// the same split /bank-reconciliation/ uses for the same reason: the DELETE
+	// here UNDOES A CUSTOMISATION, it does not destroy a record, and mapping it to
+	// authz.Delete would let a level permitted to SET a declaration be unable to
+	// remove it — a one-way door — while making it share authority with `delete
+	// company`, which means something far more dangerous.
+	//
+	// Being writes, PUT and DELETE inherit the Owner level's WebAuthn step-up
+	// (Action.IsWrite()). They correctly do NOT inherit the back-dated cutoff: a
+	// layout carries no date, and voucherDateFromRequest returns nil for a route
+	// with none.
+	case strings.HasPrefix(rest, "/print-templates/"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "company", "", true
+		case http.MethodPut, http.MethodDelete:
+			return authz.Alter, "company", "", true
+		}
+		// Any other method on this prefix falls through to default-deny rather
+		// than being silently treated as one of the above.
+		return "", "", "", false
+
 	// Masters.
 	case method == http.MethodPost && isMasterPath(rest):
 		return authz.Create, "master", "", true
@@ -1296,11 +1586,42 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodGet && isMasterPath(rest):
 		return authz.Display, "master", "", true
 
+	// UNBLOCK an agent-created ledger (W2 breadth, migration 0095): an Alter
+	// of the BARE token `master-unblock` — not `alter master`, which is the
+	// authority that creates ledgers, and releasing an agent's party for
+	// payment is a different seat (handler_ledger_unblock.go). Bare, so Data
+	// Entry is refused with zero acl_rule rows; an Alter, so it inherits the
+	// step-up. The shape is exact; anything else under POST /ledgers/... is
+	// unmapped and default-denies.
+	case method == http.MethodPost && strings.HasPrefix(rest, "/ledgers/"):
+		segs := splitPath(rest)
+		if len(segs) == 3 && segs[0] == "ledgers" && segs[2] == "unblock" {
+			return authz.Alter, "master-unblock", "", true
+		}
+		return "", "", "", false
+
 	// Set a ledger's opening balance: an ALTER of a master. It IS a write, so it
 	// correctly inherits the back-dated cutoff and step-up rules.
 	case method == http.MethodPut && strings.HasPrefix(rest, "/ledgers/"):
 		segs := splitPath(rest)
 		if len(segs) == 3 && segs[0] == "ledgers" && segs[2] == "opening" {
+			return authz.Alter, "master", "", true
+		}
+		return "", "", "", false
+
+	// Switch a stock item's COSTING METHOD (T9): an ALTER of a master, and the
+	// most consequential one in the product. It writes no figure and restates
+	// every report that has ever priced the item, so it MUST inherit both write
+	// rules: the back-dated cutoff (this is how a closed period's closing stock
+	// would otherwise be moved through the front door) and the step-up.
+	//
+	// ⛔ THE SHAPE IS EXACT AND THE FALL-THROUGH IS THE POINT. Anything else
+	// under PUT /stock-items/... returns false and therefore DEFAULT-DENIES,
+	// rather than inheriting this rule by prefix — a later sub-route must be
+	// mapped deliberately or it does not exist.
+	case method == http.MethodPut && strings.HasPrefix(rest, "/stock-items/"):
+		segs := splitPath(rest)
+		if len(segs) == 3 && segs[0] == "stock-items" && segs[2] == "valuation-method" {
 			return authz.Alter, "master", "", true
 		}
 		return "", "", "", false
@@ -1818,6 +2139,81 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// ===========================================================================
+	// T11 — THE BUDGET MASTER (migration 0085)
+	// ===========================================================================
+	//
+	//	GET    .../budgets                            -> Display / budget
+	//	POST   .../budgets                            -> Create  / budget
+	//	PUT    .../budgets/{budgetID}                 -> Alter   / budget
+	//	DELETE .../budgets/{budgetID}                 -> Delete  / budget
+	//	GET    .../budgets/{budgetID}/lines           -> Display / budget
+	//	POST   .../budgets/{budgetID}/lines           -> Create  / budget
+	//	PUT    .../budgets/{budgetID}/lines/{lineID}  -> Alter   / budget
+	//	DELETE .../budgets/{budgetID}/lines/{lineID}  -> Delete  / budget
+	//
+	// ONE TOKEN FOR ALL EIGHT — the head and its lines, every verb — on the
+	// `cost-centre` reasoning above: a line's budget_id is NOT NULL and a budget
+	// with no lines budgets nothing, so they are one object and two tokens would
+	// always have to be granted together. The `display`/`create`/`alter`/`delete`
+	// ACTIONS already separate the reader from the writer for any administrator who
+	// wants one without the other.
+	//
+	// ⛔ A BARE RESOURCE TOKEN, DELIBERATELY NOT `report:budget`. internal/authz
+	// matches a bare `report` rule against ANY `report:NAME`, so a report name would
+	// be GRANTED to every seeded Data Entry level by migration 0011's coarse
+	// `allow display report` — a rule written years ago for another purpose — and
+	// taking it back would need a counterweight migration. As a bare token, Data
+	// Entry (default_access 'none', every rule it carries naming a specific token)
+	// is refused all eight routes with NO ACL MIGRATION AT ALL. State the
+	// consequence plainly: DATA ENTRY CAN NEITHER SEE NOR SET A BUDGET until an
+	// administrator writes `allow display budget` through the admin API. A budget
+	// states what the owner intends, and setting one is not clerical work.
+	//
+	// ⛔ `budget` IS THEREFORE NOT IN authz.KnownReportNames AND MUST NOT BE ADDED.
+	// server.go loops over that list and auto-mounts GET /print/reports/<name>; a
+	// name with no reportName() case is a route routeAction cannot map, i.e.
+	// default-DENY for every level including the Owner. That bug already shipped
+	// once for reconciliation-queue. THE VARIANCE REPORT (report:budget-variance) IS
+	// a report name and is reached by the reports arm below, not by this one.
+	//
+	// ⛔ DELETE IS MAPPED, WHICH NO OTHER MASTER ARM HERE DOES, and it is a real
+	// difference rather than an inconsistency. Migration 0085 grants UPDATE and
+	// DELETE on budget and budget_line because A BUDGET IS A PLAN AND PLANS ARE
+	// REVISED — the opposite of `posting`, which posting_immutable protects from
+	// both. Ledgers and cost centres are never deleted here (an allocation or a
+	// posting would be orphaned); a budget line points at nothing and nothing points
+	// at it, so removing a line an operator no longer plans against is the ordinary
+	// correction. It maps to authz.Delete and not to Alter so that "may revise a
+	// figure but may not drop a line" stays a writable rule.
+	//
+	// ⚠️ THE BACK-DATED CUTOFF IS INERT ON ALL EIGHT, AND THAT IS STATED RATHER THAN
+	// LEFT IMPLIED. A budget body DOES carry dates (from_date/to_date on the head),
+	// so this is NOT the "no date in the body" case the cost-master arm above
+	// records — voucherDateFromRequest looks for `voucher_date` specifically and
+	// finds none here, so cutoffDeny skips on a nil date. The distinction matters:
+	// a budget's period is a PLANNING WINDOW, not the date an entry was made, and a
+	// plan for a period that has already closed is an ordinary and useful thing to
+	// key (that is how last year's variance gets recorded at all). Gating it on the
+	// back-dated cutoff would refuse a legitimate act while protecting nothing —
+	// a budget posts nothing and moves no balance. A comment asserting a control
+	// that never runs is worse than a missing control, which is the lesson the
+	// /tds-challans arm below records at length.
+	case strings.HasPrefix(rest, "/budgets"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "budget", "", true
+		case http.MethodPost:
+			return authz.Create, "budget", "", true
+		case http.MethodPut:
+			return authz.Alter, "budget", "", true
+		case http.MethodDelete:
+			return authz.Delete, "budget", "", true
+		}
+		// Any other method default-denies rather than being silently treated as one
+		// of the four above.
+		return "", "", "", false
+
 		// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
 	// at all, per tax year. Tally's F11 > Enable TDS > TDS Deductor Details.
 	//
@@ -1879,6 +2275,37 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 			return authz.Display, "tds-profile", "", true
 		case http.MethodPut:
 			return authz.Alter, "tds-profile", "", true
+		}
+		return "", "", "", false
+
+	// WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080).
+	//
+	//   GET .../forex-settings -> Display / forex-settings
+	//   PUT .../forex-settings -> Alter   / forex-settings
+	//
+	// ⛔ A BARE TOKEN, NOT `report:forex-settings`, and migration 0011 is the reason
+	// rather than taste: internal/authz matches 0011's coarse `allow display report`
+	// against ANY report name at specificity 1 (defect D95), so a report token here
+	// would be GRANTED to every seeded Data Entry level by a rule written years ago
+	// for another purpose, and taking it back needs a 0068-style counterweight
+	// migration. As a bare token both halves are default-DENIED for Data Entry with
+	// NO ACL MIGRATION AT ALL. tds-profile above reaches the same answer the same way.
+	//
+	// ONE TOKEN FOR BOTH HALVES: a level that may not CHOOSE where realised gains
+	// land has no use for knowing which ledger is chosen, and two tokens would let a
+	// rule grant the read and then read as though it granted the write.
+	//
+	// ⚠️ THIS ARM IS THE REGISTRATION NOTHING TYPE-CHECKS (memo §5, fact 2). Without
+	// it the routes above compile, pass every Go test — those call the SERVICE, not
+	// the route — and are 403 FOR THE OWNER, because an unmapped {companyID} route
+	// default-denies. Only an HTTP call through the real middleware catches it, which
+	// is why it is probe 1 of drive-t8-forex-entry.mjs's step-5 block.
+	case strings.HasPrefix(rest, "/forex-settings"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "forex-settings", "", true
+		case http.MethodPut:
+			return authz.Alter, "forex-settings", "", true
 		}
 		return "", "", "", false
 
@@ -1963,6 +2390,37 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		// Any other method default-denies rather than being silently treated as
 		// one of the two above.
+		return "", "", "", false
+
+	// The reconciliation queue's two SUB-ROUTES (track D). The bare
+	// GET /reconciliation-queue is NOT matched here — the prefix carries a
+	// trailing slash on purpose — so it keeps falling through to the reports arm
+	// below and its shipped resource (report:reconciliation-queue) is unchanged.
+	//
+	// ⛔ THEY NEEDED A CASE OF THEIR OWN BECAUSE reportName() MATCHES THE BARE
+	// PATH EXACTLY. Without this, GET .../reconciliation-queue/{id}/payload maps
+	// to nothing, i.e. default-DENY for every level including the Owner — the
+	// same defect this file already records shipping once for
+	// GET /print/reports/reconciliation-queue.
+	//
+	// WHY "reconciliation" AND NOT report:reconciliation-queue: migration 0011
+	// grants Data Entry a coarse `allow display report`, so reusing the report
+	// token would hand every operator in every tenant the voucher body a
+	// colleague keyed on another machine, by inheritance. See
+	// authz.KnownResources' "reconciliation" entry for the full argument.
+	//
+	// The POST is an Alter and therefore a write, inheriting the level's step-up.
+	// It names no voucher and carries no date, so existingVouchersNamedByRequest
+	// returns nothing for it and the back-dated cutoff correctly does not apply —
+	// clearing a workflow item moves nothing into or out of a locked period.
+	case strings.HasPrefix(rest, "/reconciliation-queue/"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "reconciliation", "", true
+		case http.MethodPost:
+			return authz.Alter, "reconciliation", "", true
+		}
+		// Any other method default-denies rather than being folded into one above.
 		return "", "", "", false
 
 	// Reports (and the recon queue / gstr1, modelled as reports).
@@ -2059,6 +2517,41 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// THE EMPLOYEE'S TWO EFFECTIVE-DATED CHILDREN — the salary structure and the
+	// statutory election — plus the closed vocabulary a form keys them from.
+	//
+	// ⛔ THE SAME RESOURCE AS THE MASTER, ON PURPOSE. A new token here would be
+	// granted by nothing and denied by nothing — migration 0035 has never heard
+	// of it — so it would guard a SALARY with a rule no administrator has
+	// written. Mapped to `employee`, 0035's seeded
+	// `disallow create|alter|display employee` covers these routes from the
+	// moment they exist, in every tenant, without a migration.
+	//
+	// AND THE WRITES ARE Creates, so they inherit the back-dated cutoff and the
+	// WebAuthn step-up exactly as POST /employees does. That is not incidental: a
+	// salary component is effective-DATED, and back-dating one into a closed
+	// period silently re-prices every pay run that period contains.
+	case isEmployeeChildPath(rest):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "employee", "", true
+		case http.MethodPost:
+			return authz.Create, "employee", "", true
+		}
+		return "", "", "", false
+
+	// The payroll VOCABULARY: the component types with their s.2(88)
+	// classification, the PF bases, the regimes and the age bands. It names no
+	// party, no amount and nothing about this company — it is the statute's own
+	// list — but it is mapped to `employee` rather than to `master` (which every
+	// seeded Data Entry level holds) because the only screens that read it are
+	// the employee screens, and a level refused the master should meet ONE
+	// consistent refusal rather than a form it can fill in and never submit.
+	// GET only; there is no POST route, so a POST answers 404 rather than being
+	// authorised into nothing.
+	case method == http.MethodGet && rest == "/payroll-vocabulary":
+		return authz.Display, "employee", "", true
+
 	// The three ITC/IMS WRITES (Track 2). Each gets its OWN resource token —
 	// see authz.KnownResources for why three and not one. All three are Creates
 	// (each appends a row: a statement, an IMS action, a filing record), so all
@@ -2135,6 +2628,12 @@ func isMasterPath(rest string) bool {
 	switch rest {
 	case "/groups", "/ledgers", "/voucher-types", "/units", "/stock-items",
 		"/godowns", "/batches",
+		// T10 — the STOCK GROUP hierarchy (migration 0079). A master on exactly
+		// the terms /godowns is: it names no amount, it is what an item form's
+		// group picker is built from, and the READ and the WRITE emit the SAME
+		// token so one ACL rule governs both (the reason isMasterPath is shared
+		// between the two arms above).
+		"/stock-groups",
 		// THE STATUTORY TDS/TCS SECTION VOCABULARY (D3). A master list in the
 		// only sense that matters to the PDP: it names no party, no amount and
 		// nothing about this company — it is the Finance Act's rate table — so it
@@ -2145,10 +2644,56 @@ func isMasterPath(rest string) bool {
 		// deny the picker to the one level that keys the vouchers, leaving D3
 		// open behind a different error. GET only; there is no POST route, so a
 		// POST answers 404 rather than being authorised into nothing.
-		"/tds-sections":
+		"/tds-sections",
+		// THE COSTING-METHOD VOCABULARY (T9). A master list on exactly the terms
+		// /tds-sections is: it names no party, no amount and nothing about this
+		// company — it is the list of methods THIS BUILD can value stock with —
+		// and it is what an item form's picker is built from, so the level that
+		// keys stock items must be able to read it. GET only; there is no POST
+		// route, so a POST answers 404 rather than being authorised into nothing.
+		"/inventory-vocabulary",
+		// T8 — FOREIGN CURRENCIES AND THEIR RATES (migration 0080).
+		//
+		// ⛔⛔ MODELLED AS `master`, AND THE ALTERNATIVE WAS SERIOUSLY CONSIDERED
+		// AND REJECTED FOR A CONCRETE REASON. A bare `currency` token of its own
+		// would be denied to every seeded non-Owner level for free (Data Entry's
+		// default_access is 'none'), which is the safe-looking choice — and it
+		// would DENY THE CURRENCY PICKER TO THE ONE LEVEL THAT KEYS THE VOUCHERS.
+		// An operator entering a dollar invoice must be able to SEE that USD
+		// exists, exactly as they must see ledgers, units and godowns. That is
+		// the same trap /tds-sections above records, and it is worth writing
+		// twice because the safe-looking answer is wrong in the same way both
+		// times.
+		//
+		// ⭐ AND `master` ALREADY CARRIES THE RIGHT SPLIT WITH NO MIGRATION:
+		// migration 0011 seeds Data Entry `allow display master` and NOTHING
+		// wider, so reading currencies is granted and creating one is DENIED —
+		// which is exactly the line that matters here. Setting an exchange RATE
+		// is a (Create, "master") write, so a data-entry clerk cannot decide what
+		// a dollar is worth while still being able to key an invoice in one.
+		"/currencies", "/currencies/rates":
 		return true
 	}
 	return false
+}
+
+// isEmployeeChildPath matches the employee master's two effective-dated
+// children:
+//
+//	/employees/{employeeID}/salary-components
+//	/employees/{employeeID}/statutory-elections
+//
+// It matches the SHAPE and not the id, for the reason isMembersPath does: a
+// malformed employee id still resolves to the `employee` resource and is
+// rejected by the handler with a 400, rather than falling through to
+// routeAction's default-deny and reporting an authorization failure for what is
+// actually a bad request.
+func isEmployeeChildPath(rest string) bool {
+	segs := splitPath(rest)
+	if len(segs) != 3 || segs[0] != "employees" {
+		return false
+	}
+	return segs[2] == "salary-components" || segs[2] == "statutory-elections"
 }
 
 // isMembersPath matches the member/invite admin routes:
@@ -2373,6 +2918,45 @@ func reportName(rest string) string {
 		return "sales-order-book"
 	case "/purchase-order-book":
 		return "purchase-order-book"
+	// THE BUDGET VARIANCE REPORT (T11, migrations 0085/0086). Here for the reason
+	// every entry above records: a name in authz.KnownReportNames that this function
+	// does not know is a name some arms serve and others default-deny, and routes()
+	// mounts /print/reports/<name> for EVERY known name — so omitting it would leave
+	// a mounted route unreachable for every level INCLUDING the Owner. That bug
+	// already shipped once for reconciliation-queue.
+	//
+	// ⛔ NOTE IT DOES NOT COLLIDE WITH THE `/budgets` MASTER ARM in routeAction, and
+	// the two are one character from doing so. "/budget-variance" does not carry the
+	// prefix "/budgets" ("/budget-" vs "/budgets"), so the master arm never claims
+	// this path and it falls through to the reports arm as intended. That is why the
+	// report is named `budget-variance` and the master route is `/budgets` PLURAL —
+	// a master route at "/budget" would have made HasPrefix swallow the report and
+	// serve it under the BARE `budget` token, which no `report:` rule could ever
+	// match. TestReportVocabularyMatchesRouter is what holds this.
+	//
+	// ⛔ ONE NAME FOR ALL THREE GRAINS. The dimension (group / ledger / cost centre)
+	// rides in ?dimension= and is INVISIBLE TO THE PDP by design — see the long note
+	// on this name in authz/vocabulary.go. The three are the same plan and the same
+	// actuals at three grains, not three disclosures, and the group figure IS the
+	// ledger figures added up: granting one hands over the other. That is the
+	// opposite call from the two order books above, where the split is an authority a
+	// business actually writes.
+	//
+	// It is a Display, so it inherits neither the back-dated write cutoff nor the
+	// WebAuthn step-up (both gate on Action.IsWrite()).
+	//
+	// ⚠️ IT NEEDS NO ARM OF ITS OWN IN routeAction, and adding one would be a
+	// mistake. The route path is a flat literal equal to this name, so the
+	// `method == GET && reportName(rest) != ""` arm already maps it — the only
+	// arrangement under which the two places cannot disagree. The budget being
+	// reported rides in ?budget_id=, for the flat-literal reason the cost statements
+	// above and /stock-item-vouchers below state at length.
+	//
+	// Printing it answers 501: no printed layout has been specified for a variance
+	// statement, and a blank page that looks like a filed budget is worse than a
+	// refusal — the same call the cost statements and order books record above.
+	case "/budget-variance":
+		return "budget-variance"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":
@@ -2383,6 +2967,21 @@ func reportName(rest string) string {
 		return "day-book"
 	case "/outstandings":
 		return "outstandings"
+	// ⭐ THE UNADJUSTED-FOREX REPORT (T8 step 7). Here for the reason this function's
+	// GSTR-9 comment records: a name in `authz.KnownReportNames` that this function
+	// does not know is a name some arms serve and others default-deny, and `routes()`
+	// mounts `/print/reports/<name>` for EVERY known name — so omitting it would
+	// leave a mounted route unreachable for every level including the Owner.
+	//
+	// ⚠️ THE ARM IS REDUNDANT AND DELIBERATE. The route path is a flat literal equal
+	// to the name, so the `method == GET && reportName(rest) != ""` arm already maps
+	// it; the entries around it are written out for the same reason and the two
+	// cannot disagree. The report date rides in ?as_on=, for the flat-literal reason
+	// the /stock-item-vouchers comment below states at length — and it matters more
+	// here than usual, because the date does TWO jobs (which bills are in, and which
+	// rate prices them) and neither is a resource.
+	case "/unadjusted-forex":
+		return "unadjusted-forex"
 	// ⛔⛔ THE PAYABLES AGEING'S OWN NAME (D94). This arm is the row: the PDP decides on
 	// the resource this function returns, and it returns it from the FLAT LITERAL PATH.
 	// Until this line existed, the payables book could only be asked for as
@@ -2403,6 +3002,26 @@ func reportName(rest string) string {
 		return "gstr1"
 	case "/gstr3b":
 		return "gstr3b"
+	// THE GSTR-9 ANNUAL RETURN (T12, migration 0087). Here for the reason every
+	// entry in this function records: a name in authz.KnownReportNames that this
+	// function does not know is a name some arms serve and others default-deny,
+	// and routes() mounts /print/reports/<name> for EVERY known name — so
+	// omitting it would leave a mounted route unreachable for every level
+	// including the Owner.
+	//
+	// ⚠️ NO routeAction ARM OF ITS OWN, AND ADDING ONE WOULD BE A MISTAKE. The
+	// route path is a flat literal equal to the name, so the
+	// `method == GET && reportName(rest) != ""` arm already maps it — the only
+	// arrangement under which the two places cannot disagree. The financial year
+	// rides in ?from=/?to= and the six tax ledgers in their own query params,
+	// for the flat-literal reason the /stock-item-vouchers comment below states
+	// at length.
+	//
+	// It is a Display, so it inherits neither the back-dated write cutoff nor
+	// the WebAuthn step-up (both gate on Action.IsWrite()). Printing it answers
+	// 501: there is no printed layout for an annual return here.
+	case "/gstr9":
+		return "gstr9"
 	// The Stock Summary (INV-F). A Display over report:stock-summary — read-only,
 	// so it must NOT inherit the back-dated write cutoff or the WebAuthn step-up
 	// (both gate on Action.IsWrite()). An Owner who has not stepped up can read
@@ -2485,6 +3104,38 @@ func reportName(rest string) string {
 		return "payroll-pf-ecr"
 	case "/payroll-esi-return":
 		return "payroll-esi-return"
+	}
+	return ""
+}
+
+// approverDenies evaluates the approving human's own level and rules against
+// the request the agent is committing — base is the run creator's
+// authz.Request, already carrying the body's date. Returns "" to allow.
+//
+// ⛔ FAILS CLOSED. An approver who is no longer a member, or whose level
+// cannot be read, has not approved anything the router can vouch for.
+func (s *Server) approverDenies(r *http.Request, companyID, approver uuid.UUID, base authz.Request, storedKnown bool, act authz.Action) string {
+	ctx := r.Context()
+	levelID, member, err := s.authStore.Membership(ctx, approver, companyID)
+	if err != nil || !member {
+		return "not a member of this company"
+	}
+	level, err := s.authStore.Level(ctx, companyID, levelID)
+	if err != nil {
+		return "security level unavailable"
+	}
+	rules, err := s.authStore.Rules(ctx, companyID, levelID)
+	if err != nil {
+		return "rules unavailable"
+	}
+	req := base
+	req.UserID = approver
+	if !storedKnown && level.HasCutoff() {
+		// The creator's level has no cutoff, so the stored date was never read.
+		req.StoredVoucherDate = s.storedCutoffDateForRequest(r, companyID, act)
+	}
+	if d := authz.Evaluate(level, rules, req); !d.Allow {
+		return d.Reason
 	}
 	return ""
 }

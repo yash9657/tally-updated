@@ -17,7 +17,33 @@ package server
 //	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
 //	tds-register,
 //	cost-centre-summary, cost-category-summary,
-//	sales-order-book, purchase-order-book
+//	sales-order-book, purchase-order-book,
+//	budget-variance
+//	gstr9
+//
+// The BUDGET VARIANCE (T11) is deferred because the screen's honesty does not
+// survive being printed. It legitimately SUPPRESSES the grand total when a plan
+// mixes a CLOSING_BALANCE line with a NETT_TRANSACTIONS one — a position plus a
+// flow is not a quantity — and says so in a note beside the missing figure. Paper
+// has no such affordance: a footer is either there or it is not, and a reader
+// holding a printout cannot expand a caveat. The same applies to the UNBUDGETED
+// section, which is deliberately outside the plan's totals on screen and which, as
+// a second table under one heading, is exactly how it gets added to the first. So
+// the printed form needs a layout that splits by basis or states the suppression
+// in the footer, and that decision has not been taken.
+//
+// The GSTR-9 ANNUAL RECONCILIATION (T12) is deferred, and it is the sharpest case
+// of the rule this whole header states. Every other deferred name is an internal
+// statement whose printed form would merely be a different document. This one has
+// the SHAPE OF A FILED STATUTORY RETURN, and it is explicitly not one: eleven of
+// its fourteen tables are NOT_DERIVED, table 4's total is suppressed because five
+// of its rows cannot be produced, and the whole thing carries ten unconditional
+// disclosures beginning with `not-filing-ready`. On screen those live beside the
+// figures and a reader cannot miss them. On paper, an annual return on our
+// stationery with tidy tables and no room for ten caveats is a document somebody
+// will hand to a tax officer. So the printed form needs a layout in which the
+// disclosures are the FIRST thing on the page, and that decision has not been
+// taken.
 //
 // The two order books (T3) are deferred because a printed order book is a
 // different document from the screen. On paper, on our stationery, it reads as a
@@ -154,6 +180,16 @@ func (s *Server) handlePrintReport(w http.ResponseWriter, r *http.Request) {
 		table, built = s.printPayrollPayslip(ctx, w, r)
 	case "bank-reconciliation":
 		table, built = s.printBankReconciliation(ctx, w, r, companyID)
+	// ⭐ T8 STEP 7 PRINTS, unlike gstr9, the order books, the cost statements and the
+	// budget variance, which all reach the `default` arm below. That is not
+	// inconsistency: those refuse because no layout has been SPECIFIED, and a blank
+	// page that looks like a filed return is worse than a refusal. Here the layout is
+	// the ageing report's with one column different, and a period-end exposure
+	// statement exists to be reviewed on paper. ⛔ `disallow print` is still written by
+	// migration 0090 — a report that cannot be displayed but CAN be printed is a leak
+	// with a paper trail.
+	case "unadjusted-forex":
+		table, built = s.printUnadjustedForex(ctx, w, r, companyID)
 	default:
 		// Authorized, and honestly refused. See the file header for the full list
 		// and for why these are 501 rather than absent routes.
@@ -729,15 +765,33 @@ func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWri
 	var rows []printing.Row
 	for _, p := range out.Parties {
 		rows = append(rows, printing.Row{
-			Cells: []string{p.LedgerName, p.GroupName, "", "", "", "", printMoney(p.Pending)},
+			Cells: []string{p.LedgerName, p.GroupName, "", "", "", "", "", printMoney(p.Pending)},
 			Bold:  true,
 		})
 		for _, b := range p.Bills {
+			// ⭐⭐ T8 STEP 6 — THE FOREIGN COLUMN IS ON THE PAPER TOO, AND THAT IS NOT
+			// OPTIONAL. D20's defect was two surfaces over one fact drifting apart;
+			// a printed Outstandings that showed only the rupee figure would be a
+			// statement an operator posts to a customer, of a dollar debt, with the
+			// currency silently dropped. ⚠️ THE PARTY ROW LEAVES IT BLANK rather than
+			// totalling it, for Q5's reason: mixed currencies do not add up.
+			//
+			// ⛔ AND THE CONFLICT IS MARKED ON THE ROW, not left to the footer.
+			// Two rows under one bill number on paper, with nothing between them,
+			// read as two bills — and paper has no tooltip to explain otherwise.
+			foreign := ""
+			if b.CurrencyCode != "" {
+				foreign = b.CurrencyCode + " " + printMoney(b.ForeignPending)
+			}
+			ref := b.RefName
+			if b.CurrencyConflict {
+				ref += " (!) two currencies"
+			}
 			rows = append(rows, printing.Row{
-				Cells: []string{"", "", b.RefName, printISODate(b.DueDate),
+				Cells: []string{"", "", ref, printISODate(b.DueDate),
 					// Days overdue is a COUNT, not money: strconv, and never
 					// FormatMoney, which would print "45.00 days".
-					strconv.Itoa(b.OverdueDays), b.SlabLabel, printMoney(b.Pending)},
+					strconv.Itoa(b.OverdueDays), b.SlabLabel, foreign, printMoney(b.Pending)},
 				Indent: 1,
 			})
 		}
@@ -746,11 +800,14 @@ func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWri
 	var footer []printing.Row
 	for _, st := range out.SlabTotals {
 		footer = append(footer, printing.Row{
-			Cells: []string{"Ageing " + st.Label, "", "", "", "", "", printMoney(st.Amount)},
+			Cells: []string{"Ageing " + st.Label, "", "", "", "", "", "", printMoney(st.Amount)},
 		})
 	}
+	// ⚠️ THE SLABS AND THE TOTAL ARE BASE-ONLY AND THE FOREIGN CELL IS LEFT EMPTY,
+	// which is Q5's explicit design decision rather than an omission: a total that
+	// added USD to INR would be a figure in no currency that nonetheless foots.
 	footer = append(footer, printing.Row{
-		Cells:     []string{"Total outstanding", "", "", "", "", "", printMoney(out.Total)},
+		Cells:     []string{"Total outstanding", "", "", "", "", "", "", printMoney(out.Total)},
 		Bold:      true,
 		RuleAbove: true,
 	})
@@ -776,6 +833,10 @@ func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWri
 			{Header: "Due Date", Align: printing.AlignLeft, Width: 2},
 			{Header: "Days Overdue", Align: printing.AlignRight, Width: 1.6},
 			{Header: "Ageing", Align: printing.AlignLeft, Width: 2},
+			// ⭐ T8 STEP 6. Blank on a base bill, and it is a SEPARATE column from
+			// Pending — never the same one. Two different things must never share a
+			// column, and on a printed sheet the reader cannot ask which this is.
+			{Header: "Foreign", Align: printing.AlignRight, Width: 2},
 			{Header: "Pending", Align: printing.AlignRight, Width: 2.4},
 		},
 		Rows:   rows,
@@ -800,17 +861,48 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 
 	var rows []printing.Row
 	bases := map[string]bool{}
+	// ⛔ THE SET OF BASES IS COMPUTED BEFORE THE ROWS, AND THAT ORDER IS THE
+	// FEATURE (T9). The footer has always named the basis this report was derived
+	// on, which was enough while WEIGHTED_AVG was the only one. Costing method is
+	// a property of the ITEM, so one company's Stock Summary can now mix three of
+	// them — and a footer reading "Valuation basis: FIFO, WEIGHTED_AVG" over a
+	// page of item totals tells a reader that two bases are present and NOT which
+	// item is on which, while every figure is confidently printed.
+	//
+	// So when (and only when) more than one basis appears, each item line names
+	// its own. A single-basis report — every existing company, and every existing
+	// print golden — is unchanged to the byte: the footer already says it once,
+	// and repeating it on every line would be noise.
 	for _, it := range sum.Items {
+		bases[it.ValuationMethod] = true
+	}
+	mixed := len(bases) > 1
+	for _, it := range sum.Items {
+		itemLabel := it.ItemName
+		if mixed {
+			itemLabel += " · " + it.ValuationMethod
+		}
+		// T10 — a COMPOUND unit's closing quantity is restated in its base unit,
+		// IN THE CELL rather than in a new column. The paper is read, not summed
+		// (the CSV export is the one that has to stay numeric, and it gets its own
+		// column), and a twelfth column on a landscape page costs every other
+		// column width for a figure that appears on the few items that have one.
+		closingQty := printing.FormatQty(it.ClosingQty)
+		if it.BaseUnitSymbol != "" && it.ConversionFactor.IsPositive() {
+			closingQty += " (= " + printing.FormatQty(it.ClosingBaseQty) + " " + it.BaseUnitSymbol + ")"
+		}
 		rows = append(rows, printing.Row{
-			Cells: []string{it.ItemName, it.UnitSymbol,
+			Cells: []string{itemLabel, it.UnitSymbol,
 				printing.FormatQty(it.OpeningQty), printMoneyOrBlank(it.OpeningValue),
 				printing.FormatQty(it.InwardQty), printMoneyOrBlank(it.InwardValue),
 				printing.FormatQty(it.OutwardQty), printMoneyOrBlank(it.OutwardValue),
-				printing.FormatQty(it.ClosingQty), printMoney(it.ClosingValue)},
+				closingQty, printMoney(it.ClosingValue)},
 			Bold: true,
 		})
 		for _, p := range it.Positions {
-			bases[p.ValuationMethod] = true
+			// The item's own basis was already folded in above; a position
+			// cannot carry a different one (the method is on the item), and
+			// folding it here as well would let the two disagree silently.
 			rows = append(rows, printing.Row{
 				Cells: []string{printStockPositionLabel(p), p.UnitSymbol,
 					printing.FormatQty(p.OpeningQty), printMoneyOrBlank(p.OpeningValue),
@@ -859,6 +951,33 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 	if b := printSortedKeys(bases); b != "" {
 		footer = append(footer, printNoteRows(cols, true, "Valuation basis: "+b+
 			". Value is never stored; every figure above is a replay of the movement ledger.")...)
+	}
+
+	// T10 — THE STOCK GROUP SUBTOTALS, as notes rather than as rows in the table.
+	//
+	// ⛔ THEY ARE NOT TABLE ROWS BECAUSE THEY DO NOT BELONG TO ITS ARITHMETIC:
+	// every item counts in every ancestor of its group, so a group line placed in
+	// the body would sit in a column that a reader adds down — and adding it would
+	// double-count every nested branch. Stated as notes, with the reason, they are
+	// a summary of the page rather than part of its total.
+	//
+	// ⚠️ A company with no groups prints nothing here (grouped is empty), rather
+	// than a note saying every item is ungrouped.
+	var grouped []reporting.StockGroupRollup
+	for _, g := range sum.Groups {
+		if g.GroupName != "" {
+			grouped = append(grouped, g)
+		}
+	}
+	if len(grouped) > 0 {
+		note := "Stock group subtotals (the whole branch, so they OVERLAP and must not be added): "
+		for i, g := range grouped {
+			if i > 0 {
+				note += "; "
+			}
+			note += g.GroupName + " " + printMoney(g.ClosingValue)
+		}
+		footer = append(footer, printNoteRows(cols, false, note)...)
 	}
 
 	return printing.ReportTable{
@@ -1354,4 +1473,116 @@ func (s *Server) printPayrollPayslip(ctx context.Context, w http.ResponseWriter,
 		Rows:   rows,
 		Footer: footer,
 	}, true
+}
+
+// ---------------------------------------------------------------------------
+// T8 step 7. The unadjusted-forex statement.
+// ---------------------------------------------------------------------------
+
+// printUnadjustedForex is the printed unrealised gain/loss statement.
+//
+// ⛔ THE SUBTITLE SAYS IT POSTS NOTHING, ON EVERY SHEET, and that is not decoration.
+// Q4 requires the product to say so "on the screen and in F11"; paper is the surface
+// where the sentence matters most, because a printout outlives the screen it came
+// from and a table of gains and losses on company letterhead reads as posted unless
+// it says otherwise. The same sheet also has to say what date PRICED it — a
+// revaluation without its rate date is a number with no reference.
+func (s *Server) printUnadjustedForex(ctx context.Context, w http.ResponseWriter, r *http.Request, companyID uuid.UUID) (printing.ReportTable, bool) {
+	asOn := r.URL.Query().Get("as_on")
+	out, err := s.report.UnadjustedForex(ctx, companyID, asOn)
+	if err != nil {
+		// The JSON handler answers 422 for the same input (an unparseable as_on
+		// reaches reporting.resolveAsOn), and the printed copy matches it rather than
+		// inventing a different status for one request.
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return printing.ReportTable{}, false
+	}
+
+	var rows []printing.Row
+	for _, b := range out.Bills {
+		// ⛔ AN UNPRICED ROW PRINTS ITS RATE CELL AS A SENTENCE, NOT AS A BLANK OR A
+		// ZERO. A blank reads as "the rate is 1"; a zero reads as a rate that was
+		// entered and is zero — and either would make the empty difference beside it
+		// look like a position that has not moved, which is the opposite of the truth
+		// (it is a position nobody can price).
+		rateAsOn := "no rate on/before this date"
+		difference := ""
+		if b.HasRateAsOn {
+			rateAsOn = printing.FormatExchangeRate(b.RateAsOn)
+			difference = printMoney(b.Difference)
+		}
+		rows = append(rows, printing.Row{
+			Cells: []string{
+				b.LedgerName, b.RefName, b.CurrencyCode,
+				printMoney(b.ForeignPending),
+				printing.FormatExchangeRate(b.BillRate),
+				rateAsOn,
+				printMoney(b.BookValue),
+				difference,
+			},
+		})
+	}
+
+	// ⭐ THE TOTAL IS THE SUM OF WHAT WAS PRICED, and the line under it says how many
+	// rows were not — the same disclosure `on_account_total` is on the ageing sheet,
+	// and for the same reason: a column of figures beside a total is exactly the shape
+	// a reader checks by adding up.
+	footer := []printing.Row{{
+		Cells: []string{"Net unrealised difference", "", "", "", "", "", "",
+			printMoney(out.TotalDifference)},
+		Bold:      true,
+		RuleAbove: true,
+	}}
+	if out.UnratedCount > 0 {
+		footer = append(footer, printing.Row{
+			Cells: []string{
+				strconv.Itoa(out.UnratedCount) +
+					" bill(s) above could NOT be priced (no exchange rate on or before " +
+					out.AsOn + ") and are NOT in this total",
+				"", "", "", "", "", "", "",
+			},
+		})
+	}
+
+	return printing.ReportTable{
+		Title:     "Unadjusted Forex Gain/Loss",
+		Subtitle:  unadjustedForexSubtitle(out),
+		Landscape: true,
+		Columns: []printing.Column{
+			{Header: "Party", Align: printing.AlignLeft, Width: 3},
+			{Header: "Bill Ref", Align: printing.AlignLeft, Width: 2.4},
+			{Header: "Ccy", Align: printing.AlignLeft, Width: 0.8},
+			{Header: "Foreign Pending", Align: printing.AlignRight, Width: 2},
+			// ⛔ TWO RATE COLUMNS AND THEY ARE NOT MONEY. `FormatRate` renders ten
+			// decimals; putting either through FormatMoney would print 0.0033 for
+			// 0.0033333333 — a figure that is plausible, in the right column, and
+			// wrong for ever (§6.3).
+			{Header: "Bill Rate", Align: printing.AlignRight, Width: 2},
+			{Header: "Rate As On", Align: printing.AlignRight, Width: 2.6},
+			{Header: "Book Value", Align: printing.AlignRight, Width: 2.2},
+			{Header: "Difference", Align: printing.AlignRight, Width: 2.2},
+		},
+		Rows:   rows,
+		Footer: footer,
+	}, true
+}
+
+// unadjustedForexSubtitle is the ONE writing of this statement's scope sentence, and
+// it carries three facts that cannot be left to the reader.
+//
+// ⛔ IT SAYS "REPORTED, NOT POSTED" IN THOSE WORDS (Q4). ⛔ IT DISTINGUISHES THE TWO
+// JOBS THE DATE DOES — which bills are included, and which rate priced them — because
+// on this report they really are two questions and D86's whole lesson is that one
+// field cannot say both. ⚠️ AND IT SAYS THE SHEET COVERS BOTH SIDES, because a reader
+// who assumed receivables only would read a netted total as a receivable figure.
+func unadjustedForexSubtitle(out reporting.UnadjustedForex) string {
+	scope := "Every open foreign bill on these books, including any dated AFTER " +
+		out.AsOn
+	if out.Bounded {
+		scope = "Open foreign bills as at " + out.AsOn
+	}
+	return scope + ", receivable AND payable, priced at the exchange rate as on " +
+		out.AsOn + ". THIS DIFFERENCE IS REPORTED AND NOT POSTED: no voucher is " +
+		"created and no ledger balance changes. It is what a settlement of the whole " +
+		"remaining balance at that rate would realise."
 }

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI-native, keystroke-compatible Tally competitor \u2014 frontend keystroke/navigation engine (Phase 0).",
+  "description": "Tallyweb — keyboard-first accounting, inventory, and AI-assisted workflows for the web.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

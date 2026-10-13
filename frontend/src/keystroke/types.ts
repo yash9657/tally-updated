@@ -118,6 +118,38 @@
  *                          remainder that is the report's whole purpose. ⛔ It
  *                          has NO grand total and may never grow one.
  *
+ *  - "budgets" — THE BUDGET MASTER (T11, migration 0085): the plans this company
+ *                          has and the figures on them. A ScreenKind and not a
+ *                          "report:NAME" for the same reason cost-centres is:
+ *                          the server serves these routes under the BARE token
+ *                          `budget`, which a coarse `allow display report` can
+ *                          never match — and because a master list is not a
+ *                          report. It carries a create form and therefore needs
+ *                          no period, so it is exempt from the FrameOverlays
+ *                          classification.
+ *  - "gstr9" — THE GSTR-9 ANNUAL RECONCILIATION (T12, migration 0087): the
+ *                          year's twelve GSTR-1s and twelve GSTR-3Bs set against
+ *                          the postings, month by month, with the disagreements
+ *                          as the content. ⛔ It is a report NAME on the server
+ *                          (`report:gstr9`, refused to Data Entry by 0087) and is
+ *                          deliberately NOT in REPORT_NAMES — that list pushes a
+ *                          generic report frame, and this screen takes a
+ *                          FINANCIAL YEAR and six tax ledgers that such a frame
+ *                          cannot carry. SCREEN_GOTO_ENTRIES routes it instead,
+ *                          exactly as it routes budget-variance.
+ *  - "budget-variance" — BUDGET VS ACTUAL (T11, migrations 0085/0086): a plan
+ *                          beside the books, at one grain. ⛔ A ScreenKind and
+ *                          NOT a "report:NAME" key even though the server DOES
+ *                          serve it as `report:budget-variance` — the screen
+ *                          takes a PLAN and a GRAIN (and, at the cost-centre
+ *                          grain, an AXIS) and renders a shape no generic report
+ *                          screen draws, so registering it by ScreenKind is what
+ *                          keeps the Gateway entry off UnwiredReportScreen. ⛔ IT
+ *                          IS EXEMPT FROM THE F2 PERIOD: the period is the
+ *                          PLAN's own and cannot be narrowed, because comparing
+ *                          a full-period budget against a shorter window needs a
+ *                          spread rule nobody has chosen.
+ *
  *  - "sales-orders" / "purchase-orders" — THE ORDER REGISTERS (T3, migration
  *                          0042): the commitments made to customers and to
  *                          suppliers, the form that records one, and the
@@ -145,6 +177,74 @@
  *                          is quantities, and what those quantities COST is the
  *                          valuation plane.
  *
+ *  - "employees"         — THE EMPLOYEE MASTER (Track 3): the people on the
+ *                          payroll, the form that creates one, and — on the same
+ *                          screen — the two EFFECTIVE-DATED CHILDREN without
+ *                          which none of them can be paid (the salary structure
+ *                          and the statutory election). ⛔ ALL THREE ON ONE
+ *                          SCREEN AND NOT THREE SCREENS, because a master
+ *                          without them is not a half-finished record but an
+ *                          UNPAYABLE one: cored refuses the whole pay run with
+ *                          "no salary structure is in force" / "no statutory
+ *                          election is in force", and that refusal arrives on
+ *                          the RUN — long after the operator left this screen
+ *                          believing they had created an employee. Splitting
+ *                          them would put the completeness of the record on a
+ *                          screen nobody is required to visit.
+ *                          A ScreenKind and not a "report:NAME" for the reason
+ *                          tds-challans is: the server serves the master under
+ *                          the BARE token `employee` — deliberately NOT folded
+ *                          into `master`, which migration 0022 grants to every
+ *                          seeded Data Entry level, because an employee row
+ *                          carries PAN, UAN, ESIC IP number and bank IFSC.
+ *                          Migration 0035 disallows create/alter/display of it
+ *                          for Data Entry, so a 403 here is a NORMAL answer.
+ *  - "payroll-run"       — THE PAY RUN (Ctrl+F4). One WAGE MONTH for every
+ *                          eligible employee at once — not a voucher form with
+ *                          particulars, which is why it is a ScreenKind and not
+ *                          a `voucher` frame even though it posts through
+ *                          /vouchers/payroll. VoucherScreen resolves its layout
+ *                          through configFor(voucherType) and there is no
+ *                          payroll VoucherConfig; a payroll voucher's "lines"
+ *                          are computed from the masters, not keyed.
+ *                          ⛔ ITS DATE DIMENSION IS A WAGE MONTH AND THE
+ *                          BACK-DATED CUTOFF APPLIES THROUGH IT: cored derives
+ *                          the voucher date with payrolldb.LastDayOf, so a run
+ *                          for a closed month is a 403 that means "that month is
+ *                          locked" and NOT "you may not run payroll". The screen
+ *                          must render those two differently — see
+ *                          auth_payroll_cutoff_test.go, which is the contract.
+ *  - "payroll-register"  — THE WAGE MONTH'S REGISTER: every employee's gross,
+ *                          deductions and net, the totals, and the RULESET
+ *                          VERSIONS that say which law produced the figures.
+ *                          Its dimension is a MONTH typed on its face, never an
+ *                          F2 period — so, like tds-challans, it needs no
+ *                          FrameOverlays classification. It is the door to the
+ *                          three statutory FILES and to one employee's payslip.
+ *  - "payroll-payslip"   — ONE employee's payslip for one wage month: the
+ *                          components, and the DEFERRALS — the things the engine
+ *                          did not compute, with the reason, because a blank
+ *                          where a number should be is a question the employee
+ *                          will ask and the honest answer is "the rate has not
+ *                          been notified", not "zero".
+ *  - "payroll-form-138"  — THE QUARTERLY SALARY-TDS STATEMENT (ex-24Q Annexure
+ *                          I). A FORM and not a download button: NOT ONE of the
+ *                          deductor or challan particulars is in the database —
+ *                          the company master carries no TAN and no challan — so
+ *                          all of them are asked for and an absent one is a 400.
+ *                          Nothing is defaulted into a FILED RECORD.
+ *                          ⚠️ Q4 is refused by the server: the Annexure II
+ *                          record structure is not published, and guessing it
+ *                          would mis-file every employee's whole-year salary.
+ *
+ * ⚠️ THE FIVE PAYROLL REPORTS ARE REPORT NAMES ON THE SERVER AND ARE STILL NOT
+ * "report:NAME" KEYS HERE, for the reason the two cost summaries are not: none
+ * of them is reachable as a reportName frame. `payroll-register` and
+ * `payroll-payslip` take a wage MONTH (and the payslip an EMPLOYEE) where a
+ * report frame carries a period; the three file names are not screens at all but
+ * downloads, two of which hang off the register and the third of which is the
+ * form above.
+ *
  * ⚠️ Both cost SUMMARIES are ScreenKinds AND report names on the server
  * (`report:cost-centre-summary`, `report:cost-category-summary`, refused to the
  * seeded Data Entry level by migration 0072). They are ScreenKinds here because
@@ -168,16 +268,138 @@ export type ScreenKind =
   | "edit-log"
   | "help"
   | "features"
+  /**
+   * PRINT TEMPLATES (track C) — what this company's own documents SAY: the
+   * title, the letterhead lines, the declaration, the terms, the signature
+   * label and the bank block, per document kind.
+   *
+   * ⛔ A ScreenKind AND NOT A "report:NAME". The server serves these three
+   * routes under the `company` resource token — the same authority as the F11
+   * feature settings — so a coarse `allow display report` can never reach the
+   * write. Modelling it as a report name would have handed every Data Entry
+   * operator in every tenant the power to rewrite what the company's invoices
+   * say, by inheritance from migration 0011, without anybody deciding to.
+   *
+   * It carries a FORM, so it needs no FrameOverlays period classification: the
+   * F2 overlay opens only for report screens, and a layout has no period.
+   *
+   * ⚠️ IT HAS NO GLOBAL KEY, AND THAT IS A DECISION. Tally reaches print
+   * configuration through F12 Configure and through the print preview, not
+   * through a documented Alt binding, so there is no key to be faithful to —
+   * and inventing one risks shadowing a binding a screen already owns. Its
+   * doors are the Gateway entry and the F11 Company Features row that names it.
+   */
+  | "print-templates"
   | "tds-challans"
   | "cost-centres"
   | "cost-centre-summary"
   | "cost-category-summary"
+  | "budgets"
+  | "budget-variance"
+  | "gstr9"
   | "sales-orders"
   | "purchase-orders"
   | "boms"
   | "e-way-bill"
   | "e-invoice"
-  | "bank-reconciliation";
+  | "bank-reconciliation"
+  | "employees"
+  | "payroll-run"
+  | "payroll-register"
+  | "payroll-payslip"
+  | "payroll-form-138"
+  /**
+   * ALT+Y — DATA (backup / restore). Tally's own surface is `Alt+Y (Data) >
+   * Backup / Restore` (RESEARCH.md:993), and Alt+Y was COMPLETELY UNBOUND in
+   * this build, so the real key was free to take.
+   *
+   * ⚠️ IT IS DELIBERATELY NOT "backup". The screen is the DATA menu: backup is
+   * one thing on it, restore is another, and Tally's third — Split Company Data
+   * — is absent on purpose (see the FeaturesScreen rows). Naming the screen
+   * after one of its three would make the other two look like intruders.
+   */
+  | "data"
+  /**
+   * ALT+O — MIGRATE FROM TALLY: import a TallyPrime XML export (T32).
+   *
+   * Tally's own path is `Gateway of Tally > Import` and Alt+O is its documented
+   * global for it ("O: Import", RESEARCH.md:361, :415, :1221). The route has
+   * existed since the migration lane with NO SCREEN, so migrating meant a
+   * hand-rolled `curl` — HANDOFF.md §1.15's rule that a route table is not a
+   * surface.
+   *
+   * ⚠️ Alt+O IS ALREADY BOUND ON `bank-reconciliation`, and that is not a
+   * conflict: `resolveAction` consults `screenBindings[screen]` BEFORE the
+   * global table, so the statement import keeps the key on the one screen that
+   * knows which bank account is selected, and every other screen gets the
+   * company-level import. Both are Tally's same "O: Import" — the narrower one
+   * simply wins where it applies.
+   */
+  | "tally-import"
+  /**
+   * RECONCILIATION QUEUE (track D) — every alter or delete these books refused.
+   *
+   * ⛔ IT IS NOT `report:reconciliation-queue`, THOUGH A REPORT OF THAT NAME
+   * EXISTS. That report answers 501 and the server serves the LIST under a
+   * separate JSON route, while the two routes this screen needs beyond it (the
+   * parked payload and the resolve) are governed by the bare `reconciliation`
+   * token — which migration 0011's coarse `allow display report` can never
+   * reach. A ScreenKind is also right on its own terms: the screen carries a
+   * WRITE (clearing an entry), which no report frame does.
+   */
+  | "reconciliation"
+  /**
+   * OFFLINE OUTBOX (track D) — the vouchers this machine is holding because the
+   * server could not be reached, and the one control that sends them.
+   *
+   * ⛔ IT IS A ScreenKind AND NOT A `report:` FRAME, and the reason is the same
+   * one `reconciliation` gives plus a stronger one: this screen's contents are
+   * NOT ON THE SERVER. A report frame's whole shape is "ask cored for rows and
+   * render them"; there is no route that could serve this list, because the rows
+   * live in this browser's IndexedDB. It also carries two WRITES (commit the
+   * queue, discard a row), and no report frame does.
+   */
+  | "offline-outbox"
+  /**
+   * THE APPROVAL INBOX (W2, D121 §8.3) — every agent proposal waiting for a
+   * human: what was asked, what the agent would post (the LEDGER-EFFECT DIFF the
+   * server's real handler derived during a rolled-back preview), WHY a human is
+   * being asked (`reasons`, verbatim) and which values came from untrusted input.
+   * Ctrl+A approves the highlighted proposal as previewed; Enter opens it in the
+   * SAME native voucher screen an operator keys by hand (F4/F5/F6/F7), prefilled,
+   * so an edit is keyed where every other edit is and Ctrl+A there approves the
+   * edited version; Alt+X rejects; Alt+B asks the agent back with a note.
+   *
+   * ⛔ A ScreenKind AND NOT A "report:NAME", for the reason every bare-token
+   * screen above gives: the server serves it under the bare `agent-approval`
+   * token (authz/vocabulary.go), which a coarse `allow display report` can never
+   * match — and it carries WRITES (the decisions), which no report frame does.
+   *
+   * ⛔ AND IT NEVER RENDERS A VOUCHER FORM OF ITS OWN. The diff is read-only; the
+   * only place a proposal's figures can be changed is the native voucher screen,
+   * so the validators, the master gate and the keyboard an operator already
+   * trusts are the ones that apply to an agent's work too (PLAN-AGENTIC W2: "the
+   * panel pre-fills the same native screens so Ctrl+A remains the accept key").
+   */
+  | "approval-inbox"
+  /**
+   * AGENT SETTINGS (W2 breadth, D121 "Wave 2 breadth"): the autonomy table,
+   * the agent-created ledgers waiting to be unblocked, and the intent log's
+   * verification — the owner's half of the agent plane. Every route it drives
+   * is a bare token (`agent-autonomy`, `master-unblock`, `agent-run`) that
+   * Data Entry is refused with zero rules; the server, not this screen,
+   * decides who may.
+   */
+  | "agent-settings"
+  /**
+   * THE INSIGHTS INBOX (W4, d125): what the insight engine found, the morning
+   * digest, verdicts and suppressions; each insight drills to its vouchers.
+   *
+   * ⛔ A ScreenKind AND NOT A "report:NAME" for the bare-token reason above: the
+   * server serves it under `insights`, which a coarse `allow display report`
+   * can never match, and it carries WRITES (verdicts, suppressions, a run).
+   */
+  | "insights";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -257,9 +479,48 @@ export interface FrameConfig {
    * one; CSV is the default because it is what every other tool can read.
    */
   exportExcelXml?: boolean;
+  /**
+   * F12 (Alt+E export): write the SERVER'S PDF instead of a sheet (B1).
+   *
+   * ⛔ IT TAKES PRECEDENCE OVER `exportExcelXml`, and two booleans encoding three
+   * states is why that has to be written down: both set resolves to PDF. See
+   * `exportTargetFor`, which is the one place that decides.
+   *
+   * ⛔ AND IT IS NOT THE ROWS ON SCREEN. A PDF is fetched from the print route, so
+   * it is the whole statement — the Ctrl+F filter and the F12 settings above are
+   * NOT applied to it. The panel's own label says so, and so does the status line
+   * after the file is written, because this is the one Alt+E format whose contents
+   * differ from what the operator is looking at.
+   *
+   * ⚠️ The F12 row is OFFERED ONLY where the server has a printed layout (ten of
+   * thirty report names). A format that 501s after being chosen is a menu item
+   * that lies; `printsALayout` gates it.
+   */
+  exportPdf?: boolean;
   /** F2 / Alt+F2: report period (ISO yyyy-mm-dd). */
   periodFrom?: string;
   periodTo?: string;
+  /**
+   * The WAGE MONTH ("YYYY-MM") the payroll register is showing.
+   *
+   * ⛔ A MONTH AND NOT A PERIOD, AND IT IS NOT SET BY F2. Every social-security
+   * scheme keys off a wage month: contributions, the ECR, the ESI return and the
+   * whole-month/part-month tests are all functions of it, and a month coerced to
+   * a neighbouring one computes somebody's contributions under the wrong window
+   * (the server refuses "2026-13" and "2026-1" with a strict parser for exactly
+   * this reason). A From/To range would let an operator ask for a span no
+   * statutory scheme has an answer for, so the register asks for a month on its
+   * own face — the way the TDS challan register asks for a tax year — and F2 says
+   * so rather than opening a period dialog that does nothing.
+   *
+   * It lives on the FRAME rather than in screen state solely so it can TRAVEL
+   * WITH THE DRILL into a payslip. Without that, the primary path — read the
+   * register, press Enter on a row — lands on "type a month", and the operator
+   * re-keys the month they just chose; re-keying it differently reads one
+   * person's July payslip under a register for June, with nothing on either page
+   * saying so.
+   */
+  wageMonth?: string;
 }
 
 /**
@@ -275,7 +536,34 @@ export const LEDGER_WISE_DEFAULT = true;
  * the backend exposes; the masters agent renders the matching form.
  */
 export type MasterKind =
-  "ledger" | "group" | "voucher-type" | "unit" | "stock-item";
+  | "ledger"
+  | "group"
+  | "voucher-type"
+  | "unit"
+  | "stock-item"
+  /**
+   * A STOCK GROUP (T10) — a node of the ITEM hierarchy, which is what makes a
+   * Stock Summary readable on a company with four hundred items.
+   *
+   * ⚠️ IT IS A MasterKind AND THE COST MASTERS ARE NOT, and the difference is
+   * the form: MasterCreateScreen's shape is "a name, one picker, some details",
+   * which is exactly a stock group (a name and a parent). A cost centre needs an
+   * axis it cannot exist without, which is why that one has a screen of its own.
+   */
+  | "stock-group"
+  /**
+   * A FOREIGN CURRENCY (T8, migration 0080) — a code, a symbol, a formal name
+   * and how many decimals it has.
+   *
+   * ⚠️ IT IS A MasterKind FOR THE SAME REASON A STOCK GROUP IS: the form is "a
+   * name and some details", which is exactly a currency. It needs no picker it
+   * cannot exist without, so it earns no screen of its own.
+   *
+   * ⛔ THE COMPANY'S OWN BASE CURRENCY IS NOT ONE OF THESE. A base-currency
+   * amount is recorded with no currency at all, so a master for the base would
+   * be a second encoding of the same fact — the server refuses it by name.
+   */
+  | "currency";
 
 /**
  * The canonical Phase 1 report names. These strings are the `reportName` on a
@@ -391,6 +679,34 @@ export const REPORT_NAMES = [
    * FrameOverlays classifies it `as-at`.
    */
   "Bills Payable",
+  /**
+   * ---- THE UNADJUSTED-FOREX REPORT (T8 step 7). What every open FOREIGN bill is
+   * worth at the rate as on a date, against the figure the books carry it at.
+   *
+   * ⛔ IT POSTS NOTHING, AND THE SCREEN AND F11 SAY SO IN THOSE WORDS. Q4 of
+   * docs/design/t8-multi-currency-model.md makes it report-only in v1, per the repo
+   * owner's answer; the revaluation VOUCHER is deferred and costs no design debt
+   * because postings are immutable, so it could only ever BE a voucher. ⚠️ THIS IS
+   * THE ROW MOST AT RISK OF THE FeaturesScreen FAILURE MODE — "a toggle that flips a
+   * flag with nothing behind it" — with a number attached, so the response carries
+   * `posts_nothing` and the screen states it rather than hard-coding a sentence.
+   *
+   * ⛔⛔ ONE NAME COVERING **BOTH** SIDES, WHICH IS THE OPPOSITE CALL FROM THE
+   * `Outstandings` / `Bills Payable` SPLIT DIRECTLY ABOVE AND IS ARGUED RATHER THAN
+   * INHERITED. That split exists because the PDP decides on the report NAME and
+   * *"this level may see what customers owe us but not what we owe suppliers"* was
+   * otherwise unwritable. It does not reach here: the subject is the company's NET
+   * exposure to a currency, and a $1,000 receivable against a $1,000 payable at one
+   * rate is an exposure of NOTHING — so splitting would not restrict information, it
+   * would destroy the only figure the report exists to produce. Migration 0090
+   * carries the full argument and denies the name outright to the seeded Data Entry
+   * level, `disallow display` AND `disallow print`.
+   *
+   * It is a POSITION AS AT A DATE, like Outstandings and the order books, so
+   * FrameOverlays classifies it `as-at`. ⚠️ On this report the date does TWO jobs —
+   * which bills are in, and which rate prices them — and the screen says both.
+   */
+  "Unadjusted Forex Gain/Loss",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 
@@ -517,9 +833,101 @@ export type KeymapAction =
   | { kind: "ledgerWise" } // F5 on a report — group-wise <-> ledger-wise
   | { kind: "filter" } // Ctrl+F — filter report rows
   | { kind: "exportScreen" } // Alt+E — export the rows on screen (CSV / Excel XML)
+  /**
+   * Alt+M — E-MAIL THIS DOCUMENT (B2). Saves the server's PDF, then opens the
+   * operator's own mail client on a pre-subjected draft.
+   *
+   * ⛔ ITS OWN ACTION AND NOT A FOURTH `ExportTarget`, AND TALLY AGREES. The
+   * TallyPrime top menu is `E: Export` and `M: E-mail` — two separate entries
+   * (RESEARCH.md:361) — Alt+M is a documented global (:415, :774), and the
+   * export page says "Alt+M e-mails the report" ALONGSIDE rather than among
+   * Alt+E's format list (:817). Beyond faithfulness: every `ExportTarget` writes
+   * a file and stops, whereas this writes a file and then LEAVES THE
+   * APPLICATION, so a fourth "format" that silently opens a mail client would be
+   * a surprise.
+   *
+   * ⛔⛔ THIS PRODUCT DOES NOT SEND MAIL, and the key must never read as if it
+   * does. There is no SMTP anywhere and `internal/notify` is untouched. A web
+   * page also CANNOT attach a file to a `mailto:` draft — no such field exists
+   * in the scheme — so the flow is inherently two steps and the status line says
+   * so before the operator sends. See export/emailDocument.ts.
+   */
+  | { kind: "emailDocument" }
   | { kind: "calculator" } // Ctrl+N — calculator panel
   | { kind: "help" } // F1 / Ctrl+F1 — Help (the keystroke reference)
   | { kind: "features" } // F11 — Company Features
+  /**
+   * Alt+Y — DATA: backup and restore (T14). Tally's `Alt+Y (Data) > Backup /
+   * Restore`, RESEARCH.md:993.
+   *
+   * ⛔ A BACKUP IS THE MOST SENSITIVE READ IN THE PRODUCT — every ledger, every
+   * party, every salary, in one file — so the server models it as its own
+   * `backup` resource and not as a report. Nothing about that is enforced HERE;
+   * this binding only opens a screen. It is noted because the tempting shortcut
+   * is to reach the archive from the Export (Alt+E) machinery, which is the
+   * report path and would be authorised as one.
+   */
+  | { kind: "dataScreen" }
+  /**
+   * Alt+O — MIGRATE FROM TALLY: the TallyPrime XML import screen (T32).
+   * Tally's `Gateway of Tally > Import`, RESEARCH.md:1221.
+   *
+   * ⛔ THE GLOBAL Alt+O AND THE BANK-RECONCILIATION Alt+O ARE DIFFERENT
+   * ACTIONS ON PURPOSE, and neither shadows the other by accident:
+   * `importBankStatement` is registered in RAW_SCREEN_BINDINGS for
+   * `bank-reconciliation` only, and screen bindings resolve first. A statement
+   * belongs to ONE bank account and only that screen knows which is selected;
+   * a Tally export belongs to the company, so it is the global.
+   */
+  | { kind: "tallyImport" }
+  /**
+   * Alt+R — the RECONCILIATION QUEUE (track D).
+   *
+   * ⚠️ There is no narrower screen-scoped Alt+R anywhere, unlike Alt+O, so this
+   * global is the only binding on the key and nothing shadows it.
+   */
+  | { kind: "reconciliationQueue" }
+  /**
+   * Alt+Q — the OFFLINE OUTBOX (track D).
+   *
+   * ⚠️ Alt+Q was free: the bound Alt letters are A C D E G I L M O P R S V W X Y Z
+   * and 2, and Tally pins no documented global to Q. Nothing shadows this and it
+   * shadows nothing.
+   */
+  | { kind: "offlineOutbox" }
+  /**
+   * Ctrl+K — the AGENT SIDE PANEL (W2): start a run, watch its steps, open a
+   * proposal it is waiting on.
+   *
+   * ⚠️ Ctrl+K WAS FREE, AND Alt+K WAS NOT. TallyPrime's top menu is opened with
+   * Alt+letter and `K: Company` is one of them (RESEARCH.md:361, :415, :1310) —
+   * this build does not bind Alt+K yet, but taking it would be taking Tally's
+   * key for something else. RESEARCH.md documents no Ctrl+K anywhere, and no
+   * screen in this build binds it.
+   *
+   * A SCREEN ACTION owned by the SHELL's panel rather than a machine transition:
+   * the panel is not a frame — it stays open while the operator moves between
+   * screens, which is the point of a side panel — so the pure machine has no
+   * frame to put it on.
+   */
+  | { kind: "agentPanel" }
+  /**
+   * Alt+X on the APPROVAL INBOX — REJECT the highlighted proposal (with the
+   * optional note). The screen-scoped meaning of Tally's "cancel this voucher"
+   * key: the proposal is a voucher nobody has accepted, and this is how it is
+   * cancelled. Nothing is posted and the run finishes.
+   */
+  | { kind: "rejectApproval" }
+  /**
+   * Alt+B on the APPROVAL INBOX — ASK BACK: hand the note to the agent, which
+   * may propose again (a NEW approval). The server refuses an ask-back with no
+   * note (422), and so does the screen, before any request.
+   *
+   * ⚠️ Alt+B IS SCREEN-SCOPED HERE ONLY. Tally uses Alt+B for "settle bills" in
+   * the outstandings reports (RESEARCH.md:799) and this build does not bind it
+   * globally, so nothing is shadowed.
+   */
+  | { kind: "askBackApproval" }
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
   /**
@@ -585,6 +993,31 @@ export type KeymapAction =
    * while leaving two accounts wrong.
    */
   | { kind: "importBankStatement" }
+  /**
+   * T4 SLICE 2b — the five MATCHING keys on the Bank Reconciliation Statement.
+   * Every combo is RESEARCH.md:879's own for this screen; none was invented.
+   *
+   *   Alt+S   "potential matches"      -> matchBankRows
+   *   F8      "modify match"           -> modifyBankMatch
+   *   Alt+F8  "unlink a match"         -> unlinkBankMatch
+   *   F9      "set status manually"    -> setAsideBankRow
+   *   Ctrl+J  "exception report"       -> bankExceptionReport
+   *   Ctrl+B  "basis of values"        -> bankBasisOfValues
+   *
+   * ⛔ Alt+S IS SCOPED TO THIS SCREEN and does not shadow the EMPLOYEES screen's
+   * Alt+S (set salary), for the same reason the two Alt+O actions coexist:
+   * screen bindings resolve first and each is registered for one screen only.
+   *
+   * ⛔ AND NONE OF THEM CLEARS ANYTHING. Alt+S opens a list of PROPOSALS. A
+   * clearance is written only by accepting one, which is a bank-date write the
+   * operator asks for by name — the same write the Bank Date column makes.
+   */
+  | { kind: "matchBankRows" }
+  | { kind: "modifyBankMatch" }
+  | { kind: "unlinkBankMatch" }
+  | { kind: "setAsideBankRow" }
+  | { kind: "bankExceptionReport" }
+  | { kind: "bankBasisOfValues" }
   /**
    * Alt+C on the TDS Challans screen — RECORD A DEPOSIT (T6).
    *
@@ -661,6 +1094,39 @@ export type KeymapAction =
    * IS the list of axes, and Enter on a row opens that axis here.
    */
   | { kind: "selectCostCategory" }
+  /**
+   * F4 on the BUDGET VARIANCE report — CHOOSE THE PLAN (T11).
+   *
+   * Same gesture as `selectCostCategory` above and for the same reason: F4 on a
+   * report is "pick the thing this report is about", it is scoped to this screen
+   * and never claimed globally, and binding it is protective because the global F4
+   * is a CONTRA VOUCHER — an operator reaching for the picker they used a moment
+   * ago would otherwise open a voucher over the report.
+   *
+   * ⛔ THE PLAN IS NEVER DEFAULTED, which is why this key exists at all. A variance
+   * report is a comparison and there is no default plan: an empty one would read as
+   * "nothing was planned and nothing was spent", which is a real and reassuring
+   * claim about a company and would be a lie.
+   */
+  | { kind: "selectBudget" }
+  /**
+   * F4 on the GSTR-9 screen — choose the FINANCIAL YEAR (T12).
+   *
+   * ⛔ NOT `period`. cored refuses any window that is not 1 April to 31 March, so
+   * a period frame would let an operator compose a request the report can only
+   * answer with a 400. The choice is a list of financial years instead, and F2 on
+   * that screen is bound to `unavailable` saying so.
+   */
+  | { kind: "selectFinancialYear" }
+  /**
+   * Alt+C on the BUDGETS screen — create a plan, or a line on the open one (T11).
+   *
+   * Alt+C is Tally's create-a-master-on-the-fly key (RESEARCH.md:405), and binding
+   * it here is protective as well as useful: the global `createMaster` would push a
+   * LEDGER-create frame over this screen, because a budget is deliberately not a
+   * member of the MasterKind union — it is not a thing a voucher can name.
+   */
+  | { kind: "createBudget" }
   /**
    * Ctrl+F8 / Ctrl+F9 — THE ORDER REGISTERS (T3). `direction` is what decides
    * which, and it is on the ACTION rather than being read off the active screen
@@ -781,6 +1247,74 @@ export type KeymapAction =
    * what makes a keyboard user distrust the app. `feature` is the human name,
    * `note` the one-line explanation shown in the status line.
    */
+  /**
+   * Ctrl+F4 — THE PAY RUN (Track 3).
+   *
+   * RESEARCH.md:903 names the combo: *"Alt+G > Create Voucher > Ctrl+F4
+   * (Payroll)"*. It was bound to `unavailable` ("The payroll module is not built
+   * yet") for the whole life of this project, in TWO stages and for two
+   * different reasons — the same two-stage history the four stock voucher keys
+   * have.
+   *
+   * First there was no engine. Then the engine, the statutory rates, the two
+   * reports, the three statutory file emitters, eight mounted routes and their
+   * PDP mappings all existed and there was NO SCREEN — so a keyboard-only
+   * operator could not create an employee, let alone pay one, and F11 said the
+   * module was absent while every payroll test passed.
+   *
+   * ⛔ IT IS A SCREEN AND NOT `{ kind: "voucher", voucherType: "payroll" }`.
+   * VoucherScreen resolves its layout through `configFor(voucherType)`, a
+   * Readonly<Record<VoucherType, VoucherConfig>> with no payroll entry; the key
+   * would not have "partly worked", it would have taken the operator to an
+   * undefined config. And the shape is genuinely different: a pay run has no
+   * particulars to key — its lines are COMPUTED from the masters for a whole
+   * WAGE MONTH — which is why the frame carries a month and not a voucher date.
+   */
+  | { kind: "payRun" }
+  /**
+   * Alt+C on the EMPLOYEES screen — open the create form.
+   *
+   * Scoped to the screen because the global `createMaster` would push a
+   * LEDGER-create frame over it: an employee is deliberately not a member of the
+   * MasterKind union, for the same reason cost masters are not — the server
+   * serves it under its own `employee` token and not under `master`.
+   */
+  | { kind: "createEmployee" }
+  /**
+   * Alt+S on the EMPLOYEES screen — set the SALARY STRUCTURE or the STATUTORY
+   * ELECTION of the employee highlighted in the list.
+   *
+   * ⛔ A SECOND WRITE KEY ON A MASTER SCREEN, AND IT IS NOT A CONVENIENCE. An
+   * employee with neither child cannot be paid at all: cored refuses the whole
+   * pay run with "no salary structure is in force" / "no statutory election is
+   * in force", and that refusal arrives on the RUN, long after the operator left
+   * this screen believing the record was complete. Alt+C creates the person;
+   * Alt+S is what makes them payable.
+   */
+  | { kind: "setEmployeePay" }
+  /**
+   * Alt+S on the PAYROLL REGISTER — open the STATUTORY FILES panel (the EPFO
+   * ECR and the ESIC monthly return, both for the month on screen).
+   *
+   * ⚠️ THE THIRD FILE IS NOT HERE and that is deliberate: Form 138 is
+   * QUARTERLY, needs a TAN, a deductor PAN, a deductor name and every challan's
+   * counterfoil — none of which is in the database — so it is a FORM on its own
+   * screen. Offering it beside two one-click downloads would imply it takes one
+   * click, and the operator would meet four 400s discovering otherwise.
+   */
+  | { kind: "payrollStatutoryFiles" }
+  /**
+   * Alt+V — CHANGE AN ITEM'S COSTING METHOD (T9), on the Stock Summary.
+   *
+   * ⚠️ IT IS BOUND ON THE `report` SCREEN KIND, so it is bound on every report,
+   * and only the Stock Summary registers a handler for it. On any other report
+   * the shell says "does not apply on this screen", which is the honest answer:
+   * keymap bindings, the button bar and the hint strip are all per SCREEN KIND,
+   * and a report NAME cannot carry its own binding without a second dispatch
+   * layer. The Stock Summary advertises the key in its own prose instead — the
+   * one surface that can be specific about which report it is.
+   */
+  | { kind: "setValuationMethod" }
   | { kind: "unavailable"; feature: string; note: string };
 
 /**

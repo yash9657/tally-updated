@@ -89,6 +89,12 @@ function screenLabel(screen: NavSnapshot["screen"] | undefined): string {
       return "the Bill Inbox";
     case "query":
       return "Ask your books";
+    case "approval-inbox":
+      return "the Approval Inbox";
+    case "agent-settings":
+      return "Agent Settings";
+    case "insights":
+      return "the Insights inbox";
     case undefined:
       return "the Gateway";
     default:

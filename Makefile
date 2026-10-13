@@ -83,6 +83,14 @@ backend-test: ## Backend unit + RLS/isolation integration tests (needs dev-db)
 backend-test-residue: ## Backend suite + PROOF it left no rows in the dev database (bound 0)
 	bash backend/scripts/test_residue.sh
 
+tier0: ## W8 Tier 0 — replay every cassette with no LLM, no network, no database
+	# Mirrors the `tier0` CI job. CORED_SKIP_DB=1 because this gate must not need
+	# a database; TRAJECTORY_RECORD is cleared because with it set the seed test
+	# RE-RECORDS the fixtures and asserts nothing (cassette_seed_test.go says so
+	# in terms). Runs the whole package rather than a -run regex, so a new
+	# Tier-0 test cannot be silently left out.
+	cd backend && CORED_SKIP_DB=1 TRAJECTORY_RECORD= go test ./internal/trajectory/ -count=1
+
 frontend-install: ## Install frontend deps
 	cd frontend && pnpm install --frozen-lockfile || cd frontend && pnpm install
 
@@ -244,7 +252,7 @@ reset-dev-db: dev-db ## DESTRUCTIVE. Drop + recreate the dev database, then migr
 	@echo "  2) make run-insightd   (background)"
 	@echo "  3) make seed-all"
 
-verify: dev-db migrate backend-build backend-test-residue frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd)
+verify: dev-db migrate backend-build backend-test-residue tier0 frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd + Tier 0)
 	@echo "\n✅ verification gates passed (see any SKIP lines above for planes not covered)"
 
-.PHONY: help dev-db dev-db-down reset-dev-db migrate backend-build backend-test backend-test-residue frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd run-statutoryd seed-demo seed-all verify
+.PHONY: help dev-db dev-db-down reset-dev-db migrate backend-build backend-test backend-test-residue tier0 frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd run-statutoryd seed-demo seed-all verify

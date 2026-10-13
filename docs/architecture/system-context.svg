@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 760" width="1220" height="760" role="img" aria-labelledby="title desc">
+  <title id="title">Tally system context</title>
+  <desc id="desc">Users reach the Vite single-page app on Vercel at tallyweb.world, which rewrites API calls to api.tallyweb.world: CloudFront in front of the cored Lambda on AWS. cored owns the PostgreSQL database and calls LLM providers. insightd and statutoryd are planned services reached only through cored.</desc>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
+      .h1 { font-size: 22px; font-weight: 700; }
+      .sub { font-size: 13px; fill: #475569; }
+      .h { font-size: 15px; font-weight: 700; }
+      .t { font-size: 13px; }
+      .s { font-size: 12px; fill: #475569; }
+      .lbl { font-size: 12px; fill: #334155; }
+      .aws { font-size: 13px; font-weight: 700; fill: #b45309; }
+      .edge { stroke: #334155; stroke-width: 1.6; fill: none; }
+      .edgeg { stroke: #94a3b8; stroke-width: 1.6; fill: none; stroke-dasharray: 6 4; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1220" height="760" rx="16" fill="#ffffff"/>
+
+  <text class="h1" x="32" y="42">Tally — system context</text>
+  <text class="sub" x="32" y="64">Who talks to what. AWS is the production target for the API; the web app stays on Vercel.</text>
+
+  <!-- Actors -->
+  <rect x="32" y="110" width="200" height="66" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="1.5"/>
+  <text class="h" x="48" y="136">Business user</text>
+  <text class="s" x="48" y="156">owner / accountant, browser</text>
+
+  <rect x="32" y="214" width="200" height="66" rx="10" fill="#f8fafc" stroke="#475569" stroke-width="1.5"/>
+  <text class="h" x="48" y="240">MCP client</text>
+  <text class="s" x="48" y="260">agent under a human's grant</text>
+
+  <!-- Vercel -->
+  <rect x="290" y="100" width="198" height="86" rx="10" fill="#ffffff" stroke="#000000" stroke-width="2"/>
+  <text class="h" x="306" y="126">tallyweb.world</text>
+  <text class="t" x="306" y="146">React + XState SPA (Vite)</text>
+  <text class="s" x="306" y="166">Vercel · static hosting</text>
+
+  <!-- Planned region -->
+  <rect x="276" y="308" width="238" height="226" rx="12" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text class="s" x="290" y="330" font-weight="700">Planned · not deployed on AWS yet</text>
+
+  <rect x="292" y="344" width="206" height="84" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="h" x="306" y="368">insightd</text>
+  <text class="s" x="306" y="387">Python/FastAPI · bill → draft</text>
+  <text class="s" x="306" y="404">OCR → PII redaction → LLM</text>
+  <text class="s" x="306" y="420">no ledger write path</text>
+
+  <rect x="292" y="440" width="206" height="80" rx="10" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="h" x="306" y="464">statutoryd</text>
+  <text class="s" x="306" y="483">Go · durable IRN e-invoice</text>
+  <text class="s" x="306" y="500">workflow (fake IRP today)</text>
+
+  <!-- AWS boundary -->
+  <rect x="552" y="88" width="408" height="560" rx="14" fill="#fffaf2" stroke="#FF9900" stroke-width="1.8" stroke-dasharray="8 5"/>
+  <text class="aws" x="562" y="110">AWS · us-east-1</text>
+
+  <rect x="566" y="122" width="374" height="58" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="582" y="146">api.tallyweb.world</text>
+  <text class="s" x="582" y="166">CloudFront → Lambda Function URL</text>
+
+  <rect x="566" y="216" width="374" height="268" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="1.8"/>
+  <text class="h" x="582" y="242">cored</text>
+  <text class="s" x="632" y="242">Go modular monolith · Lambda (arm64)</text>
+  <text class="t" x="582" y="270">• Auth (JWT, WebAuthn) + per-company PDP</text>
+  <text class="t" x="582" y="294">• Ledger, masters, inventory, reports</text>
+  <text class="t" x="582" y="318">• GST, TDS/TCS, payroll, e-way bill</text>
+  <text class="t" x="582" y="342">• NL query → typed DSL (read-only)</text>
+  <text class="t" x="582" y="366">• Agent loop, approval inbox, MCP server</text>
+  <text class="t" x="582" y="390">• Insights + morning digest</text>
+  <text class="t" x="582" y="414">• Notification outbox, intent-log anchors</text>
+  <text class="t" x="582" y="438">• Proxy to insightd / statutoryd</text>
+  <text class="t" x="582" y="462">• Embedded SQL migrations (cored migrate)</text>
+
+  <rect x="566" y="540" width="374" height="88" rx="10" fill="#fff7ed" stroke="#FF9900" stroke-width="1.8"/>
+  <text class="h" x="582" y="564">Aurora Serverless v2 · PostgreSQL 17</text>
+  <text class="t" x="582" y="586">pgvector · FORCE RLS, default deny</text>
+  <text class="s" x="582" y="606">roles tally_app / tally_statutory · DB "tally"</text>
+
+  <!-- External -->
+  <rect x="1000" y="216" width="190" height="178" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text class="h" x="1016" y="242">LLM providers</text>
+  <text class="t" x="1016" y="268">Anthropic</text>
+  <text class="t" x="1016" y="290">Fireworks</text>
+  <text class="t" x="1016" y="312">DeepInfra</text>
+  <text class="t" x="1016" y="334">Sarvam</text>
+  <text class="t" x="1016" y="356">OpenAI-compatible / vLLM</text>
+  <text class="s" x="1016" y="380">set by LLM_PROVIDER</text>
+
+  <rect x="1000" y="430" width="190" height="80" rx="10" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="h" x="1016" y="456">OTLP collector</text>
+  <text class="s" x="1016" y="476">e.g. Langfuse · optional</text>
+  <text class="s" x="1016" y="494">off unless endpoint set</text>
+
+  <!-- Edges -->
+  <!-- user -> spa -->
+  <line class="edge" x1="232" y1="140" x2="288" y2="140" marker-end="url(#arr)"/>
+  <text class="lbl" x="240" y="132">HTTPS</text>
+  <!-- spa -> edge -->
+  <line class="edge" x1="488" y1="138" x2="564" y2="138" marker-end="url(#arr)"/>
+  <text class="lbl" x="492" y="130">/v1 /auth</text>
+  <!-- mcp -> edge -->
+  <path class="edge" d="M232,247 H528 V166 H564" marker-end="url(#arr)"/>
+  <text class="lbl" x="250" y="239">HTTPS · JSON-RPC · grant token</text>
+  <!-- edge -> cored -->
+  <line class="edge" x1="753" y1="180" x2="753" y2="214" marker-end="url(#arr)"/>
+  <text class="lbl" x="762" y="202">HTTP (Lambda Web Adapter)</text>
+  <!-- cored -> db -->
+  <line class="edge" x1="753" y1="484" x2="753" y2="538" marker-end="url(#arr)"/>
+  <text class="lbl" x="762" y="516">pgx · TLS · RLS GUCs</text>
+  <!-- cored -> insightd (planned) -->
+  <line class="edgeg" x1="566" y1="386" x2="500" y2="386" marker-end="url(#arrg)"/>
+  <!-- cored <-> statutoryd (planned) -->
+  <line class="edgeg" x1="566" y1="478" x2="500" y2="478" marker-start="url(#arrg)" marker-end="url(#arrg)"/>
+  <text class="lbl" x="518" y="470">IRN</text>
+  <text class="lbl" x="514" y="378">drafts</text>
+  <!-- cored -> llm -->
+  <line class="edge" x1="940" y1="300" x2="998" y2="300" marker-end="url(#arr)"/>
+  <text class="lbl" x="946" y="292">HTTPS</text>
+  <!-- cored -> otlp -->
+  <line class="edgeg" x1="940" y1="466" x2="998" y2="466" marker-end="url(#arrg)"/>
+  <text class="lbl" x="946" y="458">OTLP</text>
+
+  <!-- Legend -->
+  <g transform="translate(32,676)">
+    <rect x="0" y="0" width="22" height="14" rx="3" fill="#fff7ed" stroke="#FF9900" stroke-width="1.6"/>
+    <text class="s" x="30" y="12">AWS-managed</text>
+    <rect x="140" y="0" width="22" height="14" rx="3" fill="#ffffff" stroke="#000000" stroke-width="1.8"/>
+    <text class="s" x="170" y="12">Vercel</text>
+    <rect x="240" y="0" width="22" height="14" rx="3" fill="#f1f5f9" stroke="#475569" stroke-width="1.6"/>
+    <text class="s" x="270" y="12">Tally component</text>
+    <rect x="400" y="0" width="22" height="14" rx="3" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+    <text class="s" x="430" y="12">External service</text>
+    <rect x="560" y="0" width="22" height="14" rx="3" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <text class="s" x="590" y="12">Planned / optional</text>
+    <rect x="730" y="0" width="22" height="14" rx="3" fill="#fffaf2" stroke="#FF9900" stroke-width="1.5" stroke-dasharray="5 3"/>
+    <text class="s" x="760" y="12">Trust boundary</text>
+  </g>
+  <text class="s" x="32" y="726">The browser only ever calls same-origin /v1 and /auth; Vercel rewrites them to the API. insightd and statutoryd are reachable only through cored.</text>
+</svg>

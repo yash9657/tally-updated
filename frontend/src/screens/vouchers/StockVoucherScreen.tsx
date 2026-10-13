@@ -5,6 +5,13 @@ import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { useRegisterScreenAction } from "../../app/ScreenActions";
 import { useLoadedVoucher } from "../../app/LoadedVoucher";
 import { ApiError } from "../../api";
+import { VOUCHER_CLASS_LABELS } from "../../api/types";
+import {
+  QueuedOfflineSignal,
+  queuedStatus,
+  useOfflineFallback,
+} from "../../offline/useOfflineFallback";
+import { voucherClassForType } from "./voucherClass";
 import type {
   FulfilmentView,
   GodownListItem,
@@ -163,6 +170,8 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
   const fulfilsDir = fulfilsDirection(type as VoucherType);
 
   const seedRef = useRef<string | null>(null);
+  /** The loaded voucher's head version, from the hydration below. 0 = unknown. */
+  const loadedVersion = useRef(0);
   useEffect(() => {
     if (!loadedVoucherID || alterRefusal || seedRef.current === loadedVoucherID) return;
     let cancelled = false;
@@ -171,6 +180,11 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
       .then((view) => {
         if (cancelled) return;
         seedRef.current = loadedVoucherID;
+        // ⛔ THE HEAD VERSION IS THE ONLY HONEST `base_version` FOR A QUEUED
+        // ALTER. Queueing one at base 0 would park as a CONFLICT every single
+        // time — a reconciliation row that tells the operator nothing except
+        // that this client did not know what it was editing.
+        loadedVersion.current = view.version_no;
         setDate(view.voucher_date);
         setVoucherNo(view.voucher_no);
         setNarration(view.narration);
@@ -196,6 +210,10 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
   const formRef = useRef({ lines, date, narration, party, voucherNo });
   formRef.current = { lines, date, narration, party, voucherNo };
   const inFlight = useRef(false);
+
+  // ⛔ THE QUEUE-OR-REFUSE JUDGEMENT, shared with VoucherScreen so it cannot
+  // drift between the two screens that post vouchers. See useOfflineFallback.
+  const queueOrRethrow = useOfflineFallback();
 
   const ctx = useMemo(
     () => ({ type, voucherID: loadedVoucherID }),
@@ -233,14 +251,57 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
     inFlight.current = true;
     setDenied(null);
     const voucherID = ctxRef.current.voucherID;
-    const send: Promise<VoucherResponse> = voucherID
-      ? cfg.alter(client, companyID, voucherID, req)
-      : cfg.post(client, companyID, req);
+    const send: Promise<VoucherResponse> = (
+      voucherID
+        ? cfg.alter(client, companyID, voucherID, req)
+        : cfg.post(client, companyID, req)
+    ).catch((err: unknown) =>
+      // ⛔⛔ WAS IT THE NETWORK, OR DID THE BOOKS REFUSE IT? The narrow catch —
+      // around the post and nothing else. `buildStockVoucherRequest` above has
+      // already run and cannot fail here, so everything this sees is the wire.
+      // A proven transport failure is QUEUED; a 422 or a 403 is rethrown to the
+      // handler below, which keeps every message it already had.
+      queueOrRethrow(err, {
+        cls: VOUCHER_CLASS_LABELS[voucherClassForType(type)],
+        req,
+        ...(voucherID ? { alter: { targetID: voucherID, baseVersion: loadedVersion.current } } : {}),
+      }),
+    );
     send
       .then((res) => {
         setSavedNo(res.voucher_no);
         setSavedID(res.voucher_id);
         setStatus("Saved");
+        // ⛔⛔ AND THE FORM IS CLEARED, ON A CREATE ONLY (D108).
+        //
+        // `navMachine`'s accept reducer replaces a saved CREATE frame with a
+        // fresh one, but `lines` / `party` / `narration` / `voucherNo` are five
+        // separate useStates inside THIS component and replacing the frame
+        // object never remounted it — so a second Ctrl+A, with nothing re-keyed,
+        // moved the goods again. Driven in a browser 2026-08-31: a third press
+        // on a screen already reading `Saved  No: 7` wrote Receipt Note No. 8
+        // and took the company's voucher count 24 -> 25.
+        //
+        // ⚠️ THIS SCREEN ALREADY HELD THE ANSWER AND CONSULTED IT ONLY FOR
+        // PRINTING: `usePrintAction` reads `loadedVoucherID ?? savedID` while
+        // the accept path reads `ctxRef.current.voucherID`, which IS
+        // `loadedVoucherID` and is therefore always null on a create.
+        //
+        // ⛔ `voucherID` is the value captured SYNCHRONOUSLY above, before the
+        // request — never re-read here, for the reason the accounting screen
+        // documents at its own clear. Empty means create; an ALTER keeps its
+        // form, because a second Ctrl+A there re-PUTs the same voucher (D89) and
+        // blanking it would empty a voucher still open on screen.
+        //
+        // ⚠️ THE DATE IS KEPT, like the accounting screen's: a run of receipt
+        // notes for one delivery is all dated the same day, and re-typing it on
+        // every voucher is what an operator would have to do if this reset it.
+        if (!voucherID) {
+          setLines([emptyStockLine()]);
+          setParty("");
+          setNarration("");
+          setVoucherNo("");
+        }
       })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 403) {
@@ -281,12 +342,22 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
           setStatus(null);
           return;
         }
+        // ⛔ NOT AN ERROR: the voucher is queued on this machine. It is checked
+        // BEFORE the generic line because `QueuedOfflineSignal` is an Error
+        // subclass and would otherwise be rendered as "Error: …" — telling the
+        // operator their kept work failed.
+        if (err instanceof QueuedOfflineSignal) {
+          setSavedNo(null);
+          setSavedID(null);
+          setStatus(queuedStatus(err));
+          return;
+        }
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => {
         inFlight.current = false;
       });
-  }, [client, companyID, cfg, type]);
+  }, [client, companyID, cfg, type, queueOrRethrow]);
 
   useRegisterScreenAction("accept", onAccept);
 
@@ -402,7 +473,13 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
         <FieldRow name="Date" value={date} testId="stock-date" onChange={setDate} />
         <FieldRow
           name="No."
-          value={savedNo ?? voucherNo}
+          // ⛔ NOT `savedNo ?? voucherNo` (D108). This row names the voucher
+          // BEING KEYED, and over a cleared form the old expression showed the
+          // number of the PREVIOUS one — worse, being a controlled input pinned
+          // to `savedNo`, it then ignored anything the operator typed into it.
+          // The number the server assigned is the header's job, beside "Saved".
+          // An alter still shows the loaded number: the hydration writes it here.
+          value={voucherNo}
           testId="stock-voucher-no"
           placeholder="auto"
           onChange={setVoucherNo}
@@ -571,7 +648,7 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
           {shape.kind === "count"
             ? `${keyed.length} position(s) counted, ${formatFixed4(totalQty)} units in total. The SERVER derives the correction against the books — this form never states a delta.`
             : shape.kind === "transfer"
-              ? `${keyed.length} transfer(s), ${formatFixed4(totalQty)} units. Each line posts as a PAIR (out of From, into To), so the company's total holding is unchanged.`
+              ? `${keyed.length} transfer(s), ${formatFixed4(totalQty)} units. Each line posts as a PAIR (out of From, into To). The server carries the goods in at exactly what they cost on the way out, so neither the quantity nor the VALUE the company holds changes.`
               : `${keyed.length} line(s), ${formatFixed4(totalQty)} units ${shape.direction === "OUT" ? "out" : "in"}.`}
         </p>
       </div>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/khata/cored/internal/platform/testdb"
 	"os"
 	"reflect"
 	"strings"
@@ -24,9 +25,9 @@ import (
 // stays green offline.
 // ---------------------------------------------------------------------------
 
-const (
-	statAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	statAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	statAdminDSN = testdb.AdminDSNValue()
+	statAppDSN   = testdb.AppDSNValue()
 )
 
 func statTablePresent(ctx context.Context, conn *pgx.Conn, name string) bool {
@@ -150,7 +151,7 @@ func stepStoreConformance(t *testing.T, store StepStore, wfA, wfB string) {
 	t.Helper()
 
 	// Unknown workflow: empty, no error (Run relies on this for a first attempt).
-	got, err := store.Load(wfA)
+	got, err := store.Load(context.Background(), wfA)
 	if err != nil {
 		t.Fatalf("Load(unknown): %v", err)
 	}
@@ -165,11 +166,11 @@ func stepStoreConformance(t *testing.T, store StepStore, wfA, wfB string) {
 		{Name: "generate", Output: json.RawMessage(`{"irn":"deadbeef","status":"ACT"}`)},
 	}
 	for _, r := range want {
-		if err := store.Append(wfA, r); err != nil {
+		if err := store.Append(context.Background(), wfA, r); err != nil {
 			t.Fatalf("Append(%s): %v", r.Name, err)
 		}
 	}
-	got, err = store.Load(wfA)
+	got, err = store.Load(context.Background(), wfA)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -187,10 +188,10 @@ func stepStoreConformance(t *testing.T, store StepStore, wfA, wfB string) {
 
 	// Duplicate step name is a SILENT no-op that does not clobber the stored
 	// output. This is what makes a completed workflow re-Run add no rows.
-	if err := store.Append(wfA, StepResult{Name: "generate", Output: json.RawMessage(`{"irn":"SECOND-IRN","status":"ACT"}`)}); err != nil {
+	if err := store.Append(context.Background(), wfA, StepResult{Name: "generate", Output: json.RawMessage(`{"irn":"SECOND-IRN","status":"ACT"}`)}); err != nil {
 		t.Fatalf("duplicate Append must be a silent no-op, got error: %v", err)
 	}
-	got, err = store.Load(wfA)
+	got, err = store.Load(context.Background(), wfA)
 	if err != nil {
 		t.Fatalf("Load after duplicate: %v", err)
 	}
@@ -202,17 +203,17 @@ func stepStoreConformance(t *testing.T, store StepStore, wfA, wfB string) {
 	}
 
 	// Workflows are isolated from each other.
-	if err := store.Append(wfB, StepResult{Name: "build", Output: json.RawMessage(`{"other":true}`)}); err != nil {
+	if err := store.Append(context.Background(), wfB, StepResult{Name: "build", Output: json.RawMessage(`{"other":true}`)}); err != nil {
 		t.Fatalf("Append(wfB): %v", err)
 	}
-	got, err = store.Load(wfA)
+	got, err = store.Load(context.Background(), wfA)
 	if err != nil {
 		t.Fatalf("Load wfA: %v", err)
 	}
 	if len(got) != len(want) {
 		t.Fatalf("wfB leaked into wfA: %d results", len(got))
 	}
-	gotB, err := store.Load(wfB)
+	gotB, err := store.Load(context.Background(), wfB)
 	if err != nil {
 		t.Fatalf("Load wfB: %v", err)
 	}
@@ -248,7 +249,7 @@ func TestPGStoreRejectsEmptyOutput(t *testing.T) {
 	pool, admin := pgHarness(t)
 	_, _, wf := freshIDs(t, admin)
 
-	err := NewPGStore(pool).Append(wf, StepResult{Name: "build", Output: nil})
+	err := NewPGStore(pool).Append(context.Background(), wf, StepResult{Name: "build", Output: nil})
 	if err == nil {
 		t.Fatal("Append with empty output must fail (output is JSONB NOT NULL)")
 	}

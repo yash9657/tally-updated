@@ -51,6 +51,7 @@ package server
 // is this repository's signature failure.
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -636,9 +637,24 @@ func tallyVoucher(action, guid, date, voucherNo string) string {
 }
 
 // importXML posts a raw Tally envelope through the real router.
+//
+// ⚠️ It delegates to importXMLBytes rather than building the request itself,
+// because the UTF-16 arm (auth_backdated_tally_utf16_http_test.go) has to post
+// bytes that are NOT valid UTF-8 and must reach the router through the SAME call
+// this one uses. Two request builders is how one of them keeps a header the other
+// loses — and this route's whole defect history is peeks and handlers disagreeing
+// about the same bytes.
 func importXML(t *testing.T, s *Server, base, tok, xml string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, base+"/import/tally-xml", strings.NewReader(xml))
+	return importXMLBytes(t, s, base, tok, []byte(xml))
+}
+
+// importXMLBytes posts a raw Tally envelope as BYTES — the form a real export
+// arrives in, which is UTF-16LE and therefore not expressible as a Go string
+// without re-encoding it.
+func importXMLBytes(t *testing.T, s *Server, base, tok string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, base+"/import/tally-xml", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/xml")
 	rec := httptest.NewRecorder()
@@ -740,6 +756,140 @@ func TestCutoffRefusesATallyXMLAlterOrDeleteOutOfALockedPeriod(t *testing.T) {
 // records WHY, because the whole reason this is round 3 is that "it looked
 // harmless" was decided by silence three times.
 var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
+	// ---- T4 SLICE 2b (migration 0088). TWO WRITE ROUTES, ONE REASON.
+	//
+	// ⛔ THE DOCUMENT THESE NAME IS AN IMPORTED BANK ROW, WHICH IS NOT A LEDGER
+	// DOCUMENT AND HAS NO POSITION IN A PERIOD TO BE MOVED OUT OF. The census
+	// matches them because the path carries a {lineID} and a bank_statement_line
+	// IS dated — but that date is the BANK's, a fact about a file somebody
+	// downloaded, and setting a row aside neither changes it nor asserts anything
+	// about the books.
+	//
+	// ⭐ WHAT MAKES THIS SAFE IS STRUCTURAL AND NOT A PROMISE: migration 0088's
+	// bank_statement_match_clearance_matches_status CHECK refuses a 'set-aside'
+	// row that carries a reconciliation_id. So a set-aside CANNOT write a
+	// clearance, cannot touch a voucher_version or a posting, and cannot move any
+	// balance — the Bank Reconciliation Statement reads bank_reconciliation and a
+	// set-aside writes none. There is nothing here to lift across a cutoff.
+	//
+	// ⚠️ AND THE OTHER HALF OF THE DECISION: NEITHER ROUTE SENDS A DATE AT ALL.
+	// setAsideReq carries a note and a created_by and nothing else, so there is no
+	// asserted date for the cutoff to judge either. Both halves are written down
+	// because the three shipped defects were each a case where one half was
+	// recorded and the other assumed.
+	//
+	// ⛔ THE WRITE THAT *DOES* MOVE A LEDGER DOCUMENT IS NOT IN THIS SLICE'S
+	// ROUTES AT ALL. Accepting a match asserts a bank date, and it does so through
+	// the EXISTING PUT .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo},
+	// which this census already judges on both ends (peekBankDate for the asserted
+	// date, storedBankDateForLeg for the one already there). Slice 2b added no
+	// second way to assert a clearance precisely so that stayed true.
+	//
+	// ⛔ IF A LATER TRACK EVER LETS A SET-ASIDE POST — an auto-created voucher for
+	// a bank charge, say — BOTH ENTRIES BECOME FALSE and the routes must move to
+	// existingVouchersNamedByRequest.
+	"POST /v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/set-aside": "" +
+		"an imported bank row is not a ledger entry: a set-aside writes no clearance " +
+		"(migration 0088's CHECK refuses one), no posting and no balance, and the request " +
+		"carries no date at all",
+	"POST /v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/restore": "" +
+		"the undo of the above, with the same reach: it deletes a 'set-aside' row only, " +
+		"refuses to touch a 'matched' one, and carries no date",
+
+	// ---- W2 THE AGENT PLANE (D121). TWO WRITE ROUTES, ONE REASON.
+	//
+	// ⛔ THE DOCUMENT THESE NAME IS AN AGENT RUN OR AN APPROVAL, NOT A LEDGER
+	// DOCUMENT. A decision writes one agent_decision row and nudges the run; a
+	// cancel writes the run's status. Neither writes a voucher_version, a posting
+	// or a balance. ⭐ AND THE COMMIT AN APPROVAL RELEASES IS JUDGED WHERE IT
+	// HAPPENS: the agent's commit is an in-process request to the REAL voucher
+	// route (agent_dispatch.go), so companyAuthMiddleware reads that request's
+	// asserted date and, for an alter, the stored one — both ends of the move,
+	// exactly as for a person's keystrokes. Judging the approval as well would
+	// judge the same voucher twice and the approval once for nothing.
+	//
+	// ⛔ IF AN APPROVAL EVER COMMITS BY ITSELF — writing the voucher inside the
+	// decision request rather than through the router — this entry becomes FALSE.
+	"POST /v1/companies/{companyID}/agent/approvals/{approvalID}/decision": "" +
+		"an approval decision writes an agent_decision row, not a ledger document; the commit it " +
+		"releases is a separate in-process request to the voucher route, judged by the cutoff there",
+	"POST /v1/companies/{companyID}/agent/runs/{runID}/cancel": "" +
+		"cancelling a run writes the run's status only; it commits nothing and carries no date",
+	// W2 breadth. The re-preview is a DRY RUN: the in-process request it makes
+	// to the voucher route is judged there (asserted and stored date), and every
+	// transaction it opens is rolled back; the route itself writes nothing.
+	"POST /v1/companies/{companyID}/agent/approvals/{approvalID}/preview": "" +
+		"re-previewing an approver's edit writes nothing (a rolled-back dry run through the real voucher " +
+		"route, which is judged by the cutoff there)",
+	// The unblock names a LEDGER, which is a master and carries no document date;
+	// it moves no entry across any period (0095).
+	"POST /v1/companies/{companyID}/ledgers/{ledgerID}/unblock": "" +
+		"unblocking an agent-created ledger clears a master's block flag; a ledger carries no document " +
+		"date and the unblock posts nothing",
+
+	// ---- W4 THE INSIGHT ENGINE (d125). TWO WRITE ROUTES, ONE REASON: what they
+	// name is an INSIGHT (a finding ABOUT the books) or a SUPPRESSION of one,
+	// never a ledger document. Neither writes a voucher_version, a posting or a
+	// balance, and neither request carries a date. If an insight ever gains a
+	// one-tap ACTION that posts, that action must be a request to the voucher
+	// route, judged by the cutoff there — as the agent's commit is above.
+	"POST /v1/companies/{companyID}/insights/{insightID}/feedback": "" +
+		"a verdict writes an insight_feedback row and may dismiss the insight; nothing in the " +
+		"books moves and the request carries no date",
+	"DELETE /v1/companies/{companyID}/insights/suppressions/{suppressionID}": "" +
+		"lifting a suppression deletes an insight_suppression row — which findings reach the " +
+		"digest — and nothing in the books; no date",
+	// W6 (D126): revoking an MCP grant stamps revoked_at on the grant, closes
+	// its sessions and cancels their runs — the cancel above, for each.
+	"POST /v1/companies/{companyID}/agent/mcp/grants/{grantID}/revoke": "" +
+		"revoking an MCP grant writes the grant's revocation and cancels its runs; it commits nothing and carries no date",
+
+	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
+	//
+	// ⛔ THE DOCUMENT THESE NAME IS NOT A LEDGER DOCUMENT. The census matches them
+	// because the path carries a {budgetID} and a budget IS dated — but a budget is
+	// a PLAN, not an entry: it writes no voucher_version, no posting and no
+	// balance, and appears on no statement. Migration 0085 grants UPDATE and DELETE
+	// on both tables for exactly that reason, which is the opposite of `posting`
+	// (posting_immutable RAISES on both).
+	//
+	// ⛔ SO THERE IS NOTHING HERE THAT COULD BE LIFTED OUT OF A LOCKED PERIOD. The
+	// hazard this test guards is a write that takes an ALREADY-DATED ledger
+	// document across the cutoff — a voucher altered or deleted out of a filed
+	// return. A budget cannot be that: nothing in the ledger reads `budget` or
+	// `budget_line`, and the only consumer is reporting.BudgetVarianceFor, which
+	// puts the plan in its own column beside an actual it derives independently.
+	// Altering a plan's period changes which movement the REPORT compares against;
+	// it changes no posted figure, and the actual side is re-derived from the
+	// vouchers either way.
+	//
+	// ⚠️ AND THEIR OWN DATES ARE **NOT** JUDGED EITHER, WHICH IS THE OTHER HALF OF
+	// THE DECISION AND IS RECORDED SEPARATELY — see budgetReq.from_date/to_date in
+	// wireDatesInPackageServer (auth_backdated_wire_date_test.go), which states the
+	// four reasons at length. This entry says "not moving a ledger document"; it
+	// does NOT say "a cutoff was considered and applied". Both halves had to be
+	// written down, because the three shipped defects were each a case where one
+	// half was recorded and the other was assumed.
+	//
+	// ⛔ IF A LATER TRACK EVER LETS A BUDGET POST — an accrual, a provision, an
+	// auto-reversing commitment — EVERY ONE OF THESE FIVE ENTRIES BECOMES FALSE and
+	// the routes must move to existingVouchersNamedByRequest.
+	"PUT /v1/companies/{companyID}/budgets/{budgetID}": "" +
+		"a budget is a PLAN, not a ledger entry: writes no voucher_version and no posting, " +
+		"and nothing in the ledger reads it (its own dates are accounted for in " +
+		"wireDatesInPackageServer)",
+	"DELETE /v1/companies/{companyID}/budgets/{budgetID}": "" +
+		"a budget is a PLAN, not a ledger entry: deleting one moves no posted figure, and " +
+		"a plan abandoned before its period is not history",
+	"POST /v1/companies/{companyID}/budgets/{budgetID}/lines": "" +
+		"a budget line is a figure in a comparison column: writes no voucher_version and no " +
+		"posting, and the actual it is compared against is derived from the vouchers " +
+		"independently",
+	"PUT /v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID}": "" +
+		"restates a planned figure in place; writes no voucher_version and no posting",
+	"DELETE /v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID}": "" +
+		"removes a planned figure; writes no voucher_version and no posting",
+
 	// Pins an IRN/ARN onto a voucher. ledger.RegisterExternalReference writes ONE
 	// row in voucher_external_reference and NO voucher_version: no date, no
 	// amount and no posting changes. Its only effect on the voucher is to FREEZE
@@ -790,6 +940,59 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"writes only tds_challan_allocation; no voucher is restated (its stored deposit_date is " +
 		"judged separately, by storedChallanDepositDate)",
 
+	// PER-COMPANY PRINT TEMPLATES (track C). The {docKind} in the path is NOT a
+	// document id — it is a document TYPE, one of the eight strings
+	// printing.AllDocKinds names ("tax-invoice", "receipt", "report", …). There is
+	// no voucher on the other end of it and there never can be: the row these two
+	// routes write is print_template, which holds a title, letterhead lines, a
+	// declaration, terms, a signature label and a bank block.
+	//
+	// ⛔ A LAYOUT CARRIES NO DATE, so there is no stored date to judge and nothing
+	// this route could lift into or out of a locked period. It writes no
+	// voucher_version, no posting and no amount; no figure in any period's totals
+	// moves, and no filed return can be affected by it.
+	//
+	// ⚠️ WHAT IT DOES CHANGE IS WHAT A REPRINT OF AN OLD DOCUMENT LOOKS LIKE, and
+	// that is deliberate rather than overlooked. A printed document is rendered
+	// from the books at the moment it is printed, so a company that corrects its
+	// registered address will — correctly — see the corrected address when it
+	// reprints April's invoice. The alternative, versioning the template and
+	// pinning each voucher to the layout in force on its date, is a real design
+	// with a real cost and NOTHING in the schema supports it: print_template holds
+	// exactly one row per (company, doc_kind) by UNIQUE constraint. The back-dated
+	// cutoff is about ledger figures, not about typography, and conflating the two
+	// here would refuse a company its own letterhead for every locked period.
+	"PUT /v1/companies/{companyID}/print-templates/{docKind}": "" +
+		"{docKind} is a document TYPE, not a document; writes only print_template, which has no date",
+	"DELETE /v1/companies/{companyID}/print-templates/{docKind}": "" +
+		"{docKind} is a document TYPE, not a document; writes only print_template, which has no date",
+
+	// CLEARING A RECONCILIATION-QUEUE ROW (track D). The {reconID} names a
+	// reconciliation_queue row, and that row DOES carry a voucher_id — which is
+	// why the gate above asks about this route at all. But the row is a WORKFLOW
+	// RECORD ABOUT a refused attempt, not the document itself:
+	// ledger.ResolveReconciliation writes exactly one column, resolved_at, on
+	// exactly that row. No voucher_version, no posting, no amount, no date on any
+	// ledger document.
+	//
+	// ⛔ IT CANNOT LOOSEN ANYTHING, WHICH IS THE DIRECTION THAT MATTERS. Resolving
+	// does NOT replay the parked intent — nothing anywhere replays it, and the
+	// refused alter/delete stays refused. A frozen voucher stays frozen and a
+	// stale-base ALTER stays rejected; the operator's only routes back into the
+	// books are a fresh CREATE or a credit note, both of which are ordinary writes
+	// judged on their own dates. So this is the external-reference entry's shape:
+	// it can make the locked period no less immutable than it already was.
+	//
+	// ⚠️ AND UNLIKE THE BANK LEG AND THE CHALLAN ALLOCATION, IT HAS NO DATE OF ITS
+	// OWN TO JUDGE. Those two are in this map with the warning that their own
+	// asserted date IS judged separately; here there is nothing to judge, because
+	// resolved_at is set to now() inside the UPDATE and is not caller-supplied.
+	// The route carries no body at all, so there is no field in which a date could
+	// be smuggled past the cutoff.
+	"POST /v1/companies/{companyID}/reconciliation-queue/{reconID}/resolve": "" +
+		"writes only reconciliation_queue.resolved_at, server-stamped; replays no intent, so a " +
+		"refused alter/delete stays refused and the locked period is no less immutable",
+
 	// THE AI BILL INBOX's three lifecycle routes (register row D49). The
 	// {draftID} in the path names an insightd DRAFT, which is not a ledger
 	// document at all: it has no voucher_version, no posting, no ledger figure and
@@ -819,6 +1022,35 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"records WHICH voucher a human already posted; that POST /vouchers/{class} " +
 		"is where the cutoff judged the date",
 
+	// THE EMPLOYEE MASTER'S TWO EFFECTIVE-DATED CHILDREN (the payroll-screens
+	// wave). The {employeeID} in the path names an EMPLOYEE, which is a MASTER
+	// and not a ledger document at all: it has no voucher_version, no posting, no
+	// amount and no place in any period's totals. Both routes insert one row into
+	// employee_salary_structure / employee_statutory_election and restate no
+	// voucher.
+	//
+	// ⛔ THE ONE THAT LOOKS LIKE IT MIGHT MOVE MONEY IS `effective_from`, AND IT
+	// CANNOT — but the reason is worth writing down, because "a salary component
+	// is DATED" is exactly the observation that makes this route look like the
+	// class the gate is hunting. A structure row decides what a pay run COMPUTES;
+	// it posts nothing itself, and it does not retro-post into a run that has
+	// already happened (a posted month answers `already_posted` and writes
+	// nothing). So the only way a back-dated component reaches the ledger is
+	// through a pay run FOR that month — and POST /vouchers/payroll is judged by
+	// the cutoff on the date it derives from `wage_month`
+	// (peekPayrollVoucherDate). The money is stopped where the money moves.
+	//
+	// ⚠️ IF A ROUTE IS EVER ADDED THAT RE-DERIVES A POSTED PAY RUN FROM THE
+	// CURRENT STRUCTURE — payrolldb.AlterPayRunVoucher and ResumePayRun both
+	// exist and neither is mounted — THIS ENTRY STOPS BEING TRUE, because that
+	// route would turn a back-dated component into a restatement of a voucher in
+	// a locked period. Judge it there, and revisit this.
+	"POST /v1/companies/{companyID}/employees/{employeeID}/salary-components": "" +
+		"writes one employee_salary_structure row; an employee is a master, not a ledger " +
+		"document, and a component reaches the ledger only through a pay run, which is judged",
+	"POST /v1/companies/{companyID}/employees/{employeeID}/statutory-elections": "" +
+		"writes one employee_statutory_election row; same reason as the salary component above",
+
 	// Raising an e-way bill / an e-invoice AGAINST a voucher. Both are siblings
 	// of the ledger, not callers of it (archtest pins internal/ewaybill and
 	// internal/einvoice away from posting), so neither can restate or remove a
@@ -846,7 +1078,43 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 	// filed periods depend on — but it is a masters write with no date on the
 	// wire and no voucher, so it is a different control's problem, not this
 	// one's. Recorded here rather than left to silence.
-	"PUT /v1/companies/{companyID}/ledgers/{ledgerID}/opening":    "masters write; no voucher, no date",
+	"PUT /v1/companies/{companyID}/ledgers/{ledgerID}/opening": "masters write; no voucher, no date",
+
+	// THE COSTING METHOD OF A STOCK ITEM (T9). It belongs in this map for the
+	// reason the ledger opening above does, and it is the most honest entry here,
+	// so the reasoning is written out rather than compressed into six words.
+	//
+	// ⛔ IT DOES RESTATE CLOSED PERIODS, AND IT IS STILL NOT THIS CONTROL'S
+	// PROBLEM. Switching an item from WEIGHTED_AVG to FIFO changes its closing
+	// stock, its cost of goods sold and therefore the Balance Sheet and the
+	// Profit & Loss of EVERY period it has traded in — because no valuation figure
+	// is stored and the whole history is replayed from the opening on every read.
+	// A filed period's closing stock will come back a different number.
+	//
+	// But it writes NO voucher_version, NO posting and NO stock_movement: it
+	// UPDATEs one text column on a stock_item master. There is no date on the
+	// wire and no document in the path that has a date, so there is nothing for
+	// storedCutoffDateForRequest to read and nothing for the cutoff to compare —
+	// which is exactly the shape of the ledger-opening route above. The gate this
+	// map guards is "a write that can take a LEDGER ENTRY into or out of a locked
+	// period"; this cannot move an entry at all, it re-prices one.
+	//
+	// ⚠️ WHAT ACTUALLY GOVERNS IT is that it is an (Alter, "master") action, so a
+	// level that may not alter masters cannot reach it, and it writes a
+	// master_audit row naming both methods — the only record of why a period's
+	// closing stock moved. If a company needs the restatement itself locked, the
+	// control is the ACL and not the date cutoff: there is no date to judge.
+	//
+	// ⛔ IF A ROUTE IS EVER ADDED THAT MATERIALISES A VALUATION — a stored closing
+	// value, a period-end snapshot, a "freeze last year's stock" — THIS ENTRY
+	// STOPS BEING TRUE, because that route WOULD write a dated figure into a
+	// locked period. Judge it there.
+	"PUT /v1/companies/{companyID}/stock-items/{stockItemID}/valuation-method": "" +
+		"masters write: UPDATEs one column on a stock_item, writes no voucher_version, no " +
+		"posting and no stock_movement, and carries no date on the wire or in the path. It " +
+		"RE-PRICES a period (value is never stored, so the whole history is replayed) but " +
+		"cannot move a ledger entry into or out of one — the ledger-opening route above is " +
+		"the same shape. Governed by `alter master` in the ACL plus a master_audit row.",
 	"PUT /v1/companies/{companyID}/cost-categories/{categoryID}":  "master rename",
 	"PUT /v1/companies/{companyID}/cost-centres/{centreID}":       "master rename",
 	"PUT /v1/companies/{companyID}/deductor-status/{taxYear}":     "not a ledger entry",
@@ -979,5 +1247,138 @@ func TestExistingVouchersNamedByRequestIgnoresReads(t *testing.T) {
 			t.Errorf("existingVouchersNamedByRequest(%s %s, %s) named %d vouchers, want none — a read "+
 				"must never trigger the store read", tc.method, tc.path, tc.act, len(named.ids))
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// THE COMPANY-WIDE YEAR-END LOCK (migration 0089) MUST CLOSE THE SAME DOORS
+// ---------------------------------------------------------------------------
+
+// aclCloseBooks locks the company's books through `through`.
+func aclCloseBooks(t *testing.T, s *Server, base, ownerTok, through string) {
+	t.Helper()
+	rec, _ := aclRequest(t, s, http.MethodPost, base+"/books-closure", ownerTok,
+		map[string]any{"closed_through": through})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("close books through %q = %d, want 200 (%s)", through, rec.Code, rec.Body.String())
+	}
+}
+
+// TestYearEndLockRefusesADeleteOutOfAClosedYear is the round-3 attack, aimed at
+// the OTHER lock.
+//
+// ⛔⛔ THIS IS THE DEFECT THE WIRE DRIVE FOUND AND THE UNIT TESTS COULD NOT.
+// authz.Evaluate was correct from the first commit — a closed year denied every
+// write it was ASKED about. But the middleware only READS the stored voucher
+// date when `level.BackdatedCutoff != nil`, an optimisation whose whole
+// argument is "at a company that has locked no period the stored date changes
+// no decision". A company-wide year-end lock is a company that HAS locked a
+// period while every level's own cutoff is still nil — so the read was skipped,
+// StoredVoucherDate arrived nil, cutoffDeny returned early on a nil date, and
+//
+//	DELETE /v1/companies/{C}/vouchers/{id}   -> 200
+//
+// removed a voucher from a CLOSED year. Measured on the wire before the fix.
+//
+// ⚠️ THE LESSON IS ABOUT WHERE A FEATURE'S EDGES ARE. The new lock reused a
+// hardened enforcement path and inherited its correctness — but NOT the gate in
+// front of it, which was written when there was only one lock to gate on. A
+// second source of truth for "is a period locked?" needs every reader of the
+// first one to be found, and a unit test that constructs the PDP request by
+// hand cannot notice a caller that never constructs it.
+func TestYearEndLockRefusesADeleteOutOfAClosedYear(t *testing.T) {
+	s := payrollServer(t)
+	f := newSpellingFixture(t, s)
+
+	const no = "YEAR-END-DELETE-IN-LOCK"
+	vid := postJournal(t, s, f, "2026-05-01", no)
+
+	// ⛔ NO PER-LEVEL CUTOFF IS SET. That is the whole point: the only lock in
+	// force is the company's year-end, which is what a real year-end looks like.
+	aclCloseBooks(t, s, f.base, f.ownerTok, "2026-06-30")
+
+	// ------------------------------------------------------------------ CONTROL
+	rec, _ := aclRequest(t, s, http.MethodPost, f.base+"/vouchers/journal", f.ownerTok,
+		f.journal("2026-05-01", "YEAR-END-DELETE-CONTROL"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("CONTROL: POST /vouchers/journal dated inside a closed year = %d, want 403 (%s)",
+			rec.Code, rec.Body.String())
+	}
+
+	// ------------------------------------------------------------------- ATTACK
+	rec, _ = aclRequest(t, s, http.MethodDelete, f.base+"/vouchers/"+vid, f.ownerTok, nil)
+	_, version, found := storedVoucherHead(t, s, f.base, vid, f.ownerTok)
+	inBooks := dayBookHas(t, s, f.base, no, f.ownerTok)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("ATTACK: DELETE of a voucher dated 2026-05-01 with the books CLOSED through "+
+			"2026-06-30 = %d, want 403 — a voucher was removed from a closed year. The head is now "+
+			"%s and the Day Book shows it: %v (%s)", rec.Code,
+			map[bool]string{true: "STILL PRESENT", false: "GONE FROM THE BOOKS"}[found],
+			inBooks, rec.Body.String())
+	}
+	// ⛔ ASSERT THE BOOKS TWICE, through two independent reads — a 403 that
+	// wrote the tombstone anyway is the failure this pair exists to catch.
+	if !found {
+		t.Errorf("after a refused DELETE the voucher is GONE from GET /vouchers/%s", vid)
+	}
+	if version != 1 {
+		t.Errorf("after a refused DELETE the voucher is at version %d, want 1", version)
+	}
+	if !inBooks {
+		t.Errorf("after a refused DELETE the Day Book no longer shows %s", no)
+	}
+}
+
+// TestYearEndLockRefusesAnAlterThatLiftsAVoucherOutOfAClosedYear is the other
+// door: restating a voucher with a date in the OPEN year empties the closed one
+// without ever sending a date the lock would refuse.
+func TestYearEndLockRefusesAnAlterThatLiftsAVoucherOutOfAClosedYear(t *testing.T) {
+	s := payrollServer(t)
+	f := newSpellingFixture(t, s)
+
+	const no = "YEAR-END-ALTER-OUT"
+	vid := postJournal(t, s, f, "2026-05-01", no)
+	aclCloseBooks(t, s, f.base, f.ownerTok, "2026-06-30")
+
+	// Every date IN the request is comfortably after the lock; only the date
+	// already in the books is inside it.
+	rec, _ := aclRequest(t, s, http.MethodPut, f.base+"/vouchers/journal/"+vid, f.ownerTok,
+		f.journal("2026-08-20", no))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("ALTER lifting a voucher out of a closed year = %d, want 403 — the request "+
+			"carries no date the lock would refuse, so only the STORED date can catch it (%s)",
+			rec.Code, rec.Body.String())
+	}
+	if got := aclVoucherDate(t, s, f.base, vid, f.ownerTok); got != "2026-05-01" {
+		t.Errorf("the voucher moved to %s behind the refusal; it must still be 2026-05-01", got)
+	}
+}
+
+// TestYearEndLockStillAllowsEditingTheOPENYear is the CONTROL, and without it
+// every assertion above is satisfied by a lock that refuses all editing
+// forever. A closed year must not freeze the year the business is trading in.
+func TestYearEndLockStillAllowsEditingTheOPENYear(t *testing.T) {
+	s := payrollServer(t)
+	f := newSpellingFixture(t, s)
+
+	vid := postJournal(t, s, f, "2026-09-10", "YEAR-END-OPEN-EDIT")
+	aclCloseBooks(t, s, f.base, f.ownerTok, "2026-06-30")
+
+	rec, _ := aclRequest(t, s, http.MethodPut, f.base+"/vouchers/journal/"+vid, f.ownerTok,
+		f.journal("2026-09-20", "YEAR-END-OPEN-EDIT"))
+	if rec.Code != http.StatusOK {
+		t.Errorf("ALTER of a voucher wholly inside the OPEN year = %d, want 200 (%s)",
+			rec.Code, rec.Body.String())
+	}
+	rec, _ = aclRequest(t, s, http.MethodDelete, f.base+"/vouchers/"+vid, f.ownerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("DELETE of a voucher wholly inside the OPEN year = %d, want 200 — a year-end "+
+			"lock that freezes the current year would stop the business trading (%s)",
+			rec.Code, rec.Body.String())
+	}
+	rec, _ = aclRequest(t, s, http.MethodPost, f.base+"/vouchers/journal", f.ownerTok,
+		f.journal("2026-09-25", "YEAR-END-OPEN-CREATE"))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("CREATE in the OPEN year = %d, want 201 (%s)", rec.Code, rec.Body.String())
 	}
 }

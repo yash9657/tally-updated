@@ -173,6 +173,63 @@ func (s *Service) GroupID(ctx context.Context, name string) (uuid.UUID, error) {
 	return s.resolveID(ctx, "account_group", name)
 }
 
+// GroupIDByName resolves an account group case- and whitespace-insensitively,
+// returning its id AND the name as actually stored. The stored name is the half
+// callers need: every other lookup on this table matches EXACTLY, so a caller
+// holding "Cash-in-hand" must learn that the company's group is spelled
+// "Cash-in-Hand" before it can create a ledger under it.
+//
+// ⛔ IT EXISTS BECAUSE A NEAR-MISS HERE CREATES A SECOND GROUP RATHER THAN
+// FAILING. account_group is unique on (company_id, name) and — unlike ledger,
+// stock_item and unit since migration 0075 — has NO normalised unique index. So
+// "Cash-in-hand" INSERTs happily alongside the seeded "Cash-in-Hand", and the
+// company silently acquires two groups that a human reads as one, with its
+// ledgers split across them and the Balance Sheet listing both. Tally's own
+// export spells two of its built-in groups with a lowercase h, so an importer
+// that resolves exactly would do this on the very first real file.
+func (s *Service) GroupIDByName(ctx context.Context, name string) (uuid.UUID, string, error) {
+	var (
+		id     uuid.UUID
+		stored string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT id, name FROM account_group WHERE lower(btrim(name)) = lower(btrim($1))`,
+			name).Scan(&id, &stored)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: account_group %q", ErrNotFound, name)
+		}
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, stored, nil
+}
+
+// EnsureGroup resolves an account group by name (case-insensitively, per
+// GroupIDByName) and creates it if absent, returning the id and the name as
+// stored. An already-present group is returned UNCHANGED — its parent and nature
+// are never restated, so re-importing a chart of accounts cannot reshape one.
+//
+// g.ParentName must already name an existing group; pass the STORED spelling
+// (this method's own second return value for the parent) because CreateGroup
+// resolves the parent exactly.
+func (s *Service) EnsureGroup(ctx context.Context, g Group, createdBy string) (uuid.UUID, string, error) {
+	id, stored, err := s.GroupIDByName(ctx, g.Name)
+	if err == nil {
+		return id, stored, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return uuid.Nil, "", err
+	}
+	id, err = s.CreateGroup(ctx, g, createdBy)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, g.Name, nil
+}
+
 // --------------------------------------------------------------------------
 // Ledger
 // --------------------------------------------------------------------------
@@ -233,6 +290,10 @@ type Ledger struct {
 	RegistrationType   GSTRegistrationType
 	PAN                string
 	CreditDays         *int
+	// CreditLimit is the party's credit limit (migration 0103). nil = no
+	// limit agreed, written NULL; a zero is the real instruction "no credit"
+	// and is kept as 0. See 0103's header for why the two must not collapse.
+	CreditLimit *decimal.Decimal
 
 	// Address is the party's POSTAL ADDRESS as a NEWLINE-SEPARATED BLOCK, and
 	// City / PIN complete it. Migration 0039 stores all three exactly as
@@ -280,6 +341,15 @@ type Ledger struct {
 	// requires it to ADD UP — CreateLedger enforces both. Empty is fine for a
 	// ledger with no opening balance or with bill-wise tracking off.
 	OpeningBills []OpeningBill
+
+	// BornOfRun, when set, is the AGENT RUN whose commit is creating this
+	// ledger (migration 0095). ⛔ A ledger born of a run is BORN BLOCKED: it
+	// takes no posting until a person unblocks it (UnblockLedger). The two are
+	// one field on purpose — there is no way to say "the agent made this" and
+	// "but it may be paid at once" in the same call. Set ONLY by
+	// internal/server from the request's in-process agent identity, never from
+	// a request body.
+	BornOfRun uuid.UUID
 }
 
 // OpeningBill is one bill of a ledger's opening bill-wise breakup.
@@ -289,13 +359,101 @@ type OpeningBill struct {
 	DrCr    string // "D" or "C"
 	Amount  decimal.Decimal
 	DueDate string // ISO date, or "" for none
+
+	// ⭐⭐ T8 STEP 6 ADDED THE TRIPLE HERE, AND IT IS A GAP RATHER THAN A FEATURE
+	// REQUEST. Migration 0080 put `currency_id`, `foreign_amount` and `rate` on
+	// `ledger_opening_bill` — with a COMMENT ON COLUMN explaining that
+	// Outstandings nets this table in a UNION with `bill_allocation`, so a
+	// base-only opening bill would net into the same ref_name group as the
+	// foreign allocations that settle it — and then NO WRITE PATH EVER SET THEM.
+	// The columns existed, the CHECK constraint guarded them, and a foreign
+	// opening bill could not be keyed through the product at all.
+	//
+	// ⛔ WHICH MADE THE REPORT BRANCH THAT READS THEM UNREACHABLE. §0.2 of the
+	// design memo is a whole section on why the opening breakup must carry a
+	// currency; step 6 could read it and could not create one to read, so the
+	// branch could be verified only against hand-written SQL — and a report
+	// branch whose only fixture is an INSERT nobody in the field can produce is
+	// a branch that is asserted, not tested.
+	//
+	// ⚠️ ALL-OR-NONE, AND THE DATABASE IS STILL THE AUTHORITY.
+	// `ledger_opening_bill_forex_all_or_none` fires whatever this struct carries;
+	// `validate` below turns it into a sentence that names WHICH of the three is
+	// missing, exactly as `ledger.forexTriple.validate` does for a posting. The
+	// two-of-three row is the dangerous one: it lets a report compute a plausible
+	// wrong number.
+	//
+	// ⛔ AND THE RATE IS THE RATE THE OPENING BILL WAS RAISED AT — the historical
+	// truth of that bill, never re-read from `currency_rate`. Step 5's engine
+	// differences a settlement against exactly this value (`openBillForex` reads
+	// this table), so a wrong rate here is a wrong realised gain later.
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
+}
+
+// isBase reports whether this opening bill is carried in the books' own currency.
+// ⛔ THE ENCODING IS 0080's AND THERE IS ONLY ONE: no currency at all. A zero uuid
+// and a zero rate are what "base" looks like on the way in; NULL is what it looks
+// like in the table, and `nullForexOpening` is the single place that maps between
+// them.
+func (b OpeningBill) isBase() bool {
+	return b.CurrencyID == uuid.Nil && b.ForeignAmount.IsZero() && b.Rate.IsZero()
+}
+
+// validateForex turns `ledger_opening_bill_forex_all_or_none` into a sentence.
+// ⚠️ IT MIRRORS `ledger.forexTriple.validate` DELIBERATELY, including its reasoning:
+// `violates check constraint "ledger_opening_bill_forex_all_or_none"` is true and
+// tells an operator nothing they can act on.
+func (b OpeningBill) validateForex() error {
+	if b.isBase() {
+		return nil
+	}
+	switch {
+	case b.CurrencyID == uuid.Nil:
+		return fmt.Errorf("masters: opening bill %q names a foreign amount or a rate but "+
+			"no currency; a foreign figure needs all three of currency, foreign amount "+
+			"and rate, or none of them (an opening bill with no currency IS the base "+
+			"currency)", b.RefName)
+	case b.ForeignAmount.IsZero():
+		return fmt.Errorf("masters: opening bill %q names a currency but no foreign "+
+			"amount; a foreign figure needs all three of currency, foreign amount and "+
+			"rate", b.RefName)
+	case b.ForeignAmount.IsNegative():
+		return fmt.Errorf("masters: opening bill %q has a negative foreign amount (%s); "+
+			"direction is carried by dr_cr, so every amount on an opening bill is "+
+			"unsigned", b.RefName, b.ForeignAmount.StringFixed(4))
+	case b.Rate.IsZero():
+		return fmt.Errorf("masters: opening bill %q names a currency but no exchange "+
+			"rate; a foreign figure needs all three of currency, foreign amount and "+
+			"rate", b.RefName)
+	case b.Rate.IsNegative():
+		return fmt.Errorf("masters: opening bill %q has a negative exchange rate (%s); a "+
+			"rate is base units per one foreign unit and is always above zero",
+			b.RefName, b.Rate.String())
+	}
+	return nil
+}
+
+// nullForexOpening maps the triple to the three query arguments.
+//
+// ⛔ nil, NEVER THE ZERO VALUE — `ledger.nullForex`'s reasoning, restated here
+// because this package cannot import it: uuid.Nil is a legal-looking uuid and 0 is
+// a legal-looking numeric, and either would satisfy the all-or-none CHECK as a
+// PRESENT value, quietly marking a rupee opening bill as foreign against a currency
+// that does not exist.
+func nullForexOpening(b OpeningBill) (any, any, any) {
+	if b.isBase() {
+		return nil, nil, nil
+	}
+	return b.CurrencyID, b.ForeignAmount, b.Rate
 }
 
 // EnsureLedger resolves a ledger by name, creating it under groupName if it does
 // not exist. It is the convenience entry point for callers (and other agents)
 // that just need a ledger to post to. Returns the ledger id.
 func (s *Service) EnsureLedger(ctx context.Context, name, groupName string, createdBy string) (uuid.UUID, error) {
-	id, err := s.resolveID(ctx, "ledger", name)
+	id, _, err := s.LedgerIDByName(ctx, name)
 	if err == nil {
 		return id, nil
 	}
@@ -305,13 +463,49 @@ func (s *Service) EnsureLedger(ctx context.Context, name, groupName string, crea
 	return s.CreateLedger(ctx, Ledger{Name: name, GroupName: groupName}, createdBy)
 }
 
+// LedgerIDByName resolves a ledger case- and whitespace-insensitively, returning
+// its id and the name as stored.
+//
+// ⛔ THE ENSURE VERBS MUST MATCH THE WAY UNIQUENESS IS ENFORCED, and since
+// migration 0075 that is lower(btrim(name)), not the raw string. Resolving
+// exactly while refusing normalised leaves a gap that nothing can get through:
+// the resolve misses, the create is refused as a duplicate, and the caller — who
+// asked only for "make sure this exists" — gets an error for a ledger that DOES
+// exist. A real Tally import walked straight into it on its 2,522nd master, an
+// export naming "SALARY PAYABLE" against the seeded "Salary Payable", and the
+// whole migration stopped there.
+//
+// LedgerID() stays EXACT on purpose: it answers "the ledger by this name", and a
+// caller resolving a name a human typed should not be silently given a different
+// spelling. This one answers "the ledger this name would collide with", which is
+// the question ensure is really asking.
+func (s *Service) LedgerIDByName(ctx context.Context, name string) (uuid.UUID, string, error) {
+	var (
+		id     uuid.UUID
+		stored string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT id, name FROM ledger WHERE lower(btrim(name)) = lower(btrim($1))`,
+			name).Scan(&id, &stored)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: ledger %q", ErrNotFound, name)
+		}
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, stored, nil
+}
+
 // EnsureLedgerWithOpening resolves a ledger by name; if it already exists it is
 // returned UNCHANGED (an opening balance or GST master already set is never
 // clobbered — resolve-first). If absent it is created with the supplied opening
 // balance and GST master attributes. This is the importer's first-pass entry
 // point for LEDGER masters carrying an opening balance and/or GST identity.
 func (s *Service) EnsureLedgerWithOpening(ctx context.Context, l Ledger, createdBy string) (uuid.UUID, error) {
-	id, err := s.resolveID(ctx, "ledger", l.Name)
+	id, _, err := s.LedgerIDByName(ctx, l.Name)
 	if err == nil {
 		return id, nil
 	}
@@ -512,6 +706,9 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			if b.DrCr != "" && b.DrCr != "D" && b.DrCr != "C" {
 				return uuid.Nil, fmt.Errorf("masters: opening bill %q has invalid dr/cr %q", b.RefName, b.DrCr)
 			}
+			if err := b.validateForex(); err != nil {
+				return uuid.Nil, err
+			}
 			sum = sum.Add(b.Amount)
 		}
 		if !sum.Equal(l.OpeningBalance) {
@@ -550,21 +747,32 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 		if err := refuseIfNameTaken(ctx, tx, "ledger", l.Name, "ledger", "name"); err != nil {
 			return err
 		}
+		// ⛔ BORN BLOCKED (0095): a ledger the agent is creating carries its
+		// block from the INSERT itself, so there is no instant, however short,
+		// at which it exists and could be posted to.
+		var bornOfRun, blockedReason any
+		if l.BornOfRun != uuid.Nil {
+			bornOfRun = l.BornOfRun
+			blockedReason = BornBlockedReason(l.BornOfRun)
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO ledger
 			   (id, company_id, name, group_id, opening_balance, opening_dc,
 			    maintain_bill_by_bill, gstin, state_code, registration_type,
 			    pan, credit_days, address, city, pincode,
-			    bank_account_number, bank_ifsc)
+			    bank_account_number, bank_ifsc,
+			    created_by_run, blocked_at, blocked_reason, credit_limit)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7,
 			         NULLIF($8,''), NULLIF($9,''), $10::gst_registration_type,
 			         NULLIF($11,''), $12,
 			         NULLIF($13,''), NULLIF($14,''), NULLIF($15,''),
-			         NULLIF($16,''), NULLIF($17,''))`,
+			         NULLIF($16,''), NULLIF($17,''),
+			         $18, CASE WHEN $19::text IS NULL THEN NULL ELSE now() END, $19::text, $20)`,
 			id, companyID, l.Name, groupID, l.OpeningBalance, l.OpeningDC,
 			l.MaintainBillByBill, l.GSTIN, l.StateCode, string(l.RegistrationType),
 			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
 			l.BankAccountNumber, strings.ToUpper(strings.TrimSpace(l.BankIFSC)),
+			bornOfRun, blockedReason, l.CreditLimit,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"ledger_company_name_normalised", "ledger", l.Name, "insert ledger")
@@ -583,11 +791,15 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 				// Default to the side the opening balance itself sits on.
 				drcr = l.OpeningDC
 			}
+			fxCur, fxAmt, fxRate := nullForexOpening(b)
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO ledger_opening_bill
-				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date)
-				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date)`,
+				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date,
+				    currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date,
+				         $9, $10, $11)`,
 				billID, companyID, id, b.RefName, refType, drcr, b.Amount, b.DueDate,
+				fxCur, fxAmt, fxRate,
 			); err != nil {
 				return fmt.Errorf("masters: insert opening bill %q: %w", b.RefName, err)
 			}
@@ -606,6 +818,15 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			// what the master said at the time, and an unaudited field cannot
 			// answer it.
 			"bank_account_number": l.BankAccountNumber, "bank_ifsc": l.BankIFSC,
+		}
+		if l.BornOfRun != uuid.Nil {
+			after["blocked"] = true
+			after["created_by_run"] = l.BornOfRun.String()
+		}
+		// Audited only when set, so every ledger created before 0103 keeps
+		// the audit-doc keys it always had.
+		if l.CreditLimit != nil {
+			after["credit_limit"] = l.CreditLimit.StringFixed(2)
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", id, OpCreate, nil, after, createdBy)
 	})
@@ -644,6 +865,9 @@ func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, open
 			}
 			if b.Amount.IsNegative() {
 				return fmt.Errorf("masters: opening bill %q has a negative amount", b.RefName)
+			}
+			if err := b.validateForex(); err != nil {
+				return err
 			}
 			sum = sum.Add(b.Amount)
 		}
@@ -700,11 +924,15 @@ func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, open
 			if drcr == "" {
 				drcr = openingDC
 			}
+			fxCur, fxAmt, fxRate := nullForexOpening(b)
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO ledger_opening_bill
-				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date)
-				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date)`,
+				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date,
+				    currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date,
+				         $9, $10, $11)`,
 				billID, companyID, ledgerID, b.RefName, refType, drcr, b.Amount, b.DueDate,
+				fxCur, fxAmt, fxRate,
 			); err != nil {
 				return fmt.Errorf("masters: insert opening bill %q: %w", b.RefName, err)
 			}
@@ -720,6 +948,33 @@ func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, open
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", ledgerID, OpAlter, before, after, createdBy)
 	})
+}
+
+// LedgerOpening returns a ledger's opening balance and its Dr/Cr side.
+//
+// It exists for the importer, which must tell two situations apart that the
+// ensure verbs deliberately blur: a ledger it just created (opening already
+// written) and one that was ALREADY THERE — seeded, or from an earlier import —
+// whose opening is still zero and whose real opening is sitting in the file.
+// EnsureLedgerWithOpening returns an existing ledger UNCHANGED, which is the
+// right rule and, on its own, silently drops that opening.
+func (s *Service) LedgerOpening(ctx context.Context, id uuid.UUID) (decimal.Decimal, string, error) {
+	var (
+		bal decimal.Decimal
+		dc  string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT opening_balance, opening_dc FROM ledger WHERE id = $1`, id).Scan(&bal, &dc)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: ledger %s", ErrNotFound, id)
+		}
+		return err
+	})
+	if err != nil {
+		return decimal.Zero, "", err
+	}
+	return bal, dc, nil
 }
 
 // LedgerID resolves a ledger's id by name within the company in context.
@@ -891,7 +1146,36 @@ type Unit struct {
 	Symbol        string
 	FormalName    string
 	DecimalPlaces int
+	// BaseUnitSymbol and ConversionFactor make this a COMPOUND unit (T10):
+	// 1 <Symbol> = <ConversionFactor> <BaseUnitSymbol>, e.g. 1 BOX = 12 NOS.
+	// Both empty/zero is a SIMPLE unit, which is what every unit created before
+	// T10 is and what every caller that does not know about this field creates.
+	//
+	// ⛔ A QUANTITY IS NEVER CONVERTED ON THE WAY IN. A movement of 5 BOX stores
+	// 5.0000 in BOX, and a report that wants pieces multiplies at READ time —
+	// the same rule stock VALUE follows, for the same reason: an inbound
+	// conversion destroys the number that was keyed, so the invoice and the stock
+	// ledger would no longer agree, and correcting a factor later (the supplier
+	// repacks 12 to a box as 10) could not restate the history. See migration
+	// 0079's header.
+	BaseUnitSymbol   string
+	ConversionFactor decimal.Decimal
 }
+
+// UnitRecord is a unit as stored, for a list or a picker: the symbol, and — for
+// a compound unit — what it is defined in terms of.
+type UnitRecord struct {
+	ID               uuid.UUID
+	Symbol           string
+	FormalName       string
+	DecimalPlaces    int
+	BaseUnitSymbol   string
+	ConversionFactor decimal.Decimal
+	IsSystem         bool
+}
+
+// Compound reports whether the unit is defined in terms of another.
+func (u UnitRecord) Compound() bool { return u.BaseUnitSymbol != "" }
 
 // CreateUnit creates a unit of measure and appends a master_audit row.
 func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uuid.UUID, error) {
@@ -909,6 +1193,24 @@ func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uui
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("masters: new unit id: %w", err)
 	}
+	// A compound unit needs BOTH halves or neither: the CHECK constraint
+	// unit_compound_is_whole says so too, and catching it here names the field.
+	compound := strings.TrimSpace(u.BaseUnitSymbol) != ""
+	if compound && !u.ConversionFactor.IsPositive() {
+		return uuid.Nil, fmt.Errorf(
+			"masters: unit %q is defined in terms of %q, so it needs a conversion factor greater "+
+				"than zero (1 %s = ? %s); a factor of zero would make every quantity in %s worth "+
+				"nothing in %s",
+			u.Symbol, u.BaseUnitSymbol, u.Symbol, u.BaseUnitSymbol, u.Symbol, u.BaseUnitSymbol)
+	}
+	if !compound && !u.ConversionFactor.IsZero() {
+		return uuid.Nil, fmt.Errorf(
+			"masters: unit %q carries a conversion factor of %s and names no base unit to convert "+
+				"TO — a factor with no base converts to nothing, and a unit that looks compound to "+
+				"a reader and cannot be restated is worse than a simple one",
+			u.Symbol, u.ConversionFactor.String())
+	}
+
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		// D90: refuse a NORMALISED collision here, so the message can name
 		// the master the operator actually has. The unique index behind it
@@ -916,15 +1218,55 @@ func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uui
 		if err := refuseIfNameTaken(ctx, tx, "unit", u.Symbol, "unit", "symbol"); err != nil {
 			return err
 		}
+		var baseID *uuid.UUID
+		var factor *decimal.Decimal
+		if compound {
+			var (
+				bid      uuid.UUID
+				baseBase *uuid.UUID
+			)
+			err := tx.QueryRow(ctx,
+				`SELECT id, base_unit_id FROM unit
+				  WHERE lower(btrim(symbol)) = lower(btrim($1))`,
+				u.BaseUnitSymbol).Scan(&bid, &baseBase)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("masters: %w: base unit %q (create it before the compound unit "+
+					"that is measured in it)", ErrNotFound, u.BaseUnitSymbol)
+			}
+			if err != nil {
+				return fmt.Errorf("masters: resolve base unit: %w", err)
+			}
+			// ⛔ A CHAIN IS REFUSED, NOT FLATTENED. Tally allows a compound unit
+			// whose base is itself compound (a PALLET of 20 BOX of 12 NOS) and
+			// this build does not, because a conversion that resolves ONE level
+			// of a two-level chain is wrong by the second factor — a factor of
+			// twelve, reported as confidently as any other number. Refusing says
+			// so; resolving one level would not.
+			if baseBase != nil {
+				return fmt.Errorf(
+					"masters: unit %q would be measured in %q, which is itself a compound unit. "+
+						"This build converts ONE level only, so a chain is refused rather than "+
+						"half-resolved — define %q in terms of the SIMPLE unit at the bottom of "+
+						"the chain instead",
+					u.Symbol, u.BaseUnitSymbol, u.Symbol)
+			}
+			f := u.ConversionFactor
+			baseID, factor = &bid, &f
+		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO unit (id, company_id, symbol, formal_name, decimal_places)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			id, companyID, u.Symbol, u.FormalName, u.DecimalPlaces,
+			`INSERT INTO unit (id, company_id, symbol, formal_name, decimal_places,
+			                   base_unit_id, conversion_factor)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			id, companyID, u.Symbol, u.FormalName, u.DecimalPlaces, baseID, factor,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"unit_company_symbol_normalised", "unit", u.Symbol, "insert unit")
 		}
 		after := map[string]any{"symbol": u.Symbol, "formal_name": u.FormalName}
+		if compound {
+			after["base_unit"] = u.BaseUnitSymbol
+			after["conversion_factor"] = u.ConversionFactor.String()
+		}
 		return appendAudit(ctx, tx, companyID, "unit", id, OpCreate, nil, after, createdBy)
 	})
 	if err != nil {
@@ -973,6 +1315,29 @@ type StockItem struct {
 	// — is the one that cannot express where the stock is.
 	OpeningQty  decimal.Decimal
 	OpeningRate decimal.Decimal
+	// StockGroupName is the item's STOCK GROUP (T10), or empty for an ungrouped
+	// item — which is a real state (Tally's "under Primary") and not a missing
+	// value: the Stock Summary renders ungrouped items as a stated bucket rather
+	// than hiding them or filing them somewhere nobody chose.
+	//
+	// ⚠️ RESOLVED CASE-INSENSITIVELY and it must ALREADY EXIST. Creating a group
+	// implicitly from a misspelling here is how a company ends up with "Raw
+	// Materials" and "Raw materials" subtotalling half its stock each.
+	StockGroupName string
+	// ValuationMethod is the COSTING METHOD this item's movements are replayed
+	// through — inventory.MethodWeightedAverage (the default, and Tally's),
+	// MethodFIFO or MethodLIFO. Empty means "the default", so every caller that
+	// predates T9 keeps creating weighted-average items without knowing the
+	// field exists.
+	//
+	// ⛔ IT IS VALIDATED AGAINST inventory.ValuerFor AND NOT AGAINST A LIST HERE.
+	// A method this binary has no valuer for must never reach the column: the
+	// reports would then fail on the Stock Summary and the Balance Sheet — loudly,
+	// by design, but for the whole company and not just this item, and long after
+	// the master was created. There are exactly two copies of the vocabulary (the
+	// valuers, and migration 0078's CHECK) and TestValuationMethodsMatchTheMigration
+	// pins them to each other.
+	ValuationMethod string
 }
 
 // CreateStockItem creates a stock item and appends a master_audit row. If
@@ -989,6 +1354,10 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 	if si.OpeningRate.IsNegative() {
 		return uuid.Nil, fmt.Errorf("masters: stock item %q has a negative opening rate %s",
 			si.Name, si.OpeningRate.StringFixed(4))
+	}
+	method, err := valuationMethodOrDefault(si.ValuationMethod)
+	if err != nil {
+		return uuid.Nil, err
 	}
 	companyID, ok := db.CompanyFromContext(ctx)
 	if !ok {
@@ -1011,6 +1380,21 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 			}
 			unitID = &uid
 		}
+		var groupID *uuid.UUID
+		if strings.TrimSpace(si.StockGroupName) != "" {
+			var gid uuid.UUID
+			err := tx.QueryRow(ctx,
+				`SELECT id FROM stock_group WHERE lower(btrim(name)) = lower(btrim($1))`,
+				si.StockGroupName).Scan(&gid)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("masters: %w: stock group %q (create the group before the item "+
+					"that belongs to it)", ErrNotFound, si.StockGroupName)
+			}
+			if err != nil {
+				return fmt.Errorf("masters: resolve stock group: %w", err)
+			}
+			groupID = &gid
+		}
 		// D90: refuse a NORMALISED collision here, so the message can name
 		// the master the operator actually has. The unique index behind it
 		// is still the authority and still catches a race.
@@ -1019,9 +1403,9 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO stock_item
-			   (id, company_id, name, unit_id, hsn, gst_rate_pct)
-			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6)`,
-			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct,
+			   (id, company_id, name, unit_id, hsn, gst_rate_pct, valuation_method, stock_group_id)
+			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6, $7, $8)`,
+			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct, method, groupID,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"stock_item_company_name_normalised", "stock item", si.Name, "insert stock item")
@@ -1029,6 +1413,12 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		after := map[string]any{
 			"name": si.Name, "unit": si.UnitSymbol, "hsn": si.HSN,
 			"gst_rate_pct": si.GSTRatePct.String(),
+			"stock_group":  si.StockGroupName,
+			// The costing method is in the audit row because it decides every
+			// value this item will ever be reported at. A master_audit trail that
+			// recorded the name and not the basis could not explain why the
+			// Balance Sheet moved.
+			"valuation_method": method,
 		}
 		// An opening position is only recorded when there IS one. A zero row
 		// would claim a position exists at Main Location for every item ever

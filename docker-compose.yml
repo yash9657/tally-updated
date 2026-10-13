@@ -1,7 +1,16 @@
 # Local development services. Production runs Aurora PostgreSQL 16 in AWS ap-south-1 (see infra/).
 services:
   db:
-    image: postgres:16
+    # pgvector/pgvector = postgres:16 + the pgvector extension (W3 wave 2,
+    # migration 0098: halfvec(1024) + HNSW). Same major version, same data
+    # directory format: an existing tally_pgdata volume starts under it.
+    # ⛔ THE -trixie TAG IS DELIBERATE. postgres:16 is Debian 13 (glibc 2.41);
+    # the bare pgvector:pg16 tag is Debian 12 (glibc 2.36), and starting a
+    # 2.41 data directory under it was MEASURED to raise "collation version
+    # mismatch" — every text index would need a REINDEX. pg16-trixie keeps
+    # glibc 2.41: the same volume came up clean. Switching an existing
+    # container: docs/design/d122-w3-data-understanding.md, "Wave 2".
+    image: pgvector/pgvector:pg16-trixie
     container_name: tally_pg
     environment:
       POSTGRES_PASSWORD: postgres

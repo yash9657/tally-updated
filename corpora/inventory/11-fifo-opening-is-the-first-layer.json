@@ -1,0 +1,64 @@
+{
+  "id": "11-fifo-opening-is-the-first-layer",
+  "description": "THE OPENING POSITION IS ONE LAYER, AND UNDER FIFO IT IS THE FIRST ONE OUT. The books open with 4.0000 units at 25.0000 = 100.0000 (a stock_opening row, not a movement). PUR-1 then receives 10.0000 @ 50.0000 = 500.0000. SAL-1 issues 6.0000: FIFO empties the OPENING layer first (all 4.0000 units, 100.0000) and takes the remaining 2.0000 out of PUR-1 at 50.0000 (100.0000) -> consumed 200.0000. Closing 8.0000 units, all of them PUR-1's, at 400.0000, rate 50.0000. Conservation: 100.0000 + 500.0000 - 200.0000 = 400.0000. WHY THIS FIXTURE EXISTS SEPARATELY FROM 08: a replay seeds its state from the opening as a bare quantity-and-value pair with NO layer list, so a lot-queue valuer that only ever appended layers on a receipt would have found an empty queue, consumed nothing at all for the first 4.0000 units and reported this position at 500.0000 - value invented out of an opening it could not see. Weighted average on the same three facts consumes 257.1429 and closes at 342.8571, so this is also a third distinct answer from the same books.",
+  "valuationMethod": "FIFO",
+  "openings": [
+    {
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "qty": "4.0000",
+      "rate": "25.0000"
+    }
+  ],
+  "movements": [
+    {
+      "voucherDate": "2026-04-02",
+      "voucherNo": "PUR-1",
+      "voucherId": "0195c000-0000-7000-8000-000000001101",
+      "versionCreatedAt": "2026-04-02T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "50.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-04",
+      "voucherNo": "SAL-1",
+      "voucherId": "0195c000-0000-7000-8000-000000001102",
+      "versionCreatedAt": "2026-04-04T12:00:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "6.0000",
+      "rate": "95.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "4.0000",
+        "openingValue": "100.0000",
+        "inwardQty": "10.0000",
+        "inwardValue": "500.0000",
+        "outwardQty": "6.0000",
+        "outwardValue": "200.0000",
+        "closingQty": "8.0000",
+        "closingValue": "400.0000",
+        "closingRate": "50.0000"
+      }
+    ]
+  }
+}

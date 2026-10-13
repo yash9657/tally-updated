@@ -60,6 +60,7 @@ package server_test
 // billAllocation.ts's header now tells clients to do.
 
 import (
+	"github.com/khata/cored/internal/reporting"
 	"net/http"
 	"strings"
 	"testing"
@@ -284,8 +285,32 @@ func TestAnUnnamedBillReferenceReachesTheAgeingReport(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("control sale = %d (%s)", rec.Code, rec.Body.String())
 	}
-	if got := f.outstandingBills(t, srv, f.cashID); len(got) != 0 {
-		t.Fatalf("a party with no bill references has bills in the ageing report: %+v", got)
+	// ⛔ IT SHOWS AS `On Account`, NOT AS NOTHING, AND NOT AS A BILL (D106).
+	// This assertion used to read `len(got) != 0` — "a party with no references has
+	// nothing in the ageing report" — and that was the defect, not the control: the
+	// 1,000 reached Sundry Debtors below while the report that is supposed to
+	// explain Sundry Debtors showed it nowhere. What the control has to prove is
+	// that the server does not INVENT A NAMED BILL, and this proves it better:
+	// exactly one row, named the on-account bucket, flagged, and UN-AGED.
+	if got := f.outstandingBills(t, srv, f.cashID); len(got) != 1 {
+		t.Fatalf("a party with no bill references should show exactly one On Account "+
+			"row, got %+v", got)
+	} else {
+		row := got[0]
+		if name, _ := row["ref_name"].(string); name != reporting.OnAccountRefName {
+			t.Fatalf("the unreferenced 1,000 is reported as a bill named %q — the "+
+				"server invented a bill for a voucher that named none", name)
+		}
+		if on, _ := row["on_account"].(bool); !on {
+			t.Fatalf("the On Account row is not flagged on_account: %+v", row)
+		}
+		if slab, _ := row["slab"].(string); slab != "" {
+			t.Fatalf("the On Account row was aged into slab %q; money with no bill has "+
+				"no due date to be overdue against", slab)
+		}
+		if pend, _ := row["pending"].(string); pend != "1000.0000" {
+			t.Fatalf("On Account pending = %q, want 1000.0000", pend)
+		}
 	}
 	if debtors := f.sundryDebtors(t, srv); debtors != "95400.0000" {
 		t.Fatalf("Sundry Debtors %q, want 95400.0000 — the control sale is missing "+
@@ -382,7 +407,16 @@ func TestAReceiptSettlesTheBillItNames(t *testing.T) {
 
 // TestAnAlterRebuiltFromTheGetKeepsTheBill is §12 item 4a: a form rebuilt from
 // GET /vouchers/{id} must re-send the references, WITH the control that an alter
-// omitting them destroys the bill.
+// omitting them is REFUSED.
+//
+// ⭐ THE CONTROL GOT STRONGER AT D106, NOT WEAKER. It used to prove that an alter
+// dropping the references DESTROYED the bill — which made re-sending them
+// load-bearing, but only because the alternative was silent data loss: the
+// receivable stayed on the Balance Sheet while the report that ages it went
+// blank. Since the bill-by-bill coverage rule the same alter cannot be made at
+// all, so the form is not merely well-advised to re-send them, it is unable to
+// proceed without them. The old comment about the money "vanishing" is gone
+// because the vanishing is gone.
 func TestAnAlterRebuiltFromTheGetKeepsTheBill(t *testing.T) {
 	srv := newServer(t)
 	f := newBillFixture(t, srv)
@@ -408,28 +442,46 @@ func TestAnAlterRebuiltFromTheGetKeepsTheBill(t *testing.T) {
 	}
 	postings, _ := got["postings"].([]any)
 
-	// ⛔ THE CONTROL FIRST: an alter that OMITS them destroys the bill. Without
-	// this half, "the alter kept it" is equally consistent with references being
-	// immune to an alter — in which case re-sending them proves nothing.
+	// ⛔ THE CONTROL FIRST: an alter that OMITS them is REFUSED. Without this half,
+	// "the alter kept it" is equally consistent with references being immune to an
+	// alter — in which case re-sending them proves nothing.
 	arec, _ := doRaw(t, srv, http.MethodPut, f.base+"/vouchers/sales/"+vID, f.ownerTok,
 		map[string]any{
 			"voucher_date": "2026-06-19", "narration": "typo fixed",
 			"party": "buyer", "party_ledger_id": f.partyID, "created_by": f.subject,
 			"postings": postings,
 		})
-	if arec.Code != http.StatusOK && arec.Code != http.StatusCreated {
-		t.Fatalf("control alter = %d (%s)", arec.Code, arec.Body.String())
+	if arec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("an alter that dropped the references = %d, want 422 — the form can "+
+			"silently lose a bill by rebuilding itself badly (%s)",
+			arec.Code, arec.Body.String())
 	}
-	if got := f.outstandingBills(t, srv, f.partyID); len(got) != 0 {
-		t.Fatalf("the control proves nothing: an alter that omitted the references "+
-			"left %+v in the ageing report", got)
+	// ⛔ AND THE REFUSAL SAYS WHAT TO DO INSTEAD. An operator who genuinely does not
+	// know which bill the money is against has an answer — ON_ACCOUNT — and a
+	// refusal that withheld it would just teach them to find another door.
+	if body := arec.Body.String(); !strings.Contains(body, "ON_ACCOUNT") {
+		t.Fatalf("the refusal does not offer the on-account answer: %s", body)
 	}
-	// ⚠️ AND THE MONEY IS STILL THERE. This is exactly what makes the defect
-	// invisible: the receivable is untouched on the Balance Sheet while it has
-	// vanished from the report that ages it.
+	// ⛔ A REFUSED ALTER MUST LEAVE THE BOOKS EXACTLY AS THEY WERE. A 422 that had
+	// already written half of itself would be worse than the data loss it replaced,
+	// so the bill is still here, still named, still whole — and so is the sheet.
+	{
+		still := f.outstandingBills(t, srv, f.partyID)
+		if len(still) != 1 {
+			t.Fatalf("after the REFUSED alter the party has %+v — the refusal was not "+
+				"atomic", still)
+		}
+		if name, _ := still[0]["ref_name"].(string); name != no {
+			t.Fatalf("the refused alter renamed the bill to %q, want %q", name, no)
+		}
+		if on, _ := still[0]["on_account"].(bool); on {
+			t.Fatalf("the refused alter turned the bill into an on-account row: %+v",
+				still[0])
+		}
+	}
 	if debtors := f.sundryDebtors(t, srv); debtors != "94400.0000" {
-		t.Fatalf("Sundry Debtors %q, want 94400.0000 — the alter was supposed to "+
-			"change nothing but the narration", debtors)
+		t.Fatalf("Sundry Debtors %q, want 94400.0000 — the refused alter moved money",
+			debtors)
 	}
 
 	// Now the round trip a fixed form performs: re-send what the GET returned.

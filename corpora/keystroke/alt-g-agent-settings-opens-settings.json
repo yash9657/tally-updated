@@ -1,0 +1,16 @@
+{
+  "id": "alt-g-agent-settings-opens-settings",
+  "description": "W2 breadth: Alt+G Go To > 'Agent Settings' > Enter opens the agent-settings ScreenKind rooted at the Gateway (the Go To overlay is dismissed), the second door to it",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "Alt+G" },
+    { "type": "select", "menuItem": "Agent Settings" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "agent-settings",
+    "parentScreen": "gateway",
+    "screenStackDepth": 2
+  }
+}

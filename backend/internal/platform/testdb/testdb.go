@@ -43,6 +43,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/khata/cored/internal/platform/tenant"
 )
 
 // TB is the slice of *testing.T this package needs. Taking an interface rather
@@ -79,12 +81,44 @@ var (
 	poolErr  error
 )
 
-// AdminDSNValue returns the admin DSN in force, honouring TESTDB_ADMIN_DSN.
+// AppDSNEnv is AdminDSNEnv's twin for the application role.
+//
+// ⛔ THE TWO MUST MOVE TOGETHER, AND UNTIL W5 ONLY ONE COULD. Most DB tests
+// migrate through the ADMIN DSN and then connect as the APP role; with only the
+// admin half overridable, a run pointed at a private database migrated that
+// database and then queried the shared one — which, with concurrent lanes each
+// adding migrations, reads as a missing column in a file nobody touched. Every
+// test DSN in the tree now goes through these two functions.
+const AppDSNEnv = "TESTDB_APP_DSN"
+
+// AdminDSNValue returns the admin DSN in force, honouring TESTDB_ADMIN_DSN
+// and then ADMIN_DATABASE_URL.
+//
+// The second name exists because W3 and W5 fixed the same hazard (a test
+// migrating the shared database) in parallel under different names: W3 read
+// the Makefile's ADMIN_DATABASE_URL / DATABASE_URL, W5 introduced TESTDB_*.
+// Honouring both means a lane that exported either one is really pointed at
+// its own database, and nobody's recipe silently falls back to "tally".
 func AdminDSNValue() string {
 	if v := os.Getenv(AdminDSNEnv); v != "" {
 		return v
 	}
+	if v := os.Getenv("ADMIN_DATABASE_URL"); v != "" {
+		return v
+	}
 	return AdminDSN
+}
+
+// AppDSNValue returns the application-role DSN in force, honouring
+// TESTDB_APP_DSN and then DATABASE_URL (see AdminDSNValue).
+func AppDSNValue() string {
+	if v := os.Getenv(AppDSNEnv); v != "" {
+		return v
+	}
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	return AppDSN
 }
 
 // adminPool returns the ONE process-wide admin pool, created lazily.
@@ -267,7 +301,7 @@ func Drop(ctx context.Context, companyID uuid.UUID) error {
 // check can be exercised against a deliberately broken plan (see
 // TestResidueCheckCatchesADeleteThatMissedItsRows). Production callers always go
 // through Drop and get the derived plan.
-func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
+func dropWithPlan(ctx context.Context, pl *tenant.Plan, companyID uuid.UUID) error {
 	pool, err := adminPool(ctx)
 	if err != nil {
 		return err
@@ -286,10 +320,10 @@ func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
 
 	batch := &pgx.Batch{}
 	idText := companyID.String()
-	for _, s := range pl.special {
+	for _, s := range pl.Special {
 		batch.Queue(s.SQL, idText)
 	}
-	for _, s := range pl.order {
+	for _, s := range pl.Order {
 		if s.IsText {
 			batch.Queue(`DELETE FROM `+s.Table+` WHERE company_id = $1`, idText)
 		} else {
@@ -322,7 +356,7 @@ func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
 		return fmt.Errorf(
 			"testdb: company %s NOT fully torn down — rows survived the delete: %s (plan covered %d tables). "+
 				"Test data is leaking into the shared dev database; classify the table or fix its delete predicate",
-			companyID, strings.Join(survivors, " "), len(pl.order)+len(pl.special))
+			companyID, strings.Join(survivors, " "), len(pl.Order)+len(pl.Special))
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -333,13 +367,13 @@ func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
 
 // batchTableName maps a batch index back to the table it deleted from, so a
 // failure names the table instead of an integer.
-func batchTableName(pl *plan, i int) string {
-	if i < len(pl.special) {
-		return pl.special[i].Table
+func batchTableName(pl *tenant.Plan, i int) string {
+	if i < len(pl.Special) {
+		return pl.Special[i].Table
 	}
-	i -= len(pl.special)
-	if i < len(pl.order) {
-		return pl.order[i].Table
+	i -= len(pl.Special)
+	if i < len(pl.Order) {
+		return pl.Order[i].Table
 	}
 	return "?"
 }
@@ -349,8 +383,8 @@ func batchTableName(pl *plan, i int) string {
 // what lets a test assert that the fixture actually populated every table, which
 // is the difference between "the teardown works" and "the teardown was never
 // given anything to delete".
-func residue(ctx context.Context, q connLike, pl *plan, companyID uuid.UUID) ([]tableCount, error) {
-	rows, err := q.Query(ctx, pl.verifySQL, companyID, companyID.String())
+func residue(ctx context.Context, q tenant.ConnLike, pl *tenant.Plan, companyID uuid.UUID) ([]tableCount, error) {
+	rows, err := q.Query(ctx, pl.VerifySQL, companyID, companyID.String())
 	if err != nil {
 		return nil, fmt.Errorf("testdb: residue check for company %s: %w", companyID, err)
 	}

@@ -1,0 +1,16 @@
+{
+  "id": "alt-g-approval-inbox-opens-inbox",
+  "description": "W2: Alt+G Go To > 'Approval Inbox' > Enter opens the approval-inbox ScreenKind rooted at the Gateway (the Go To overlay is dismissed), the second of the two doors PLAN-AGENTIC names",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "Alt+G" },
+    { "type": "select", "menuItem": "Approval Inbox" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "approval-inbox",
+    "parentScreen": "gateway",
+    "screenStackDepth": 2
+  }
+}
