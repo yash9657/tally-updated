@@ -49,25 +49,31 @@ export ADMIN_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55439/tally_ve
 python3 scripts/evals/fireworks.py \
   --env-file /absolute/path/to/private.env.local \
   --model accounts/fireworks/models/deepseek-v4p1-flash \
-  --max-usd 2.50 --token-price-per-million-usd 1 \
+  --max-usd 5 --token-price-per-million-usd 2 \
+  --budget-ledger /absolute/path/to/private/fireworks-budget.json \
   --report /tmp/fireworks-evaluation.json
 ```
 
-For a small check, add `--tasks guard-001-en,ve-receipt-000-en` and lower the cap.
+For a small check, add `--tasks guard-001-en,ve-receipt-000-en` and reuse the same ledger and cap. Use `--suite insights` for the nine business-usefulness cases.
 The default selects one task per family/language plus all ten guards: 28 tasks.
 Every trial uses a fresh company. The model sees the user instruction and real
 tool results, never the reference plan or expected state. The fixture operator
 explicitly delegates the supported writes and approves non-guard proposals via
-the normal API; guards receive no approvals. A guard state pass alone does not
-prove that the model refused: inspect `AgentErr` and the answer as well.
+the normal API; guards receive no approvals. Any agent error, decision-limit exhaustion or empty final answer now fails the live trial, including guards. Inspect the answer to distinguish an explicit refusal from a clarification.
 
 The transport reserves `(encoded request bytes + max_tokens + 4096) × rate`
 before each provider call, including translator repairs. Failed requests keep
 their reservation. It refuses any other destination, unbounded completion,
-more than 150 calls, or a reservation above the cap. This deliberately overstates
-cost; the report also records usage, latency, provider model and response IDs.
-The ceiling is **per invocation**: subtract previous reservations from a shared
-budget before rerunning. Verify current model availability and pricing first.
+more than 500 calls, or a reservation above the shared cap. A private, exclusively
+locked ledger persists each reservation before the request. Validated HTTP-200
+usage settles it at the configured upper token rate, without cache discounts;
+missing, inconsistent or failed usage retains the full reservation. A crash does
+not erase spending. Concurrent runs and changes to an existing ledger's cap/rate
+are refused. Reuse the ledger across runs; never reset it to obtain more budget.
+When migrating earlier runs, `--prior-report` imports each original private raw
+report exactly once when creating the ledger. The report records usage, latency,
+provider model/response IDs, source revision and a hash of the Go source.
+Verify current model availability and pricing first.
 
 Reports contain synthetic prompts, tool decisions and task-level state/answer
 verdicts. They are mode 0600 and contain no authentication headers. Any task
@@ -77,12 +83,13 @@ Tasks with required numeric answers still reject missing figures and unrelated
 money dumps. Tasks without answer constraints are judged by their exact books.
 Reference/null/wrong-agent controls remain in normal CI.
 
-## 21 October 2026 evaluation
+## 21 October 2026 — initial evaluation (historical)
 
 The six development/evaluation runs made 236 provider requests. Conservative
-reservations totalled **$4.892706**, below the approved $5 ceiling; usage at the
-published rates estimates **$0.119028674**. This is an estimate, not a provider
-billing statement. No further paid calls were made after the final run.
+reservations totalled **$4.892706**, below the approved $5 ceiling; the initial usage estimate was **$0.119028674** using the rates configured in
+that round. Those rates were found to be lower than the current published
+prices; that estimate is superseded by the reconciled accounting below.
+Reservations are upper bounds, not a provider billing statement.
 
 The [machine-readable results](evals/fireworks-2026-10-21.json) retain the original
 verdicts, including harness defects, budget-incomplete trials and judge defects.
@@ -112,20 +119,28 @@ Their regression tests retain missing/wrong/duplicate state and shotgun-answer
 failure controls. Prompt v5 asks for a missing company tax state instead of
 directing the model to the denied company-administration action; no ACL was
 widened. Updated cassettes cover v5. These changes have deterministic validation
-only; **they have not received another paid evaluation**, and the original scores
-above have not been retroactively upgraded.
+only at the end of that round. The follow-up evaluates the subsequent implementation; the original scores above have not been retroactively upgraded.
 
-Next evaluation priorities are item invoices with explicit tax-state context,
-concise multilingual answers, all remaining write families, and repeated guard
-trials. This suite does not evaluate general computer use or the usefulness of
-proactive business insights. The agent remains an experimental bookkeeping
-agent behind existing delegation and approval controls.
+The follow-up adds business-usefulness evaluation, with separate retail,
+wholesale, services and manufacturing books, four additional books with changed
+entities/amounts, and an empty-book control. All seeds use real book-entry APIs
+and production deterministic detectors. Source evidence is verified independently
+before the model sees anything. Grading requires a named entity, supported
+figures, an applicable next action, a usable draft/checklist, unchanged books and
+no execution claim. Explicit rupee claims are checked against source facts.
+These are necessary checks, not a substitute for reviewing the full answers or
+measuring customer outcomes. There is no claim of universal industry coverage,
+measured hours saved, or external email/payment execution.
 
 ## Current provider references
 
 Verified on 21 October 2026: the configured account serves DeepSeek V4.1 Flash.
-Published rates are $0.22/M input, $0.007/M cached input and $0.66/M output;
-$1/M is the conservative rate used above. Recheck before another run:
+The follow-up verified $0.30/M input, $0.006/M cached input and $1.20/M output.
+It charges **$2/M for every reported token**, ignoring cache discounts, and retains
+full reservations for uncertain requests. The 236 earlier requests had complete
+usage records (933,329 tokens): their reconciled conservative charge is
+**$1.866658**, carried into the same $5 ledger. This settles reservations; it does
+not reset the allowance. Recheck pricing before another evaluation:
 [model pricing](https://fireworks.ai/models/deepseek-ai/deepseek-v4p1-flash),
 [function calling](https://docs.fireworks.ai/guides/function-calling),
 [reasoning token controls](https://docs.fireworks.ai/guides/reasoning).

@@ -97,6 +97,9 @@ func (a liveAgent) Run(ctx context.Context, env tau.Env, p tau.Prompt) (tau.Resu
 		}
 		result := tau.Result{Answer: view.Run.Outcome.Final}
 		if view.Run.Status == "completed" {
+			if strings.TrimSpace(result.Answer) == "" {
+				return result, fmt.Errorf("run completed without a user-visible answer")
+			}
 			return result, nil
 		}
 		if view.Run.Status == "failed" || view.Run.Status == "expired" || view.Run.Status == "cancelled" {

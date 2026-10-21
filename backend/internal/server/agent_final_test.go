@@ -33,3 +33,14 @@ func TestAgentPreservesNestedFinishAnswer(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentCannotCompleteSilently(t *testing.T) {
+	srv := newAgentServer(t)
+	b := newAgentBooks(t, srv)
+	runID, _ := runToQuiet(t, srv, b, func(*testing.T, int, []json.RawMessage) agent.ModelDecision {
+		return agent.ModelDecision{Tool: agent.ToolFinish, Args: json.RawMessage(`{"final":" "}`)}
+	}, map[string]any{"instruction": "Summarize the result."})
+	if run := getRun(t, srv, b, runID); run["status"] != "failed" {
+		t.Fatalf("empty answer was presented as success: %v", run)
+	}
+}

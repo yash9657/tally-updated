@@ -172,6 +172,9 @@ func (l *loop) next(done []durable.StepResult) (durable.Step, bool, error) {
 					final = args.Final
 				}
 			}
+			if strings.TrimSpace(final) == "" {
+				return l.finishStep(finishOut{Status: string(StatusFailed), Reason: "the model ended without a user-visible answer"}), true, nil
+			}
 			return l.finishStep(finishOut{Status: string(StatusCompleted), Final: final}), true, nil
 		case d.Decision.Tool == ToolCommit:
 			return l.gateStep(k), true, nil
