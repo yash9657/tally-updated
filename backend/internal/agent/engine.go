@@ -24,10 +24,11 @@ import (
 const (
 	// DefaultApprovalWindow is the "days-long timeout" of PLAN-AGENTIC W2.
 	DefaultApprovalWindow = 72 * time.Hour
-	// DefaultMaxDecisions bounds the model calls in one run. A loop that has
-	// not finished in eight decisions is a loop that is not converging, and
-	// every further call is spend with no evidence it will help.
-	DefaultMaxDecisions = 8
+	// DefaultMaxDecisions bounds the model calls in one run. A loop needs
+	// enough turns for discovery, reads, preview, approval and a second
+	// action (e.g. bank reconciliation). Live evaluation exhausted eight on
+	// valid multi-action tasks. Sixteen remains a hard spend/loop bound.
+	DefaultMaxDecisions = 16
 	// DefaultParkedPoll is how soon a parked run is looked at again when
 	// nothing nudges it. A decision written through the API nudges it at once
 	// (next_poll_at = now), so this only bounds how late an EXPIRY is noticed.

@@ -155,13 +155,14 @@ type searchArgs struct {
 }
 
 type searchHit struct {
-	ActionID   string          `json:"action_id"`
-	ACLKey     string          `json:"acl_key"`
-	Risk       string          `json:"risk"`
-	Method     string          `json:"method"`
-	Route      string          `json:"route"`
-	Commit     bool            `json:"committable"`
-	BodySchema json.RawMessage `json:"body_schema,omitempty"`
+	ActionID       string          `json:"action_id"`
+	ACLKey         string          `json:"acl_key"`
+	Risk           string          `json:"risk"`
+	Method         string          `json:"method"`
+	Route          string          `json:"route"`
+	Commit         bool            `json:"committable"`
+	BodySchema     json.RawMessage `json:"body_schema,omitempty"`
+	BodySchemaFrom string          `json:"body_schema_from,omitempty"`
 }
 
 // search is actions.search: the registry's deterministic matcher, filtered to
@@ -218,6 +219,19 @@ func (l *loop) search(q string) []searchHit {
 	})
 	if len(hits) > 10 {
 		hits = hits[:10]
+	}
+	schemas := map[string]string{}
+	for i := range hits {
+		if len(hits[i].BodySchema) == 0 {
+			continue
+		}
+		key := string(hits[i].BodySchema)
+		if first, ok := schemas[key]; ok {
+			hits[i].BodySchemaFrom = first
+			hits[i].BodySchema = nil
+		} else {
+			schemas[key] = hits[i].ActionID
+		}
 	}
 	return hits
 }

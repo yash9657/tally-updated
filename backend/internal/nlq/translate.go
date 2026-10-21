@@ -134,9 +134,10 @@ const translatorPromptVersion = "nlq-dsl-v4"
 const emitQueryTool = "emit_query"
 
 // translatorMaxTokens bounds the completion. A typed DSL for this catalogue is a
-// few hundred tokens; 1024 is the figure this path has always used and a
-// truncated tool call costs a repair round trip, which is dearer than the tokens.
-const translatorMaxTokens = 1024
+// few hundred tokens, but reasoning models spend part of the same allowance
+// before emitting it. Live Fireworks calls exhausted 1024 without a tool call.
+// Keep a finite ceiling with room for reasoning and the actual DSL.
+const translatorMaxTokens = 4096
 
 // translatorMaxRepairs is DELIBERATELY 1, not llm's default of 2.
 //

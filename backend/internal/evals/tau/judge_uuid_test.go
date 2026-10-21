@@ -15,3 +15,18 @@ func TestAnswerUUIDsAreNotMoney(t *testing.T) {
 		t.Fatal("unexpected money escaped judge")
 	}
 }
+
+func TestTaxIdentifiersAndDatesCannotSatisfyMoneyAnswers(t *testing.T) {
+	text := "June 2025 GSTR-1, filing period 062025, GSTIN 27AAACK1234A1ZA, SAC 998314: taxable ₹89,000.00, total ₹1,05,020.00, IGST ₹16,020.00. As of 2025-06-30."
+	if got := checkOutputs([]string{"89000", "105020"}, text); len(got) != 0 {
+		t.Fatal(got)
+	}
+	for _, amount := range []string{"62025", "1234", "998314"} {
+		if len(checkOutputs([]string{amount}, text)) == 0 {
+			t.Fatalf("identifier satisfied %s", amount)
+		}
+	}
+	if len(checkOutputs([]string{"89000"}, "89000 10000 11000 12000")) == 0 {
+		t.Fatal("shotgun answer passed")
+	}
+}

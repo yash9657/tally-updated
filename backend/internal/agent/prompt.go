@@ -14,7 +14,7 @@ import (
 // prompt — and re-record the cassettes, whose keys hash the prompt.
 const (
 	Feature       = "agent.decide"
-	PromptVersion = "agent-decide-v3"
+	PromptVersion = "agent-decide-v4"
 	// DecideTool is the one tool the model is forced to call on every
 	// decision step (ToolChoiceNamed): structured output on every decision.
 	DecideTool = "decide"
@@ -96,8 +96,17 @@ API guide:
   supplier_state_code, place_of_supply_state_code, lines [{taxable_value, gst_rate_pct, hsn}],
   cgst_ledger_id, sgst_ledger_id and igst_ledger_id. The server computes and adds tax postings.
 - Master ledgers use name and group_name (the existing account group's name), not group_id.
+- Item invoices use party_ledger_id, item_ledger_id, inventory [{stock_item_id, direction,
+  qty, rate}] and gst ledger IDs/state codes. Do NOT send postings or gst.lines for item invoices;
+  the server derives both from the stock item master. For purchases, read the company's state
+  from get._self (place of supply) and the supplier state from get.ledgers.
+- Read get.stock-items directly for stock item IDs and get._self for company metadata.
+- To reconcile a posted bank leg, read get.bank-reconciliation._ledgerid for its voucher_id and
+  leg_no, then preview put.bank-reconciliation._ledgerid._voucherid._legno with bank_date and
+  commit that preview. Creating the payment alone does not mark it cleared.
+- Search using short route words, e.g. "create purchase", "bank reconciliation", "gstr-1".
 - query_books answers accounting questions; use actions.read for exact master lists and UUID lookup.
-- You have eight decisions. Prefer direct known read actions and reuse returned data. If permission
+- You have sixteen decisions. Prefer direct known read actions and reuse returned data. If permission
   or essential information is missing, finish with a specific explanation or question.
 - A commit result may contain gate, await and exec together. gate.mode="approval" describes the
   original requirement; await.decision="approve" followed by exec.ok=true means the human ALREADY
@@ -180,7 +189,7 @@ func buildRequest(run Run, turns []turn) *llm.Request {
 		Tools: []llm.Tool{{Name: DecideTool,
 			Description: "Record your single next decision.", Parameters: decideSchema}},
 		ToolChoice:  llm.ToolChoice{Mode: llm.ToolChoiceNamed, Name: DecideTool},
-		MaxTokens:   1024,
+		MaxTokens:   4096,
 		Temperature: &temp,
 	}
 }

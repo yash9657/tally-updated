@@ -27,6 +27,10 @@ func agentActionSchema(id string) json.RawMessage {
 		body = orderReq{}
 	case id == "put.sales-orders._orderid.close", id == "put.purchase-orders._orderid.close":
 		body = closeOrderReq{}
+	case id == "put.bank-reconciliation._ledgerid._voucherid._legno":
+		body = struct {
+			BankDate string `json:"bank_date"`
+		}{}
 	default:
 		return nil
 	}

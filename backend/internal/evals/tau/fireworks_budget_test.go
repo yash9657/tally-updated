@@ -24,6 +24,7 @@ type spendTransport struct {
 	next                http.RoundTripper
 	cap, rate, reserved decimal.Decimal
 	calls               int
+	exhausted           bool
 	records             []map[string]any
 }
 
@@ -49,6 +50,7 @@ func (s *spendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	tokens := int64(len(body)) + args.MaxTokens + 4096
 	reserve := decimal.NewFromInt(tokens).Mul(s.rate).Div(decimal.NewFromInt(1000000))
 	if s.calls >= 150 || s.reserved.Add(reserve).GreaterThan(s.cap) {
+		s.exhausted = true
 		return nil, fmt.Errorf("evaluation spending limit reached before provider call")
 	}
 	s.reserved = s.reserved.Add(reserve)

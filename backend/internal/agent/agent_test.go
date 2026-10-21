@@ -113,7 +113,7 @@ func TestNextIsAPureStateMachine(t *testing.T) {
 		{"expired is terminal", []durable.StepResult{rec("await:2", awaitOut{Decision: "expired"})}, "finish"},
 		{"finish decision", []durable.StepResult{rec("decide:4", dec(ToolFinish))}, "finish"},
 		{"spent retry is terminal", []durable.StepResult{rec("tool:3", toolOut{Terminal: true, Error: "twice"})}, "finish"},
-		{"decision budget", []durable.StepResult{rec("exec:7", execOut{})}, "finish"},
+		{"decision budget", []durable.StepResult{rec(stepName("exec", DefaultMaxDecisions-1), execOut{})}, "finish"},
 		{"no usable decision", []durable.StepResult{rec("decide:1", decideOut{Invalid: "x"})}, "finish"},
 	}
 	for _, c := range cases {

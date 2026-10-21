@@ -46,7 +46,7 @@ func TestAnswerFigures(t *testing.T) {
 		"HDFC Bank: 59,000.0000 Cr":   {"59000"}, // Cr is a side, not a crore
 		"कुल ₹५९,००० बकाया":           {"59000"},
 		"2 crore":       {"20000000"},
-		"on 2025-06-12": {"2025", "6", "12"},
+		"on 2025-06-12": nil,
 	}
 	for in, want := range cases {
 		got := AnswerFigures(in)

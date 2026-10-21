@@ -350,24 +350,33 @@ jobs:
       - name: Prepare exact Python dependency inventory
         run: python3 scripts/ci/python_inventory.py
 
-      - name: Audit every Python dependency profile
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8
-        with:
-          version: v0.76.1
-          scan-type: fs
-          scan-ref: security-python-locks
-          scanners: vuln
-          format: json
-          output: python-trivy.json
-          severity: CRITICAL,HIGH
-          exit-code: "1"
-          ignore-unfixed: true
+      - name: Install pinned Trivy CLI
         env:
-          TRIVY_LIST_ALL_PKGS: "true"
-          TRIVY_IGNOREFILE: .trivyignore.yaml
+          TRIVY_VERSION: "0.76.1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy"
+          cd "$RUNNER_TEMP/trivy"
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          file="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl --fail --location --retry 3 "$base/$file" -o "$file"
+          curl --fail --location --retry 3 "$base/trivy_${TRIVY_VERSION}_checksums.txt" -o checksums.txt
+          expected=$(awk -v file="$file" '$2 == file {print $1}' checksums.txt)
+          test -n "$expected"
+          printf '%s  %s\n' "$expected" "$file" | sha256sum -c -
+          tar -xzf "$file" trivy
+          echo "$RUNNER_TEMP/trivy" >> "$GITHUB_PATH"
+
+      - name: Audit every Python dependency profile
+        run: >-
+          trivy fs --scanners vuln --format json --output python-trivy.json
+          --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed --list-all-pkgs
+          --ignorefile .trivyignore.yaml security-python-locks
 
       - name: Prove Python vulnerability gate
         run: python3 scripts/ci/test_python_scan.py
+
+      - name: Prove accepted misconfigurations stay path-scoped
+        run: python3 scripts/ci/test_scoped_ignores.py
 
       - name: Refuse missing Python scanner targets
         if: always()
@@ -398,44 +407,16 @@ jobs:
           fi
 
       - name: trivy (filesystem vuln + secret + misconfig)
-        # Upstream moved to v-prefixed tags; the bare "0.24.0" no longer
-        # resolves, and the job died in setup before scanning anything. Same
-        # release, pinned by commit so a moved tag cannot change what runs.
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
-        with:
-          version: v0.76.1
-          scan-type: fs
-          scanners: vuln,secret,misconfig
-          format: sarif
-          output: trivy.sarif
-          severity: CRITICAL,HIGH
-          # Without this the action DROPS `severity` for SARIF output, so every
-          # MEDIUM/LOW finding tripped exit-code 1 while the table step, which
-          # does honour it, reported 0 failures (measured on PR #1).
-          limit-severities-for-sarif: true
-          exit-code: "1"
-          ignore-unfixed: true
-        # NOT the action's `trivyignores` input: it concatenates the files into
-        # ./trivyignores, which trivy reads as the PLAIN format, so a YAML
-        # file's path-scoped entries were silently dropped (measured on PR #1).
-        # The env var keeps the .yaml name, and with it the format.
-        env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
+        run: >-
+          trivy fs --scanners vuln,secret,misconfig --format sarif --output trivy.sarif
+          --severity CRITICAL,HIGH --exit-code 1 --ignore-unfixed
+          --ignorefile .trivyignore.yaml .
 
-      # The SARIF above is for the dashboard; this prints the same findings in
-      # the log, where a failing run can actually be read.
       - name: trivy findings (table)
         if: failure()
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
-        with:
-          version: v0.76.1
-          scan-type: fs
-          scanners: vuln,secret,misconfig
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-        env:
-          TRIVY_IGNOREFILE: .trivyignore.yaml
+        run: >-
+          trivy fs --scanners vuln,secret,misconfig --format table
+          --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml .
 
       - name: Preserve scanner reports
         if: always()

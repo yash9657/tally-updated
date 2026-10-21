@@ -22,6 +22,7 @@ LLM_TIMEOUT=90s
 LLM_BUDGET_TOKENS_PER_MONTH=100000
 APP_DSN=<development tally_app PostgreSQL URL>
 PORT=8089
+BIND_ADDRESS=127.0.0.1
 ```
 
 `FIREWORKS_API_KEY` alone configures the evaluation runner; cored itself expects
@@ -31,8 +32,8 @@ Run `go run ./cmd/cored serve` from `backend`. Run the frontend with
 `CORED_PROXY_TARGET=http://localhost:8089 VITE_LIVE=1 pnpm dev` from `frontend`.
 Sign in, select a company, press Ctrl+K, and select the write permissions for the
 run. A run without delegated writes is read-only. Proposed writes still require
-approval under the company's autonomy policy. The monthly token limit is shared
-by the agent and natural-language query translator for each tenant; it is not a
+approval under the company's autonomy policy. The monthly token limit applies separately
+to each feature (agent and natural-language query translator) for each tenant; it is not a
 provider billing-account dollar cap.
 
 ## Paid, synthetic evaluation

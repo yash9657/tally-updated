@@ -14,6 +14,7 @@
 //	                               the dev values); see docs/DEPLOY_VERCEL.md.
 //	APP_DSN    used by `serve`   (least-privilege tally_app role)
 //	PORT       HTTP listen port for `serve` (default 8080)
+//	BIND_ADDRESS optional interface for `serve` (e.g. 127.0.0.1 for local development)
 //
 // Agent-plane telemetry (PLAN-AGENTIC W0) is OFF unless it is configured:
 //
@@ -30,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -255,7 +257,7 @@ func runServe(ctx context.Context) error {
 	// UNIQUE.
 	go srv.RunInsightPoller(notifyCtx, 5*time.Second)
 
-	addr := ":" + port
+	addr := net.JoinHostPort(os.Getenv("BIND_ADDRESS"), port)
 	log.Printf("cored serving on %s", addr)
 	if err := srv.ListenAndServe(ctx, addr); err != nil && !errors.Is(err, context.Canceled) {
 		return err

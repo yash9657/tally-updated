@@ -27,6 +27,7 @@ import (
 
 type liveAgent struct {
 	rig     *rig
+	spend   *spendTransport
 	approve map[string]bool
 	logf    func(string, ...any)
 }
@@ -82,6 +83,9 @@ func (a liveAgent) Run(ctx context.Context, env tau.Env, p tau.Prompt) (tau.Resu
 	}
 	defer func() { env.Books.Do(context.Background(), "POST", "/agent/runs/"+id+"/cancel", nil) }()
 	for turn := 0; turn < 30; turn++ {
+		if a.spend.exhausted {
+			return tau.Result{}, fmt.Errorf("evaluation spending ceiling reached; task incomplete")
+		}
 		if err := ctx.Err(); err != nil {
 			return tau.Result{}, err
 		}
@@ -209,7 +213,7 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 		}
 	}
 	start := time.Now()
-	report, runErr := tau.Run(ctx, tau.Config{K: 1, Workers: 1, NewCompany: r.factory(t)}, tasks, liveAgent{r, approve, t.Logf})
+	report, runErr := tau.Run(ctx, tau.Config{K: 1, Workers: 1, NewCompany: r.factory(t)}, tasks, liveAgent{rig: r, spend: transport, approve: approve, logf: t.Logf})
 	result := map[string]any{"synthetic": true, "agent_prompt_version": agent.PromptVersion, "source_revision": os.Getenv("EVAL_SOURCE_REVISION"), "model": os.Getenv("FIREWORKS_MODEL"), "started_at": start.UTC(), "elapsed_seconds": time.Since(start).Seconds(), "reserved_usd": transport.reserved.String(), "max_usd": cap.String(), "token_price_per_million_usd": rate.String(), "calls": transport.records, "report": report}
 	if runErr != nil {
 		result["harness_error"] = runErr.Error()

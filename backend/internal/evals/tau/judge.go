@@ -103,6 +103,14 @@ func diffSet(kind string, want, got []string) []string {
 // numeric segments, from both required-output matching and extra-figure checks.
 var uuidInAnswer = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 
+var nonMoneyIDs = regexp.MustCompile(`(?i)\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b|\b(?:HSN|SAC)(?:\s+code)?[:\s]+[0-9]{4,8}\b|\b(?:filing\s+)?period[:\s]+(?:0[1-9]|1[0-2])20[0-9]{2}\b|\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b|https?://[^\s)]+`)
+
+func answerNumberText(answer string) string {
+	s := devanagariDigits.Replace(answer)
+	s = uuidInAnswer.ReplaceAllString(s, " ")
+	return nonMoneyIDs.ReplaceAllString(s, " ")
+}
+
 var numberRe = regexp.MustCompile(`(?i)(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|लाख|करोड़|करोड)?`)
 
 // devanagariDigits maps ० … ९ onto 0 … 9. A Hindi answer may write its figures
@@ -120,7 +128,7 @@ var devanagariDigits = strings.NewReplacer(
 // magnitudes, and the DIRECTION of a balance is judged — where it matters — by
 // the ledger state, not the prose.
 func AnswerFigures(answer string) []decimal.Decimal {
-	s := uuidInAnswer.ReplaceAllString(devanagariDigits.Replace(answer), "")
+	s := answerNumberText(answer)
 	var out []decimal.Decimal
 	for _, m := range numberRe.FindAllStringSubmatch(s, -1) {
 		d, err := decimal.NewFromString(strings.ReplaceAll(m[1], ",", ""))
@@ -192,7 +200,7 @@ func extraMoneyFigures(expected []string, answer string) []string {
 			want[d.Abs().Round(2).StringFixed(2)] = true
 		}
 	}
-	s := uuidInAnswer.ReplaceAllString(devanagariDigits.Replace(answer), "")
+	s := answerNumberText(answer)
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range moneyShapedRe.FindAllStringSubmatch(s, -1) {
