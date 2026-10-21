@@ -48,6 +48,13 @@ regexTarget = "match"
 regexes = ['''\b27AAACK1234A1ZA\b''']
 paths = ['''^docs/evals/fireworks-2026-10-21\.json$''']
 
+[[rules.allowlists]]
+description = "Synthetic GSTIN used only to test evaluation evidence redaction"
+condition = "AND"
+regexTarget = "match"
+regexes = ['''\b24AAYFS6789S1ZJ\b''']
+paths = ['''^scripts/evals/test_export_evidence\.py$''']
+
 [[rules]]
 id = "india-aadhaar"
 description = "Possible Aadhaar number (12 digits) committed in source"
