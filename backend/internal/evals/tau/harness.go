@@ -141,6 +141,10 @@ func runTrial(ctx context.Context, cfg Config, t Task, agent Agent, trial int) (
 	}
 	v := Judge(t.Expected, defaults, after, res.Answer)
 	tr.Pass, tr.Reasons = v.Pass, v.Reasons
+	if aerr != nil {
+		tr.Pass = false
+		tr.Reasons = append(tr.Reasons, "agent did not complete: "+aerr.Error())
+	}
 	return tr, nil
 }
 

@@ -2939,6 +2939,9 @@ type voucherReq struct {
 	CreatedBy       string              `json:"created_by"`
 	Postings        []postingReq        `json:"postings"`
 	BillAllocations []billAllocationReq `json:"bill_allocations"`
+	// Preserve the supplier's document identity through HTTP and offline sync.
+	// Duplicate-bill detection and ITC matching read these same ledger fields.
+	Inward *ledger.CanonicalInward `json:"inward"`
 	// Inventory is the item grid. Declared HERE — after bill_allocations and
 	// before gst — to mirror ledger.VoucherInput's field order, so the wire
 	// shape and the domain shape read the same way top to bottom.
@@ -3963,6 +3966,14 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		SourceDraftID: req.DraftID,
 		// Validated in the ledger (shape) and honoured on CREATE only.
 		IdempotencyKey: req.IdempotencyKey,
+	}
+	if req.Inward != nil {
+		in.Inward = &ledger.InwardDocument{
+			SupplierInvoiceNo:   req.Inward.SupplierInvoiceNo,
+			SupplierInvoiceDate: req.Inward.SupplierInvoiceDate,
+			ITCEligibility:      req.Inward.ITCEligibility,
+			ITCBlockedClause:    req.Inward.ITCBlockedClause,
+		}
 	}
 	var err error
 	if in.VoucherTypeID, err = optionalUUID(req.VoucherTypeID); err != nil {

@@ -183,7 +183,7 @@ func (l *loop) search(q string) []searchHit {
 		case "alter", "update", "edit":
 			method = "PUT"
 			continue
-		case "voucher", "vouchers", "entry", "a", "an", "the", "for", "to", "of":
+		case "voucher", "vouchers", "invoice", "invoices", "entry", "a", "an", "the", "for", "to", "of":
 			continue
 		}
 		words = append(words, w)
@@ -361,7 +361,7 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 	case ToolReverse:
 		return l.reverse(ctx, prev, d)
 
-	case ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile:
+	case ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile, ToolBusinessInsights:
 		return l.profile(ctx, d)
 
 	case ToolRead:
@@ -421,6 +421,22 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		// prose fields (a ledger's address, bank details) never reach the
 		// model; a body the projection cannot walk is labelled stored_text.
 		src, body := readSourceFor(spec), res.Body
+		if spec.ID == "get._self" && res.OK() {
+			// Only tax context is needed. Omit the tenant correlation ID and
+			// all editable company prose from the provider request.
+			var company map[string]json.RawMessage
+			if json.Unmarshal(body, &company) == nil {
+				fields := map[string]json.RawMessage{}
+				for _, key := range []string{"state_code", "gstin", "fy_start_date", "base_currency"} {
+					if value, ok := company[key]; ok {
+						fields[key] = value
+					}
+				}
+				body, _ = json.Marshal(fields)
+			} else {
+				return toolErr(d.Tool, "invalid company tax context"), nil
+			}
+		}
 		if src == policy.SourceBooks {
 			if p, ok := projectBooks(body); ok {
 				body = p

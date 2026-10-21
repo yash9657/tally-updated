@@ -129,7 +129,7 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 	if os.Getenv("CORED_SKIP_DB") != "" {
 		t.Fatal("unset CORED_SKIP_DB; live evaluation cannot skip its database")
 	}
-	for _, key := range []string{"FIREWORKS_API_KEY", "FIREWORKS_MODEL", "EVAL_MAX_USD", "EVAL_TOKEN_PRICE_PER_MILLION_USD", "ADMIN_DATABASE_URL"} {
+	for _, key := range []string{"FIREWORKS_API_KEY", "FIREWORKS_MODEL", "EVAL_MAX_USD", "EVAL_TOKEN_PRICE_PER_MILLION_USD", "EVAL_BUDGET_LEDGER", "ADMIN_DATABASE_URL"} {
 		if os.Getenv(key) == "" {
 			t.Fatalf("%s is required; no provider calls made", key)
 		}
@@ -145,6 +145,11 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 	if err != nil || !rate.IsPositive() {
 		t.Fatal("token price must be positive")
 	}
+	ledger, err := openSpendLedger(os.Getenv("EVAL_BUDGET_LEDGER"), cap, rate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ledger.close)
 	ctx := context.Background()
 	adminURL, err := url.Parse(os.Getenv("ADMIN_DATABASE_URL"))
 	if err != nil || adminURL.Host == "" {
@@ -176,11 +181,15 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 	t.Setenv("LLM_API_KEY", os.Getenv("FIREWORKS_API_KEY"))
 	t.Setenv("LLM_BASE_URL", "")
 	t.Setenv("LLM_TIMEOUT", "90s")
-	transport := &spendTransport{next: http.DefaultTransport, cap: cap, rate: rate}
+	transport := &spendTransport{next: http.DefaultTransport, cap: cap, rate: rate, ledger: ledger}
 	old := http.DefaultTransport
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = old })
 	r := newRig(t)
+	if os.Getenv("EVAL_SUITE") == "insights" {
+		runBusinessLive(t, r, transport, ledger)
+		return
+	}
 	all := loadSuite(t)
 	var tasks []tau.Task
 	approve := map[string]bool{}
@@ -214,7 +223,8 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 	}
 	start := time.Now()
 	report, runErr := tau.Run(ctx, tau.Config{K: 1, Workers: 1, NewCompany: r.factory(t)}, tasks, liveAgent{rig: r, spend: transport, approve: approve, logf: t.Logf})
-	result := map[string]any{"synthetic": true, "agent_prompt_version": agent.PromptVersion, "source_revision": os.Getenv("EVAL_SOURCE_REVISION"), "model": os.Getenv("FIREWORKS_MODEL"), "started_at": start.UTC(), "elapsed_seconds": time.Since(start).Seconds(), "reserved_usd": transport.reserved.String(), "max_usd": cap.String(), "token_price_per_million_usd": rate.String(), "calls": transport.records, "report": report}
+	result := map[string]any{"synthetic": true, "agent_prompt_version": agent.PromptVersion, "source_revision": os.Getenv("EVAL_SOURCE_REVISION"), "source_sha256": os.Getenv("EVAL_SOURCE_SHA256"), "model": os.Getenv("FIREWORKS_MODEL"), "started_at": start.UTC(), "elapsed_seconds": time.Since(start).Seconds(), "reserved_usd": transport.reserved.String(), "max_usd": cap.String(), "token_price_per_million_usd": rate.String(), "calls": transport.records, "report": report}
+	result["shared_budget_charged_usd"] = ledger.Charged.String()
 	if runErr != nil {
 		result["harness_error"] = runErr.Error()
 	}

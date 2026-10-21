@@ -33,17 +33,21 @@ import (
 // constants, restated here because this package cannot import that one;
 // TestProfileToolNamesMatchW3 pins the two lists together.
 const (
-	ToolCustomerProfile = "get_customer_profile"
-	ToolSupplierProfile = "get_supplier_profile"
-	ToolItemProfile     = "get_item_profile"
-	ToolRecurring       = "get_recurring_streams"
-	ToolTenantProfile   = "get_tenant_profile"
+	ToolCustomerProfile  = "get_customer_profile"
+	ToolSupplierProfile  = "get_supplier_profile"
+	ToolItemProfile      = "get_item_profile"
+	ToolRecurring        = "get_recurring_streams"
+	ToolTenantProfile    = "get_tenant_profile"
+	ToolBusinessInsights = "get_business_insights"
 )
 
 // ProfileTools is the five, in the order the prompt lists them.
 var ProfileTools = []string{ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile}
 
 func isProfileTool(t string) bool {
+	if t == ToolBusinessInsights {
+		return true
+	}
 	for _, p := range ProfileTools {
 		if p == t {
 			return true

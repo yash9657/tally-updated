@@ -54,7 +54,7 @@ func profileJSON(status int, v any) agent.ProfileResult {
 
 func (p agentProfiles) ReadProfile(ctx context.Context, c agent.Caller, tool string, args agent.ProfileArgs) (agent.ProfileResult, error) {
 	primary, ok := profilePrimaryReport[tool]
-	if !ok {
+	if !ok && tool != agent.ToolBusinessInsights {
 		return profileJSON(http.StatusUnprocessableEntity, map[string]string{"error": "not a profile tool"}), nil
 	}
 	s := p.s
@@ -98,6 +98,16 @@ func (p agentProfiles) ReadProfile(ctx context.Context, c agent.Caller, tool str
 			Action: authz.Display, Resource: "report", ResourceName: report, HasWebAuthn: claims.HasWebAuthn()})
 		allowed[report] = d.Allow
 		return d.Allow
+	}
+	if tool == agent.ToolBusinessInsights {
+		mayResource := func(resource string) bool {
+			return authz.Evaluate(level, rules, authz.Request{UserID: userID, CompanyID: companyID,
+				Action: authz.Display, Resource: authz.Resource(resource), HasWebAuthn: claims.HasWebAuthn()}).Allow
+		}
+		if !mayResource("insights") {
+			return profileJSON(http.StatusForbidden, map[string]string{"error": "your level may not read insights"}), nil
+		}
+		return p.businessInsights(db.WithCompany(ctx, companyID), args.AsOf, may, mayResource)
 	}
 	if !may(primary) {
 		return profileJSON(http.StatusForbidden, map[string]string{"error": "your level may not open the " + primary +

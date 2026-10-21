@@ -26,6 +26,7 @@ type spendTransport struct {
 	calls               int
 	exhausted           bool
 	records             []map[string]any
+	ledger              *spendLedger
 }
 
 func (s *spendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -49,9 +50,15 @@ func (s *spendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// UTF-8 bytes bound byte-level tokens; 4096 adds allowance for chat framing.
 	tokens := int64(len(body)) + args.MaxTokens + 4096
 	reserve := decimal.NewFromInt(tokens).Mul(s.rate).Div(decimal.NewFromInt(1000000))
-	if s.calls >= 150 || s.reserved.Add(reserve).GreaterThan(s.cap) {
+	if s.calls >= 500 || (s.ledger == nil && s.reserved.Add(reserve).GreaterThan(s.cap)) {
 		s.exhausted = true
 		return nil, fmt.Errorf("evaluation spending limit reached before provider call")
+	}
+	if s.ledger != nil {
+		if err := s.ledger.reserve(reserve); err != nil {
+			s.exhausted = true
+			return nil, err
+		}
 	}
 	s.reserved = s.reserved.Add(reserve)
 	s.calls++
@@ -90,6 +97,22 @@ func (s *spendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		record["usage"] = metadata.Usage
 		record["choices"] = metadata.Choices
 		record["error"] = metadata.Error
+		if s.ledger != nil && resp.StatusCode == http.StatusOK {
+			var usage struct {
+				Prompt     *int64 `json:"prompt_tokens"`
+				Completion *int64 `json:"completion_tokens"`
+				Total      *int64 `json:"total_tokens"`
+			}
+			if json.Unmarshal(metadata.Usage, &usage) == nil && usage.Prompt != nil && usage.Completion != nil && usage.Total != nil && *usage.Prompt > 0 && *usage.Completion >= 0 && *usage.Total == *usage.Prompt+*usage.Completion {
+				charge := decimal.NewFromInt(*usage.Total).Mul(s.rate).Div(decimal.NewFromInt(1000000))
+				if err := s.ledger.settle(reserve, charge); err != nil {
+					s.exhausted = true
+					record["settlement_error"] = err.Error()
+				} else {
+					record["charged_usd"] = charge.String()
+				}
+			}
+		}
 	}
 	return resp, nil
 }
