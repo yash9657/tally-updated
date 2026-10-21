@@ -61,13 +61,13 @@ AWS account `481912007673`, region `us-east-1`. The app stack is [`infra/aws/mai
 
 | Layer | Resource | Key settings |
 |---|---|---|
-| Edge | CloudFront `d3178wtdimyukv.cloudfront.net` (later `api.tallyweb.world`) | PriceClass_100, HTTP/3, caching disabled, `AllViewerExceptHostHeader`, 60 s origin read timeout |
+| Edge | CloudFront `api.tallyweb.world` (distribution `EU249Y89T83CV`, `d3178wtdimyukv.cloudfront.net`) | PriceClass_100, HTTP/3, caching disabled, `AllViewerExceptHostHeader`, 60 s origin read timeout |
 | Compute | Lambda `tally-cored` behind a Function URL (`BUFFERED`) | `provided.al2023` arm64, 1024 MB, 900 s. A static Go binary is started by `bootstrap`. Lambda Web Adapter layer proxies to `:8080` with readiness on `/healthz` and async init. Runs in private subnets. |
 | Data | Aurora Serverless v2 `apps-pg` | PostgreSQL 17.11, pgvector 0.8.2, 0–4 ACU, auto-pause after 300 s, `force_ssl`, 7-day backups, RDS-managed master secret |
 | Network | fck-nat `t4g.nano` (ASG of 1), S3 gateway endpoint | NAT for Lambda egress, and the SSM port-forward target for operators |
 | Schedules | EventBridge Scheduler | `/internal/cron/tick` hourly, `/internal/cron/anchor` at 21:30 UTC (03:00 IST) |
 | Secrets | Secrets Manager `tally/cored`, `tally/auth-dev-signing-key` | Role passwords, `CRON_SECRET`, and the ed25519 signing key, injected as env vars at `terraform apply` |
-| Ops | CloudWatch | Log group with 14-day retention. `Errors` alarm at ≥ 5 per 5 min. |
+| Ops | CloudWatch, SNS | Log group with 14-day retention. `Errors` alarm `tally-cored-errors` at ≥ 5 per 5 min, notifying the shared `apps-alerts` SNS topic. |
 
 ### Request and data flow
 
@@ -118,7 +118,7 @@ AWS account `481912007673`, region `us-east-1`. The app stack is [`infra/aws/mai
 ### Observability
 
 - Logs go to CloudWatch Logs (`/aws/lambda/tally-cored`, 14 days). Each cron pass returns and logs per-job counts.
-- The `Errors` alarm fires at ≥ 5 per 5 min. It counts crashes and timeouts, **not HTTP 5xx**, and it has no SNS action yet.
+- The `Errors` alarm fires at ≥ 5 per 5 min. It counts crashes and timeouts, **not HTTP 5xx**. Alarm and OK notifications go to the shared `apps-alerts` SNS topic (applied in AWS; the matching change to `infra/aws/main.tf` is not yet merged to `master`).
 - Tracing uses OTLP/HTTP and is **off** unless `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set (for example, Langfuse). cored logs one line at boot saying which mode it is in. A malformed endpoint makes it refuse to start.
 
 ### Cost (estimate, us-east-1 list prices)
