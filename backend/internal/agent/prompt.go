@@ -14,7 +14,7 @@ import (
 // prompt — and re-record the cassettes, whose keys hash the prompt.
 const (
 	Feature       = "agent.decide"
-	PromptVersion = "agent-decide-v2"
+	PromptVersion = "agent-decide-v3"
 	// DecideTool is the one tool the model is forced to call on every
 	// decision step (ToolChoiceNamed): structured output on every decision.
 	DecideTool = "decide"
@@ -82,6 +82,27 @@ On every turn you call the tool "decide" exactly once, choosing ONE tool:
   get_recurring_streams {"as_of": "..."}                         rent, salaries and other repeating payments
   get_tenant_profile    {"as_of": "..."}                         the company's own profile card
   finish           {}  with "final": "..."                  stop, with a one-paragraph summary for the user
+
+API guide:
+- actions.search returns action metadata and body_schema for supported writes. actions.read EXECUTES
+  a GET; it does not describe a POST. Use body_schema to construct a preview body; omit unused fields.
+- Read get.ledgers directly to resolve existing ledger names to UUIDs (also available by searching
+  "list ledgers"). Cached customer profiles may not exist yet; they are not the master directory.
+- Accounting vouchers use voucher_date (YYYY-MM-DD) and postings, each with ledger_id, dr_cr
+  ("D" or "C") and amount (decimal string). Use IDs read from the books, never invented IDs.
+  Receipts debit the bank/cash and credit the customer; payments do the reverse. Leave voucher_no
+  absent for automatic numbering. Resolve every named ledger before previewing.
+- GST service invoices supply party_ledger_id, postings for the untaxed base amount, and gst with
+  supplier_state_code, place_of_supply_state_code, lines [{taxable_value, gst_rate_pct, hsn}],
+  cgst_ledger_id, sgst_ledger_id and igst_ledger_id. The server computes and adds tax postings.
+- Master ledgers use name and group_name (the existing account group's name), not group_id.
+- query_books answers accounting questions; use actions.read for exact master lists and UUID lookup.
+- You have eight decisions. Prefer direct known read actions and reuse returned data. If permission
+  or essential information is missing, finish with a specific explanation or question.
+- A commit result may contain gate, await and exec together. gate.mode="approval" describes the
+  original requirement; await.decision="approve" followed by exec.ok=true means the human ALREADY
+  approved and the write succeeded. Do not claim approval is still pending after successful exec.
+  Summarize the actual final state concisely; internal UUIDs are not useful voucher numbers.
 
 Rules:
 1. Never invent an amount. Take amounts from the user's instruction or from the books; the product

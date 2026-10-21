@@ -155,12 +155,13 @@ type searchArgs struct {
 }
 
 type searchHit struct {
-	ActionID string `json:"action_id"`
-	ACLKey   string `json:"acl_key"`
-	Risk     string `json:"risk"`
-	Method   string `json:"method"`
-	Route    string `json:"route"`
-	Commit   bool   `json:"committable"`
+	ActionID   string          `json:"action_id"`
+	ACLKey     string          `json:"acl_key"`
+	Risk       string          `json:"risk"`
+	Method     string          `json:"method"`
+	Route      string          `json:"route"`
+	Commit     bool            `json:"committable"`
+	BodySchema json.RawMessage `json:"body_schema,omitempty"`
 }
 
 // search is actions.search: the registry's deterministic matcher, filtered to
@@ -169,8 +170,18 @@ func (l *loop) search(q string) []searchHit {
 	now := l.e.now()
 	p := l.run.Principal()
 	var words []string
+	method := ""
 	for _, w := range strings.Fields(strings.ToLower(q)) {
 		switch w {
+		case "list", "get", "read", "show":
+			method = "GET"
+			continue
+		case "create", "post", "record":
+			method = "POST"
+			continue
+		case "alter", "update", "edit":
+			method = "PUT"
+			continue
 		case "voucher", "vouchers", "entry", "a", "an", "the", "for", "to", "of":
 			continue
 		}
@@ -178,7 +189,7 @@ func (l *loop) search(q string) []searchHit {
 	}
 	var hits []searchHit
 	for _, s := range actions.Specs {
-		if !policy.EffectiveRights(p, s, now).Allow {
+		if (method != "" && s.Method != method) || !policy.EffectiveRights(p, s, now).Allow {
 			continue
 		}
 		hay := strings.ToLower(s.ID + " " + s.ACLKey + " " + s.Label)
@@ -192,7 +203,11 @@ func (l *loop) search(q string) []searchHit {
 		if !match {
 			continue
 		}
-		hits = append(hits, searchHit{ActionID: s.ID, ACLKey: s.ACLKey, Risk: string(s.Risk),
+		var schema json.RawMessage
+		if l.e.ActionSchema != nil {
+			schema = l.e.ActionSchema(s.ID)
+		}
+		hits = append(hits, searchHit{BodySchema: schema, ActionID: s.ID, ACLKey: s.ACLKey, Risk: string(s.Risk),
 			Method: s.Method, Route: strings.TrimPrefix(s.Route, "/v1/companies/{companyID}"), Commit: previewable[s.ID]})
 	}
 	sort.Slice(hits, func(i, j int) bool {

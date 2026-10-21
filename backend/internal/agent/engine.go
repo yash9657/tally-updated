@@ -50,6 +50,9 @@ type Engine struct {
 	// Profiles is W3's profile tools behind internal/server's ACL filter
 	// (profiles.go). Nil means the tools answer "not available".
 	Profiles ProfileReader
+	// ActionSchema describes the real HTTP body shape, supplied by the server.
+	// It is documentation only; existing validators and policy remain authoritative.
+	ActionSchema func(string) json.RawMessage
 	// Now is the one clock: step deadlines, the poller's due query and the
 	// intent log all read it, so the 72-hour test can drive it.
 	Now            func() time.Time

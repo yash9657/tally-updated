@@ -63,10 +63,10 @@ import (
 	// peekTallyXMLVoucherDate must parse the envelope and convert a Tally date with
 	// the SAME two calls migration's importer uses, or the PDP and the writer could
 	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
-	"github.com/khata/cored/internal/integration"
-	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/insights"
 	"github.com/khata/cored/internal/insights/narrate"
+	"github.com/khata/cored/internal/integration"
+	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/llm"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
@@ -459,7 +459,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 // router. Split out so the no-database registry generator (&Server{}) is not
 // asked to build one.
 func (s *Server) initAgent(model *llm.Client) {
-	s.agent = &agent.Engine{Pool: s.pool, LLM: model}
+	s.agent = &agent.Engine{Pool: s.pool, LLM: model, ActionSchema: agentActionSchema}
 	s.agent.Dispatch = agentDispatcher{s: s, now: s.agent.Clock}
 	s.agent.Profiles = agentProfiles{s: s}
 	s.agentPoller = &agent.Poller{Engine: s.agent}

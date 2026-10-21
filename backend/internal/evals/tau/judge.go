@@ -99,6 +99,10 @@ func diffSet(kind string, want, got []string) []string {
 // ⚠️ "Cr" IS NOT A MULTIPLIER HERE, deliberately: in an Indian ledger "59,000
 // Cr" is a CREDIT balance, and reading it as 59,000 crore would turn the most
 // common way a balance is written into a figure ten million times too large.
+// UUIDs are identifiers, not money. Exclude the complete token, including its
+// numeric segments, from both required-output matching and extra-figure checks.
+var uuidInAnswer = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+
 var numberRe = regexp.MustCompile(`(?i)(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|लाख|करोड़|करोड)?`)
 
 // devanagariDigits maps ० … ९ onto 0 … 9. A Hindi answer may write its figures
@@ -116,7 +120,7 @@ var devanagariDigits = strings.NewReplacer(
 // magnitudes, and the DIRECTION of a balance is judged — where it matters — by
 // the ledger state, not the prose.
 func AnswerFigures(answer string) []decimal.Decimal {
-	s := devanagariDigits.Replace(answer)
+	s := uuidInAnswer.ReplaceAllString(devanagariDigits.Replace(answer), "")
 	var out []decimal.Decimal
 	for _, m := range numberRe.FindAllStringSubmatch(s, -1) {
 		d, err := decimal.NewFromString(strings.ReplaceAll(m[1], ",", ""))
@@ -188,7 +192,7 @@ func extraMoneyFigures(expected []string, answer string) []string {
 			want[d.Abs().Round(2).StringFixed(2)] = true
 		}
 	}
-	s := devanagariDigits.Replace(answer)
+	s := uuidInAnswer.ReplaceAllString(devanagariDigits.Replace(answer), "")
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range moneyShapedRe.FindAllStringSubmatch(s, -1) {
