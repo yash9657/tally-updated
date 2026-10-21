@@ -41,6 +41,13 @@ paths = [
   '''^frontend/src/screens/reports/GSTR9Screen\.test\.tsx$''',
 ]
 
+[[rules.allowlists]]
+description = "Synthetic tau company GSTIN echoed in the dated Fireworks evaluation results"
+condition = "AND"
+regexTarget = "match"
+regexes = ['''\b27AAACK1234A1ZA\b''']
+paths = ['''^docs/evals/fireworks-2026-10-21\.json$''']
+
 [[rules]]
 id = "india-aadhaar"
 description = "Possible Aadhaar number (12 digits) committed in source"
