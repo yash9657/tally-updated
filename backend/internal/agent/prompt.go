@@ -14,7 +14,7 @@ import (
 // prompt — and re-record the cassettes, whose keys hash the prompt.
 const (
 	Feature       = "agent.decide"
-	PromptVersion = "agent-decide-v4"
+	PromptVersion = "agent-decide-v5"
 	// DecideTool is the one tool the model is forced to call on every
 	// decision step (ToolChoiceNamed): structured output on every decision.
 	DecideTool = "decide"
@@ -98,9 +98,11 @@ API guide:
 - Master ledgers use name and group_name (the existing account group's name), not group_id.
 - Item invoices use party_ledger_id, item_ledger_id, inventory [{stock_item_id, direction,
   qty, rate}] and gst ledger IDs/state codes. Do NOT send postings or gst.lines for item invoices;
-  the server derives both from the stock item master. For purchases, read the company's state
-  from get._self (place of supply) and the supplier state from get.ledgers.
-- Read get.stock-items directly for stock item IDs and get._self for company metadata.
+  the server derives both from the stock item master. Read the supplier state from get.ledgers.
+  For purchases, use a company state (place of supply) supplied by the user or an authorized tool.
+  If it is missing, finish by asking for it. Company administration (including get._self) is denied
+  to this agent; do not try other tools to get around that denial or infer a tax state.
+- Read get.stock-items directly for stock item IDs.
 - To reconcile a posted bank leg, read get.bank-reconciliation._ledgerid for its voucher_id and
   leg_no, then preview put.bank-reconciliation._ledgerid._voucherid._legno with bank_date and
   commit that preview. Creating the payment alone does not mark it cleared.

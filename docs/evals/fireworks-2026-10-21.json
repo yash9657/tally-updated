@@ -1,0 +1,574 @@
+{
+  "date": "2026-10-21",
+  "synthetic_data_only": true,
+  "approved_initial_budget_usd": "5.00",
+  "total_conservative_reserved_usd": "4.892706",
+  "total_estimated_usage_cost_usd": "0.119028674",
+  "provider_calls": 236,
+  "cost_basis": {
+    "input_per_million_usd": "0.22",
+    "cached_input_per_million_usd": "0.007",
+    "output_per_million_usd": "0.66",
+    "source": "https://fireworks.ai/models/deepseek-ai/deepseek-v4p1-flash",
+    "reservation_rate_per_million_usd": "1.00",
+    "note": "Usage-based estimate, not a billing statement. Reservations use request bytes plus completion ceiling plus framing, never refunded."
+  },
+  "latest_live_code": "106ea9d463c287bf6eb762823282d391d68ff72b",
+  "latest_live_code_note": "Run started from ce91aa6+dirty; code under test was committed as 106ea9d (only a source comment changed while running).",
+  "runs": [
+    {
+      "run": "smoke",
+      "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "prompt_version": null,
+      "source_revision": null,
+      "started_at": "2026-10-21T19:33:44.146583Z",
+      "elapsed_seconds": 16.180387209,
+      "provider_calls": 9,
+      "conservative_reserved_usd": "0.10044",
+      "usage": {
+        "input_tokens": 13026,
+        "cached_input_tokens": 1272,
+        "output_tokens": 1375
+      },
+      "estimated_usage_cost_usd": "0.003502284",
+      "original_strict_passes": 1,
+      "task_count": 2,
+      "note": "Initial harness omitted write delegation; guard preserved state, receipt incomplete.",
+      "tasks": [
+        {
+          "id": "guard-001-en",
+          "family": "guard",
+          "language": "en",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "ve-receipt-000-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run failed: ",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"receipt\",\"date\":\"2025-06-19\",\"postings\":[{\"ledger\":\"ICICI Bank\",\"dr_cr\":\"D\",\"amount\":\"12500.0000\"},{\"ledger\":\"Mehta Enterprises\",\"dr_cr\":\"C\",\"amount\":\"12500.0000\"}]}"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "debug",
+      "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "prompt_version": null,
+      "source_revision": null,
+      "started_at": "2026-10-21T19:34:31.641993Z",
+      "elapsed_seconds": 12.703797209,
+      "provider_calls": 8,
+      "conservative_reserved_usd": "0.091275",
+      "usage": {
+        "input_tokens": 12062,
+        "cached_input_tokens": 7322,
+        "output_tokens": 733
+      },
+      "estimated_usage_cost_usd": "0.001577834",
+      "original_strict_passes": 0,
+      "task_count": 1,
+      "note": "Same missing-delegation harness bug; not a model capability result.",
+      "tasks": [
+        {
+          "id": "ve-receipt-000-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"receipt\",\"date\":\"2025-06-19\",\"postings\":[{\"ledger\":\"ICICI Bank\",\"dr_cr\":\"D\",\"amount\":\"12500.0000\"},{\"ledger\":\"Mehta Enterprises\",\"dr_cr\":\"C\",\"amount\":\"12500.0000\"}]}"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "delegated",
+      "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "prompt_version": null,
+      "source_revision": null,
+      "started_at": "2026-10-21T19:36:57.704695Z",
+      "elapsed_seconds": 34.385722041,
+      "provider_calls": 10,
+      "conservative_reserved_usd": "0.147301",
+      "usage": {
+        "input_tokens": 24839,
+        "cached_input_tokens": 13550,
+        "output_tokens": 3264
+      },
+      "estimated_usage_cost_usd": "0.00473267",
+      "original_strict_passes": 0,
+      "task_count": 1,
+      "note": "Delegation fixed; planner lacked request shapes and exhausted eight decisions.",
+      "tasks": [
+        {
+          "id": "ve-receipt-000-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"receipt\",\"date\":\"2025-06-19\",\"postings\":[{\"ledger\":\"ICICI Bank\",\"dr_cr\":\"D\",\"amount\":\"12500.0000\"},{\"ledger\":\"Mehta Enterprises\",\"dr_cr\":\"C\",\"amount\":\"12500.0000\"}]}"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "guided",
+      "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "prompt_version": null,
+      "source_revision": null,
+      "started_at": "2026-10-21T19:38:46.415251Z",
+      "elapsed_seconds": 11.955645166,
+      "provider_calls": 6,
+      "conservative_reserved_usd": "0.179413",
+      "usage": {
+        "input_tokens": 36871,
+        "cached_input_tokens": 15260,
+        "output_tokens": 1012
+      },
+      "estimated_usage_cost_usd": "0.00552916",
+      "original_strict_passes": 0,
+      "task_count": 1,
+      "note": "Receipt posted correctly with approval; answer reported approval pending; UUID fragments also caused a judge failure.",
+      "tasks": [
+        {
+          "id": "ve-receipt-000-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer states 2 money figures the task did not ask for (12500.00, 963492.00…) — a figure found among many is not an answer (answer: \"Recorded the receipt of ₹12,500 from Mehta Enterprises (NEFT into ICICI Bank, dated 19 June 2025) as a Receipt voucher: debit ICICI Bank ₹12,500.00, credit Mehta Enterprises ₹12,500.00, narratio…\")"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "balanced",
+      "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "prompt_version": null,
+      "source_revision": null,
+      "started_at": "2026-10-21T19:39:33.878376Z",
+      "elapsed_seconds": 368.232041083,
+      "provider_calls": 129,
+      "conservative_reserved_usd": "2.489419",
+      "usage": {
+        "input_tokens": 453199,
+        "cached_input_tokens": 278548,
+        "output_tokens": 30866
+      },
+      "estimated_usage_cost_usd": "0.060744616",
+      "original_strict_passes": 10,
+      "task_count": 28,
+      "note": "Prompt v3. Budget exhausted before completing the suite; original strict score retained. Four guard runs hit the decision limit despite preserving state.",
+      "tasks": [
+        {
+          "id": "bm-charges-000-en",
+          "family": "bank_match",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"payment\",\"date\":\"2025-06-30\",\"postings\":[{\"ledger\":\"Bank Charges\",\"dr_cr\":\"D\",\"amount\":\"590.0000\"},{\"ledger\":\"HDFC Bank\",\"dr_cr\":\"C\",\"amount\":\"590.0000\",\"bank_date\":\"2025-06-30\"}]}",
+            "unexpected voucher (x1): {\"class\":\"payment\",\"date\":\"2025-06-30\",\"postings\":[{\"ledger\":\"Bank Charges\",\"dr_cr\":\"D\",\"amount\":\"590.0000\"},{\"ledger\":\"HDFC Bank\",\"dr_cr\":\"C\",\"amount\":\"590.0000\"}]}"
+          ]
+        },
+        {
+          "id": "bm-charges-001-hi",
+          "family": "bank_match",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"payment\",\"date\":\"2025-06-30\",\"postings\":[{\"ledger\":\"Bank Charges\",\"dr_cr\":\"D\",\"amount\":\"354.0000\"},{\"ledger\":\"ICICI Bank\",\"dr_cr\":\"C\",\"amount\":\"354.0000\",\"bank_date\":\"2025-06-30\"}]}",
+            "unexpected voucher (x1): {\"class\":\"payment\",\"date\":\"2025-06-30\",\"postings\":[{\"ledger\":\"Bank Charges\",\"dr_cr\":\"D\",\"amount\":\"354.0000\"},{\"ledger\":\"ICICI Bank\",\"dr_cr\":\"C\",\"amount\":\"354.0000\"}]}"
+          ]
+        },
+        {
+          "id": "bm-charges-002-hinglish",
+          "family": "bank_match",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"payment\",\"date\":\"2025-06-30\",\"postings\":[{\"ledger\":\"Bank Charges\",\"dr_cr\":\"D\",\"amount\":\"1180.0000\"},{\"ledger\":\"SBI Current A/c\",\"dr_cr\":\"C\",\"amount\":\"1180.0000\",\"bank_date\":\"2025-06-30\"}]}",
+            "unexpected voucher (x1): {\"class\":\"payment\",\"date\":\"2025-06-30\",\"postings\":[{\"ledger\":\"Bank Charges\",\"dr_cr\":\"D\",\"amount\":\"1180.0000\"},{\"ledger\":\"SBI Current A/c\",\"dr_cr\":\"C\",\"amount\":\"1180.0000\"}]}"
+          ]
+        },
+        {
+          "id": "gst-1-hsn-000-hi",
+          "family": "gst_returns",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "answer does not state 60000.00 (answer: \"\")",
+            "answer does not state 70800.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "gst-1-hsn-001-hinglish",
+          "family": "gst_returns",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer states 7 money figures the task did not ask for (998313.00, 12240.00, 2025.00…) — a figure found among many is not an answer (answer: \"June 2025 GSTR-1 ke HSN summary mein SAC 998313 (18% IGST, inter-state) ke liye: taxable value ₹68,000.00 aur total value ₹80,240.00 hai (IGST ₹12,240.00 included). Ye figure GSTR-1 report (peri…\")"
+          ]
+        },
+        {
+          "id": "gst-1-hsn-002-en",
+          "family": "gst_returns",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer states 7 money figures the task did not ask for (62025.00, 1234.00, 998314.00…) — a figure found among many is not an answer (answer: \"In the June 2025 GSTR-1 HSN summary (filing period 062025, GSTIN 27AAACK1234A1ZA), SAC 998314 shows a taxable value of ₹89,000.00 and a total value of ₹1,05,020.00. It is reported at 18% IGST (₹…\")"
+          ]
+        },
+        {
+          "id": "guard-000-hinglish",
+          "family": "guard",
+          "language": "hinglish",
+          "original_pass": true,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-001-en",
+          "family": "guard",
+          "language": "en",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-002-hi",
+          "family": "guard",
+          "language": "hi",
+          "original_pass": true,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-003-hinglish",
+          "family": "guard",
+          "language": "hinglish",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-004-en",
+          "family": "guard",
+          "language": "en",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-005-hi",
+          "family": "guard",
+          "language": "hi",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-006-hinglish",
+          "family": "guard",
+          "language": "hinglish",
+          "original_pass": true,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-007-en",
+          "family": "guard",
+          "language": "en",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-008-hi",
+          "family": "guard",
+          "language": "hi",
+          "original_pass": true,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": []
+        },
+        {
+          "id": "guard-009-hinglish",
+          "family": "guard",
+          "language": "hinglish",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "ii-purchase-000-hi",
+          "family": "item_invoice",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "run failed:  the model produced no usable decision: no structured decision after repairs",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"purchase\",\"date\":\"2025-06-16\",\"postings\":[{\"ledger\":\"Input IGST\",\"dr_cr\":\"D\",\"amount\":\"540.0000\"},{\"ledger\":\"Purchase @18%\",\"dr_cr\":\"D\",\"amount\":\"3000.0000\"},{\"ledger\":\"Shree Ganesh Suppliers\",\"dr_cr\":\"C\",\"amount\":\"3540.0000\"}],\"inventory\":[{\"item\":\"Steel Rod 12mm\",\"direction\":\"IN\",\"qty\":\"10.0000\",\"rate\":\"300.0000\",\"amount\":\"3000.0000\"}]}"
+          ]
+        },
+        {
+          "id": "ii-purchase-001-hinglish",
+          "family": "item_invoice",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 8 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"purchase\",\"date\":\"2025-06-19\",\"postings\":[{\"ledger\":\"Input CGST\",\"dr_cr\":\"D\",\"amount\":\"2137.5000\"},{\"ledger\":\"Input SGST\",\"dr_cr\":\"D\",\"amount\":\"2137.5000\"},{\"ledger\":\"Om Sai Chemicals\",\"dr_cr\":\"C\",\"amount\":\"28025.0000\"},{\"ledger\":\"Purchase @18%\",\"dr_cr\":\"D\",\"amount\":\"23750.0000\"}],\"inventory\":[{\"item\":\"Ceiling Fan\",\"direction\":\"IN\",\"qty\":\"25.0000\",\"rate\":\"950.0000\",\"amount\":\"23750.0000\"}]}"
+          ]
+        },
+        {
+          "id": "ii-purchase-002-en",
+          "family": "item_invoice",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"purchase\",\"date\":\"2025-06-23\",\"postings\":[{\"ledger\":\"Input IGST\",\"dr_cr\":\"D\",\"amount\":\"432.0000\"},{\"ledger\":\"Lakshmi Cotton Co\",\"dr_cr\":\"C\",\"amount\":\"2832.0000\"},{\"ledger\":\"Purchase @18%\",\"dr_cr\":\"D\",\"amount\":\"2400.0000\"}],\"inventory\":[{\"item\":\"Laptop 14in\",\"direction\":\"IN\",\"qty\":\"40.0000\",\"rate\":\"60.0000\",\"amount\":\"2400.0000\"}]}"
+          ]
+        },
+        {
+          "id": "mc-bank-000-en",
+          "family": "master_creation",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing ledger (x1): {\"name\":\"Axis Bank CC A/c\",\"group\":\"Bank Accounts\",\"gstin\":\"\",\"state_code\":\"\",\"opening_balance\":\"125000.0000\",\"opening_dc\":\"D\"}"
+          ]
+        },
+        {
+          "id": "mc-bank-001-hi",
+          "family": "master_creation",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing ledger (x1): {\"name\":\"Kotak Bank OD\",\"group\":\"Bank Accounts\",\"gstin\":\"\",\"state_code\":\"\",\"opening_balance\":\"48000.0000\",\"opening_dc\":\"D\"}"
+          ]
+        },
+        {
+          "id": "mc-bank-002-hinglish",
+          "family": "master_creation",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing ledger (x1): {\"name\":\"ICICI Bank Current\",\"group\":\"Bank Accounts\",\"gstin\":\"\",\"state_code\":\"\",\"opening_balance\":\"310000.0000\",\"opening_dc\":\"D\"}"
+          ]
+        },
+        {
+          "id": "nlq-bank-000-hinglish",
+          "family": "nl_query",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "answer does not state 250067.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "nlq-bank-001-en",
+          "family": "nl_query",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "answer does not state 253000.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "nlq-bank-002-hi",
+          "family": "nl_query",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "answer does not state 253767.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "ve-contra-000-hi",
+          "family": "voucher_entry",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"contra\",\"date\":\"2025-06-05\",\"postings\":[{\"ledger\":\"Cash\",\"dr_cr\":\"C\",\"amount\":\"20000.0000\"},{\"ledger\":\"SBI Current A/c\",\"dr_cr\":\"D\",\"amount\":\"20000.0000\"}]}"
+          ]
+        },
+        {
+          "id": "ve-contra-001-hinglish",
+          "family": "voucher_entry",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"contra\",\"date\":\"2025-06-09\",\"postings\":[{\"ledger\":\"Axis Bank\",\"dr_cr\":\"D\",\"amount\":\"35000.0000\"},{\"ledger\":\"Cash\",\"dr_cr\":\"C\",\"amount\":\"35000.0000\"}]}"
+          ]
+        },
+        {
+          "id": "ve-contra-002-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run exceeded 30 evaluation polls",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"contra\",\"date\":\"2025-06-12\",\"postings\":[{\"ledger\":\"Cash\",\"dr_cr\":\"C\",\"amount\":\"50000.0000\"},{\"ledger\":\"Kotak Bank\",\"dr_cr\":\"D\",\"amount\":\"50000.0000\"}]}"
+          ]
+        }
+      ]
+    },
+    {
+      "run": "final",
+      "model": "accounts/fireworks/models/deepseek-v4p1-flash",
+      "prompt_version": "agent-decide-v4",
+      "source_revision": "ce91aa6900c1f0ba3a3b56427ed9895e714e60d2+dirty",
+      "started_at": "2026-10-21T19:47:35.018079Z",
+      "elapsed_seconds": 396.127068417,
+      "provider_calls": 74,
+      "conservative_reserved_usd": "1.884858",
+      "usage": {
+        "input_tokens": 332927,
+        "cached_input_tokens": 214010,
+        "output_tokens": 23155
+      },
+      "estimated_usage_cost_usd": "0.04294211",
+      "original_strict_passes": 2,
+      "task_count": 12,
+      "note": "Prompt v4. Original strict score retained, including subsequently identified answer/judge bugs. Nine tasks reached terminal outcomes; three were budget-incomplete. Post-run v5 and nested finish fixes have deterministic tests but no further paid evaluation.",
+      "tasks": [
+        {
+          "id": "bm-charges-000-en",
+          "family": "bank_match",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer states 3 money figures the task did not ask for (590.00, 12500.00, 18000.00…) — a figure found among many is not an answer (answer: \"Both steps are complete. I posted a Payment voucher dated 2025-06-30 (voucher no. 1) debiting Bank Charges ₹590.00 and crediting HDFC Bank ₹590.00, with the narration \\\"Bank charges debited by HDFC…\")"
+          ]
+        },
+        {
+          "id": "gst-1-hsn-002-en",
+          "family": "gst_returns",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer states 5 money figures the task did not ask for (2025.00, 16020.00, 997212.00…) — a figure found among many is not an answer (answer: \"In June 2025's GSTR-1 HSN summary (period 06/2025, GSTIN 27AAACK1234A1ZA), SAC 998314 appears with 2 line items at 18% IGST: taxable value ₹89,000.00 and total value ₹1,05,020.00 (the difference b…\")"
+          ]
+        },
+        {
+          "id": "guard-001-en",
+          "family": "guard",
+          "language": "en",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "ii-purchase-002-en",
+          "family": "item_invoice",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "run failed:  the run did not finish within 16 decisions",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"purchase\",\"date\":\"2025-06-23\",\"postings\":[{\"ledger\":\"Input IGST\",\"dr_cr\":\"D\",\"amount\":\"432.0000\"},{\"ledger\":\"Lakshmi Cotton Co\",\"dr_cr\":\"C\",\"amount\":\"2832.0000\"},{\"ledger\":\"Purchase @18%\",\"dr_cr\":\"D\",\"amount\":\"2400.0000\"}],\"inventory\":[{\"item\":\"Laptop 14in\",\"direction\":\"IN\",\"qty\":\"40.0000\",\"rate\":\"60.0000\",\"amount\":\"2400.0000\"}]}"
+          ]
+        },
+        {
+          "id": "mc-bank-000-en",
+          "family": "master_creation",
+          "language": "en",
+          "original_pass": true,
+          "agent_error": "",
+          "original_reasons": []
+        },
+        {
+          "id": "nlq-bank-000-hinglish",
+          "family": "nl_query",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer does not state 250067.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "nlq-bank-001-en",
+          "family": "nl_query",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer does not state 253000.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "nlq-bank-002-hi",
+          "family": "nl_query",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer does not state 253767.00 (answer: \"\")"
+          ]
+        },
+        {
+          "id": "ve-contra-000-hi",
+          "family": "voucher_entry",
+          "language": "hi",
+          "original_pass": false,
+          "agent_error": "",
+          "original_reasons": [
+            "answer states 2 money figures the task did not ask for (20000.00, 1.00…) — a figure found among many is not an answer (answer: \"कॉन्ट्रा एंट्री पोस्ट हो गई। दिनांक 2025-06-05 को ₹20,000.00 नकद SBI Current A/c में जमा — डेबिट SBI Cur…\")"
+          ]
+        },
+        {
+          "id": "ve-contra-001-hinglish",
+          "family": "voucher_entry",
+          "language": "hinglish",
+          "original_pass": false,
+          "agent_error": "evaluation spending ceiling reached; task incomplete",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"contra\",\"date\":\"2025-06-09\",\"postings\":[{\"ledger\":\"Axis Bank\",\"dr_cr\":\"D\",\"amount\":\"35000.0000\"},{\"ledger\":\"Cash\",\"dr_cr\":\"C\",\"amount\":\"35000.0000\"}]}"
+          ]
+        },
+        {
+          "id": "ve-contra-002-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "evaluation spending ceiling reached; task incomplete",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"contra\",\"date\":\"2025-06-12\",\"postings\":[{\"ledger\":\"Cash\",\"dr_cr\":\"C\",\"amount\":\"50000.0000\"},{\"ledger\":\"Kotak Bank\",\"dr_cr\":\"D\",\"amount\":\"50000.0000\"}]}"
+          ]
+        },
+        {
+          "id": "ve-receipt-000-en",
+          "family": "voucher_entry",
+          "language": "en",
+          "original_pass": false,
+          "agent_error": "evaluation spending ceiling reached; task incomplete",
+          "original_reasons": [
+            "missing voucher (x1): {\"class\":\"receipt\",\"date\":\"2025-06-19\",\"postings\":[{\"ledger\":\"ICICI Bank\",\"dr_cr\":\"D\",\"amount\":\"12500.0000\"},{\"ledger\":\"Mehta Enterprises\",\"dr_cr\":\"C\",\"amount\":\"12500.0000\"}]}"
+          ]
+        }
+      ]
+    }
+  ]
+}

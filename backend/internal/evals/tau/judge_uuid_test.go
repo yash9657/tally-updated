@@ -11,7 +11,7 @@ func TestAnswerUUIDsAreNotMoney(t *testing.T) {
 	if got := checkOutputs([]string{"963492"}, "voucher_id "+id); len(got) == 0 {
 		t.Fatal("UUID satisfied required money output")
 	}
-	if got := checkOutputs(nil, "₹12,500.00 and ₹99,999.00, voucher_id "+id); len(got) == 0 {
+	if got := checkOutputs([]string{"12500"}, "₹12,500.00, ₹99,999.00 and ₹80,000.00, voucher_id "+id); len(got) == 0 {
 		t.Fatal("unexpected money escaped judge")
 	}
 }

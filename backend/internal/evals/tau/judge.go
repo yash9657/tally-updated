@@ -209,9 +209,9 @@ func extraMoneyFigures(expected []string, answer string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range moneyShapedRe.FindAllStringSubmatch(s, -1) {
-		raw := m[2]
+		raw := strings.TrimRight(m[2], ",")
 		intPart, frac, _ := strings.Cut(raw, ".")
-		shaped := m[1] != "" || m[3] != "" || strings.Contains(strings.TrimRight(raw, ","), ",") || len(frac) == 2
+		shaped := m[1] != "" || m[3] != "" || strings.Contains(raw, ",") || len(frac) == 2
 		if !shaped && frac == "" && len(intPart) >= 4 {
 			if n, err := decimal.NewFromString(intPart); err == nil && !(n.GreaterThanOrEqual(decimal.NewFromInt(1900)) && n.LessThanOrEqual(decimal.NewFromInt(2100))) {
 				shaped = true
