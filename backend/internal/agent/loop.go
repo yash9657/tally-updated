@@ -161,7 +161,18 @@ func (l *loop) next(done []durable.StepResult) (durable.Step, bool, error) {
 		case d.Decision == nil:
 			return l.finishStep(finishOut{Status: string(StatusFailed), Reason: "the model produced no usable decision: " + d.Invalid}), true, nil
 		case d.Decision.Tool == ToolFinish:
-			return l.finishStep(finishOut{Status: string(StatusCompleted), Final: d.Decision.Final}), true, nil
+			final := d.Decision.Final
+			if strings.TrimSpace(final) == "" {
+				// Some providers put the finish text alongside the other tool
+				// arguments. Preserve that answer instead of completing silently.
+				var args struct {
+					Final string `json:"final"`
+				}
+				if json.Unmarshal(d.Decision.Args, &args) == nil {
+					final = args.Final
+				}
+			}
+			return l.finishStep(finishOut{Status: string(StatusCompleted), Final: final}), true, nil
 		case d.Decision.Tool == ToolCommit:
 			return l.gateStep(k), true, nil
 		default:

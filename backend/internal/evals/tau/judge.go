@@ -150,6 +150,11 @@ func AnswerFigures(answer string) []decimal.Decimal {
 // paisa. A figure stated in lakh must still be exact: "1.18 lakh" is 118000.00,
 // and if the books say 118000.50 the answer is wrong.
 func checkOutputs(expected []string, answer string) []string {
+	// Write-only tasks specify their exact resulting books, without an answer
+	// constraint. Acknowledging the posted amounts is not an extra-output error.
+	if len(expected) == 0 {
+		return nil
+	}
 	figs := AnswerFigures(answer)
 	var out []string
 	for _, e := range expected {
@@ -206,7 +211,7 @@ func extraMoneyFigures(expected []string, answer string) []string {
 	for _, m := range moneyShapedRe.FindAllStringSubmatch(s, -1) {
 		raw := m[2]
 		intPart, frac, _ := strings.Cut(raw, ".")
-		shaped := m[1] != "" || m[3] != "" || strings.Contains(raw, ",") || len(frac) == 2
+		shaped := m[1] != "" || m[3] != "" || strings.Contains(strings.TrimRight(raw, ","), ",") || len(frac) == 2
 		if !shaped && frac == "" && len(intPart) >= 4 {
 			if n, err := decimal.NewFromString(intPart); err == nil && !(n.GreaterThanOrEqual(decimal.NewFromInt(1900)) && n.LessThanOrEqual(decimal.NewFromInt(2100))) {
 				shaped = true

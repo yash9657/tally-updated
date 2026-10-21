@@ -30,3 +30,12 @@ func TestTaxIdentifiersAndDatesCannotSatisfyMoneyAnswers(t *testing.T) {
 		t.Fatal("shotgun answer passed")
 	}
 }
+
+func TestTrailingPunctuationIsNotDigitGrouping(t *testing.T) {
+	if extra := extraMoneyFigures([]string{"590"}, "Posted ₹590.00, voucher 1, approval 2,"); len(extra) != 0 {
+		t.Fatalf("punctuation turned identifiers into money: %v", extra)
+	}
+	if extra := extraMoneyFigures([]string{"590"}, "₹590.00, unrelated 12,500,"); len(extra) != 1 {
+		t.Fatalf("real grouped money escaped: %v", extra)
+	}
+}
