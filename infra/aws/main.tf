@@ -193,6 +193,7 @@ resource "aws_cloudfront_distribution" "api" {
   http_version    = "http2and3"
   is_ipv6_enabled = true
   aliases         = local.api_domain == "" ? [] : [local.api_domain]
+  web_acl_id      = aws_wafv2_web_acl.api.arn
 
   origin {
     origin_id   = "cored"

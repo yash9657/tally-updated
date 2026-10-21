@@ -1,0 +1,7 @@
+# Historical generic-api-key false positives: ordinary field names, not tokens.
+# Only these exact commit/path/rule/line occurrences are excluded.
+# receipt_lag_p50_days and receipt_lag_p90_days (profile fact vocabulary):
+adebbbc258c8b43797094acfdefa460b978a40c5:backend/internal/profile/vocabulary.go:generic-api-key:92
+adebbbc258c8b43797094acfdefa460b978a40c5:backend/internal/profile/vocabulary.go:generic-api-key:93
+# outward_r1_vs_r3b (GSTR-9 comparison key):
+92319a9abc1ba4bc5ae4cef1ed143d3e8e44edf3:frontend/src/screens/reports/GSTR9Screen.tsx:generic-api-key:136

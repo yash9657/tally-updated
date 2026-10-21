@@ -39,3 +39,9 @@ coverage/
 
 # Playwright MCP session artifacts (screenshots, downloads, console logs)
 .playwright-mcp/
+# CI scanner outputs (redacted reports are uploaded as CI artifacts).
+/security-python-locks/
+/python-inventory.json
+/python-trivy.json
+/gitleaks.json
+/trivy.sarif

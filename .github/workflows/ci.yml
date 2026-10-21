@@ -6,7 +6,7 @@
 #   frontend -> pnpm install + vitest + tsc
 #   corpora  -> python corpora/validate.py (the golden-corpus gate)
 #   security -> gitleaks + semgrep + trivy fs
-#   iac      -> terraform fmt/validate (best-effort) + kustomize build
+#   iac      -> terraform fmt/validate (required) + kustomize build
 #
 # Least-privilege: the workflow defaults to read-only token; jobs that need more
 # (SARIF upload) opt in locally.
@@ -15,7 +15,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
@@ -65,38 +65,24 @@ jobs:
       DATABASE_URL: postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable
       EMB_REQUIRE_VECTOR: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Skip if backend module not present yet
-        id: guard
-        run: |
-          if [ -f backend/go.mod ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::backend/go.mod not present yet — skipping backend gate."
-          fi
-
-      - uses: actions/setup-go@v5
-        if: steps.guard.outputs.present == 'true'
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
 
       - name: Apply migrations
-        if: steps.guard.outputs.present == 'true'
         working-directory: backend
         run: go run ./cmd/cored migrate
 
       - name: Build + vet
-        if: steps.guard.outputs.present == 'true'
         working-directory: backend
         run: |
           go build ./...
           go vet ./...
 
       - name: Test
-        if: steps.guard.outputs.present == 'true'
         working-directory: backend
         run: go test ./... -count=1
 
@@ -111,28 +97,22 @@ jobs:
   # container and no credential to find, so "cassette replay needs neither"
   # is enforced by the environment rather than asserted by a comment.
   #
-  # ⛔ NO `Skip if ... not present yet` GUARD, DELIBERATELY. The three jobs that
-  # have one pass WHOLE AND GREEN with a ::notice:: if their entry file moves
-  # (backend/go.mod, frontend/package.json, insightd/pyproject.toml) — a gate
-  # that reports success when it ran nothing, which is the exact failure this
-  # repo's census walkers all Fatal on. That scaffolding is Phase-0 leftovers;
-  # a new gate must not inherit it. If backend/go.mod is gone, this job SHOULD
-  # go red.
+  # Missing entry points fail every job; no presence guards hide skipped work.
   tier0:
     name: tier0 (cassette replay — no LLM, no network, no database)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: backend/go.sum
 
       # Fetch modules while the network is still usable, so the replay step
-      # itself can run with the proxy switched off.
+      # itself can run in a network namespace with no external interfaces.
       - name: Download modules
         working-directory: backend
         run: go mod download
@@ -164,7 +144,13 @@ jobs:
         # TestTier0ReplaysEveryCassetteInTheRepo walks the whole backend module
         # for testdata/cassettes, so cassettes recorded by internal/llm (W1b) or
         # internal/agent (W2) are replayed by this job without editing it.
-        run: go test ./internal/trajectory/ -count=1 -v
+        run: |
+          go test -c ./internal/trajectory/ -o "$RUNNER_TEMP/trajectory.test"
+          cd internal/trajectory
+          sudo unshare --net -- bash -c '
+            ip link set lo up
+            exec env CORED_SKIP_DB=1 TRAJECTORY_RECORD= TIER0_NETWORK_ISOLATED=1 "$1" -test.v -test.count=1
+          ' bash "$RUNNER_TEMP/trajectory.test"
 
   # --------------------------------------------------------------------------
   frontend:
@@ -173,37 +159,23 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Skip if frontend package not present yet
-        id: guard
-        run: |
-          if [ -f frontend/package.json ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::frontend/package.json not present yet — skipping frontend gate."
-          fi
-
-      - uses: pnpm/action-setup@v4
-        if: steps.guard.outputs.present == 'true'
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
-        if: steps.guard.outputs.present == 'true'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Install
-        if: steps.guard.outputs.present == 'true'
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
       - name: Unit tests (vitest)
-        if: steps.guard.outputs.present == 'true'
         working-directory: frontend
         # ⛔ `pnpm run test:run`, NEVER `pnpm test -- --run`. The `test` script is
         # bare `vitest` = WATCH mode, and under pnpm 9+ the `-- --run` forwarding
@@ -217,7 +189,6 @@ jobs:
         run: pnpm run test:run
 
       - name: Type-check (tsc)
-        if: steps.guard.outputs.present == 'true'
         working-directory: frontend
         # Prefer an explicit typecheck script; fall back to a no-emit tsc pass.
         run: |
@@ -234,9 +205,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -258,49 +229,79 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Skip if insightd package not present yet
-        id: guard
-        run: |
-          if [ -f insightd/pyproject.toml ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::insightd/pyproject.toml not present yet — skipping insightd gate."
-          fi
-
-      - uses: actions/setup-python@v5
-        if: steps.guard.outputs.present == 'true'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install CORE deps only (no anthropic/paddleocr/presidio)
-        if: steps.guard.outputs.present == 'true'
         working-directory: insightd
-        # Installs requirements.txt only — proves the testable core needs none of
+        # Installs the exact core + test profile — proves the core needs none of
         # the optional extras. The import-lint test asserts no top-level heavy
         # imports anywhere in the package.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          pip install -r requirements-test.txt
 
       - name: Import-without-heavy-deps smoke check
-        if: steps.guard.outputs.present == 'true'
         working-directory: insightd
         run: python -c "import insightd, insightd.api.app, insightd.pipeline; print('core import OK')"
 
       - name: Generate + validate labeled corpus
-        if: steps.guard.outputs.present == 'true'
         working-directory: insightd
         run: |
           python -m insightd.benchmark.gen_corpus
           python -m insightd.benchmark.validate
 
       - name: Pytest (fakes only — PII boundary, HITL invariant, accuracy floor)
-        if: steps.guard.outputs.present == 'true'
         working-directory: insightd
         run: python -m pytest -q
+
+  # The core-only job stays dependency-light. This separate job must execute
+  # the real database isolation/durability tests; unavailable DBs are failures.
+  insightd-db:
+    name: insightd (required PostgreSQL integration)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16-trixie
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tally
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tally"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5433/tally?sslmode=disable
+      INSIGHTD_DATABASE_URL: postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable
+      INSIGHTD_REQUIRE_DB: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Apply real migrations
+        working-directory: backend
+        run: go run ./cmd/cored migrate
+      - name: Install resolved database test profile
+        run: python -m pip install -r insightd/requirements-db-test.txt
+      - name: Run database suite (missing database cannot skip)
+        working-directory: insightd
+        run: |
+          python -m pytest tests/test_pg_store.py -v --junitxml=db-results.xml
+          python - <<'PYTEST'
+          import xml.etree.ElementTree as ET
+          suites = ET.parse('db-results.xml').getroot().findall('testsuite')
+          assert sum(int(s.get('tests', 0)) for s in suites) >= 10, 'database tests did not run'
+          assert sum(int(s.get('skipped', 0)) for s in suites) == 0, 'database tests skipped'
+          PYTEST
 
   # --------------------------------------------------------------------------
   security:
@@ -308,22 +309,69 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read # gitleaks-action lists the PR's commits through the API
       security-events: write # upload SARIF to code scanning
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0 # gitleaks scans history
 
-      - name: gitleaks (secret scan)
-        uses: gitleaks/gitleaks-action@v2
+      - name: Install pinned gitleaks
         env:
-          GITLEAKS_CONFIG: infra/security/.gitleaks.toml
-          # gitleaks-action v2 refuses to scan a pull request without it.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Findings fail the job and are printed in its log; commenting on the
-          # PR would need pull-requests: write, which this job does not hold.
-          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          cd "$RUNNER_TEMP/gitleaks"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl --fail --location --retry 3 "$base/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          curl --fail --location --retry 3 "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o checksums.txt
+          expected=$(awk -v file="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" '$2 == file {print $1}' checksums.txt)
+          test -n "$expected"
+          printf '%s  gitleaks.tar.gz\n' "$expected" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"
+
+      - name: Prove secret scan history coverage
+        run: python3 scripts/ci/test_secret_scan.py
+
+      - name: gitleaks (complete commit graph)
+        env:
+          SCAN_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SCAN_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/scan-secrets.sh
+
+      - name: Preserve redacted secret scan
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gitleaks-redacted
+          path: gitleaks.json
+          if-no-files-found: warn
+
+      - name: Prepare exact Python dependency inventory
+        run: python3 scripts/ci/python_inventory.py
+
+      - name: Audit every Python dependency profile
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8
+        with:
+          version: v0.76.1
+          scan-type: fs
+          scan-ref: security-python-locks
+          scanners: vuln
+          format: json
+          output: python-trivy.json
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+        env:
+          TRIVY_LIST_ALL_PKGS: "true"
+          TRIVY_IGNOREFILE: .trivyignore.yaml
+
+      - name: Prove Python vulnerability gate
+        run: python3 scripts/ci/test_python_scan.py
+
+      - name: Refuse missing Python scanner targets
+        if: always()
+        run: python3 scripts/ci/python_inventory.py python-trivy.json
 
       # ⛔ semgrep-action@v1 ran semgrep 1.36 (2023). It CRASHED on today's
       # registry rules ("invalid rule severity value: MEDIUM") and the step
@@ -332,12 +380,22 @@ jobs:
       # findings fail the job.
       - name: semgrep (SAST)
         run: |
-          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:1.177.0 \
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198 \
             semgrep scan --metrics=off \
               --config infra/security/semgrep.yml --config p/default --config p/secrets
-          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:1.177.0 \
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198 \
             semgrep scan --metrics=off --quiet --error --severity ERROR \
               --config infra/security/semgrep.yml --config p/default --config p/secrets
+
+      - name: Prove Semgrep scanner errors fail
+        run: |
+          printf 'rules: [{id: invalid-control, languages: [python], severity: ERROR}]\n' > "$RUNNER_TEMP/invalid-semgrep.yml"
+          if docker run --rm -v "$PWD:/src" -v "$RUNNER_TEMP/invalid-semgrep.yml:/invalid.yml:ro" -w /src \
+            semgrep/semgrep@sha256:acaac22ffc7b7cc5926de0751b223bce0b2491c33d18422fa72f632c78d81198 \
+            semgrep scan --metrics=off --config /invalid.yml scripts/ci; then
+            echo '::error::Semgrep accepted an invalid rule'
+            exit 1
+          fi
 
       - name: trivy (filesystem vuln + secret + misconfig)
         # Upstream moved to v-prefixed tags; the bare "0.24.0" no longer
@@ -345,6 +403,7 @@ jobs:
         # release, pinned by commit so a moved tag cannot change what runs.
         uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
+          version: v0.76.1
           scan-type: fs
           scanners: vuln,secret,misconfig
           format: sarif
@@ -369,6 +428,7 @@ jobs:
         if: failure()
         uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
+          version: v0.76.1
           scan-type: fs
           scanners: vuln,secret,misconfig
           format: table
@@ -376,6 +436,17 @@ jobs:
           ignore-unfixed: true
         env:
           TRIVY_IGNOREFILE: .trivyignore.yaml
+
+      - name: Preserve scanner reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-reports
+          path: |
+            trivy.sarif
+            python-inventory.json
+            python-trivy.json
+          if-no-files-found: warn
 
       # The UPLOAD is best-effort; the SCAN is the gate. trivy's exit-code "1"
       # above still fails this job on any CRITICAL/HIGH finding. Code scanning
@@ -385,7 +456,7 @@ jobs:
       - name: Upload Trivy SARIF
         if: always() && hashFiles('trivy.sarif') != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@4bfa242aa49c5f7c6770b98670d354a7dfac05f8 # v3
         with:
           sarif_file: trivy.sarif
 
@@ -396,23 +467,34 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          terraform_version: "1.9.8"
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Build Lambda artifact for validation
+        run: bash infra/aws/build.sh
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: "1.16.5"
+
+      - name: Assert reviewed network defaults and regression controls
+        run: python3 scripts/ci/test_iac_defaults.py
 
       - name: terraform fmt
-        working-directory: infra/terraform
-        continue-on-error: true # tooling/credentials may be absent; do not block Phase 0
-        run: terraform fmt -check -recursive
+        run: |
+          terraform -chdir=infra/terraform fmt -check -recursive
+          terraform -chdir=infra/aws fmt -check -recursive
 
       - name: terraform validate
-        working-directory: infra/terraform
-        continue-on-error: true # validate needs `init` which needs backend access
         run: |
-          terraform init -backend=false
-          terraform validate
+          for stack in infra/terraform infra/aws; do
+            terraform -chdir="$stack" init -backend=false -lockfile=readonly
+            terraform -chdir="$stack" validate
+          done
 
       # kubectl ships kustomize built in and is preinstalled on the runner. The
       # old step piped kustomize's install script from its MASTER branch into

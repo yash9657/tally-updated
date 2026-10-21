@@ -144,7 +144,7 @@ func (p agentProfiles) ReadProfile(ctx context.Context, c agent.Caller, tool str
 		out["withheld_facts"] = withheld
 	}
 	result := profileJSON(http.StatusOK, out)
-	if card != nil {
+	if card != nil && profile.CanReadTenantCard(may) {
 		out["card"] = map[string]any{"version": card.Version, "as_of": card.AsOf, "text": card.Text,
 			"token_estimate": card.TokenEstimate}
 		result = profileJSON(http.StatusOK, out)

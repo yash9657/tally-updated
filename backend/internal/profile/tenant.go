@@ -30,6 +30,31 @@ const ToolTokenCap = 1000
 // MaxUserNotes mirrors tenant_profile_notes_bounded.
 const MaxUserNotes = 2000
 
+// CanReadTenantCard checks the complete cached card, including party, item and
+// recurring-stream facts and operator notes. It deliberately requires access
+// to the whole profile vocabulary: a card can outlive the facts used to build
+// it, so filtering just today's tenant facts cannot authorize its cached text.
+// A new job without an explicit source report fails closed.
+func CanReadTenantCard(may func(string) bool) bool {
+	primary := map[string]string{
+		JobCustomer: "outstandings", JobSupplier: "bills-payable",
+		JobItem: "stock-summary", JobStream: "day-book", JobTenant: "profit-and-loss",
+	}
+	if len(Facts) == 0 {
+		return false
+	}
+	for _, f := range Facts {
+		report, known := primary[f.Job]
+		if !known || !may(report) || (f.ReconcilesTo == "" && !f.Statistic) {
+			return false
+		}
+		if f.ReconcilesTo != "" && !may(f.ReconcilesTo) {
+			return false
+		}
+	}
+	return true
+}
+
 // EstimateTokens is a deliberately CONSERVATIVE upper bound on the tokens a
 // text costs, with no tokenizer: one token per 3 ASCII bytes (BPE tokenizers
 // average ~4 for English and digits; 3 over-counts on purpose) plus one token

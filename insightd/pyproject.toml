@@ -12,20 +12,23 @@ requires-python = ">=3.11"
 # redaction, pipeline, api, benchmark harness) imports nothing heavier than
 # these. Tests need none of the optional extras below.
 dependencies = [
-    "pydantic>=2",
-    "pydantic-settings>=2",
-    "fastapi",
-    "httpx<0.28",
-    "uvicorn",
-    "pypdf",  # pure-python PDF page split (lazy-imported only in the real ingest adapter)
+    "pydantic>=2.5,<3",
+    "pydantic-settings>=2.1,<3",
+    "fastapi>=0.110,<1",
+    "httpx>=0.27,<0.28",
+    "uvicorn>=0.27,<1",
+    "pypdf>=6,<7",  # patched PDF parser; lazy-imported by the real ingest adapter
 ]
 
 [project.optional-dependencies]
 # Each extra is lazy-imported INSIDE a real adapter method, never at module top
 # level. CI installs core-only; these are calibration/production-only.
-ocr = ["paddleocr", "paddlepaddle", "pillow", "pdf2image"]
-llm = ["anthropic"]
-pii = ["presidio-analyzer", "presidio-anonymizer"]
+ocr = ["paddleocr==3.7.0", "paddlepaddle==3.3.1", "pillow>=10", "pdf2image>=1.17"]
+llm = ["anthropic>=0.40"]
+# The adapter uses only AnalyzerEngine; anonymization is our deterministic
+# redaction boundary, so do not install the unused presidio-anonymizer package.
+pii = ["presidio-analyzer>=2.2"]
+db = ["psycopg[binary]>=3.1,<4"]
 test = ["pytest"]
 
 [tool.setuptools.packages.find]

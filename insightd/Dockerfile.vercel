@@ -5,9 +5,8 @@
 # draft proxy. Vercel builds this when the project's Root Directory is
 # `insightd`; see docs/DEPLOY_VERCEL.md.
 #
-# What is installed: the core runtime (requirements.txt), the durable Postgres
-# draft store (requirements-db.txt) and the Anthropic adapters
-# (requirements-llm.txt). NOT installed: real OCR (paddleocr/paddlepaddle, multi-GB
+# requirements-deploy.txt locks the core runtime, durable PostgreSQL draft
+# store and Anthropic adapters together. NOT installed: real OCR (paddleocr/paddlepaddle, multi-GB
 # and CPU-heavy) and Presidio. With no INSIGHTD_USE_REAL_* flags set every stage
 # runs its deterministic fake.
 #
@@ -16,8 +15,8 @@
 FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
-COPY requirements.txt requirements-db.txt requirements-llm.txt ./
-RUN pip install -r requirements.txt -r requirements-db.txt -r requirements-llm.txt
+COPY requirements-deploy.txt ./
+RUN pip install -r requirements-deploy.txt
 COPY insightd ./insightd
 RUN useradd --system --uid 10001 app
 USER app
