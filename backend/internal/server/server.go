@@ -2386,7 +2386,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		Nature:             masters.Nature(req.Nature),
 		IsPL:               req.IsPL,
 		BehavesAsSubledger: req.BehavesAsSubledger,
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -2649,7 +2649,7 @@ func (s *Server) handleCreateUnit(w http.ResponseWriter, r *http.Request) {
 		DecimalPlaces:    req.DecimalPlaces,
 		BaseUnitSymbol:   strings.TrimSpace(req.BaseUnitSymbol),
 		ConversionFactor: factor,
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -5153,6 +5153,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		"sql_preview": preview,
 		"columns":     queryColumnsJSON(res.Columns),
 		"rows":        res.Rows,
+		"limit":       res.Limit,
+		"has_more":    res.HasMore,
 	})
 }
 

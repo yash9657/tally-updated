@@ -35,6 +35,9 @@ type liveAgent struct {
 func (a liveAgent) Name() string { return "fireworks/" + os.Getenv("FIREWORKS_MODEL") }
 func (a liveAgent) Run(ctx context.Context, env tau.Env, p tau.Prompt) (tau.Result, error) {
 	a.logf("live evaluation task=%s language=%s", p.TaskID, p.Language)
+	if reason := a.spend.providerStopReason(); reason != "" {
+		return tau.Result{}, fmt.Errorf("task not attempted: %s", reason)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
 	// The fixture operator delegates the supported writes, exactly as the UI's
@@ -58,8 +61,9 @@ func (a liveAgent) Run(ctx context.Context, env tau.Env, p tau.Prompt) (tau.Resu
 			ID      string `json:"id"`
 			Status  string `json:"status"`
 			Outcome struct {
-				Final  string `json:"final"`
-				Reason string `json:"reason"`
+				Final   string `json:"final"`
+				Details string `json:"details"`
+				Reason  string `json:"reason"`
 			} `json:"outcome"`
 			LastError string `json:"last_error"`
 		} `json:"run"`
@@ -83,6 +87,9 @@ func (a liveAgent) Run(ctx context.Context, env tau.Env, p tau.Prompt) (tau.Resu
 	}
 	defer func() { env.Books.Do(context.Background(), "POST", "/agent/runs/"+id+"/cancel", nil) }()
 	for turn := 0; turn < 30; turn++ {
+		if reason := a.spend.providerStopReason(); reason != "" {
+			return tau.Result{}, fmt.Errorf("task incomplete: %s", reason)
+		}
 		if a.spend.exhausted {
 			return tau.Result{}, fmt.Errorf("evaluation spending ceiling reached; task incomplete")
 		}
@@ -95,7 +102,7 @@ func (a liveAgent) Run(ctx context.Context, env tau.Env, p tau.Prompt) (tau.Resu
 		if err := call("GET", "/agent/runs/"+id, nil, &view); err != nil {
 			return tau.Result{}, err
 		}
-		result := tau.Result{Answer: view.Run.Outcome.Final}
+		result := tau.Result{Answer: view.Run.Outcome.Final, Details: view.Run.Outcome.Details}
 		if view.Run.Status == "completed" {
 			if strings.TrimSpace(result.Answer) == "" {
 				return result, fmt.Errorf("run completed without a user-visible answer")
@@ -189,7 +196,7 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = old })
 	r := newRig(t)
-	if os.Getenv("EVAL_SUITE") == "insights" {
+	if os.Getenv("EVAL_SUITE") == "insights" || os.Getenv("EVAL_SUITE") == "expanded" {
 		runBusinessLive(t, r, transport, ledger)
 		return
 	}
@@ -228,6 +235,19 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 	report, runErr := tau.Run(ctx, tau.Config{K: 1, Workers: 1, NewCompany: r.factory(t)}, tasks, liveAgent{rig: r, spend: transport, approve: approve, logf: t.Logf})
 	result := map[string]any{"synthetic": true, "agent_prompt_version": agent.PromptVersion, "source_revision": os.Getenv("EVAL_SOURCE_REVISION"), "source_sha256": os.Getenv("EVAL_SOURCE_SHA256"), "model": os.Getenv("FIREWORKS_MODEL"), "started_at": start.UTC(), "elapsed_seconds": time.Since(start).Seconds(), "reserved_usd": transport.reserved.String(), "max_usd": cap.String(), "token_price_per_million_usd": rate.String(), "calls": transport.records, "report": report}
 	result["shared_budget_charged_usd"] = ledger.Charged.String()
+	languageFailures := 0
+	var languageChecks []map[string]any
+	for _, task := range report.Tasks {
+		for _, trial := range task.Trials {
+			reasons := businessLanguage(task.Language, trial.Answer+"\n"+trial.Details)
+			if len(reasons) > 0 {
+				languageFailures++
+			}
+			languageChecks = append(languageChecks, map[string]any{"id": task.TaskID, "language": task.Language, "pass": len(reasons) == 0, "reasons": reasons})
+		}
+	}
+	result["language_checks"] = languageChecks
+	result["language_check_limit"] = "Necessary script/connective heuristic; not a fluency or translation oracle. State verdicts are retained separately."
 	if runErr != nil {
 		result["harness_error"] = runErr.Error()
 	}
@@ -251,7 +271,7 @@ func TestFireworksLiveEvaluation(t *testing.T) {
 		passed += task.Successes
 	}
 	t.Logf("state-based pass@1: %d/%d", passed, len(tasks))
-	if transport.calls == 0 || passed != len(tasks) {
-		t.Fatalf("evaluation did not pass every task: %d/%d", passed, len(tasks))
+	if transport.calls == 0 || passed != len(tasks) || languageFailures > 0 {
+		t.Fatalf("evaluation: state %d/%d; language flags %d", passed, len(tasks), languageFailures)
 	}
 }

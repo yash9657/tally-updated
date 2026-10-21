@@ -93,9 +93,10 @@ type execOut struct {
 }
 
 type finishOut struct {
-	Status string `json:"status"`
-	Final  string `json:"final,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	Status  string `json:"status"`
+	Final   string `json:"final,omitempty"`
+	Details string `json:"details,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type loop struct {
@@ -161,21 +162,14 @@ func (l *loop) next(done []durable.StepResult) (durable.Step, bool, error) {
 		case d.Decision == nil:
 			return l.finishStep(finishOut{Status: string(StatusFailed), Reason: "the model produced no usable decision: " + d.Invalid}), true, nil
 		case d.Decision.Tool == ToolFinish:
-			final := d.Decision.Final
-			if strings.TrimSpace(final) == "" {
-				// Some providers put the finish text alongside the other tool
-				// arguments. Preserve that answer instead of completing silently.
-				var args struct {
-					Final string `json:"final"`
-				}
-				if json.Unmarshal(d.Decision.Args, &args) == nil {
-					final = args.Final
-				}
-			}
+			final := finalText(*d.Decision)
 			if strings.TrimSpace(final) == "" {
 				return l.finishStep(finishOut{Status: string(StatusFailed), Reason: "the model ended without a user-visible answer"}), true, nil
 			}
-			return l.finishStep(finishOut{Status: string(StatusCompleted), Final: final}), true, nil
+			if finalProblem(final, d.Decision.Details) != "" {
+				return l.toolStep(k), true, nil
+			}
+			return l.finishStep(finishOut{Status: string(StatusCompleted), Final: final, Details: d.Decision.Details}), true, nil
 		case d.Decision.Tool == ToolCommit:
 			return l.gateStep(k), true, nil
 		default:
@@ -269,6 +263,12 @@ func (l *loop) startStep() durable.Step {
 // transcript rebuilds the past turns from the recorded steps.
 func (l *loop) transcript(prev map[string]json.RawMessage, upTo int) []turn {
 	var turns []turn
+	lastCommit := -1
+	for j := 0; j < upTo; j++ {
+		if x, err := decode[execOut](prev[stepName("exec", j)]); err == nil && x.OK {
+			lastCommit = j
+		}
+	}
 	for j := 0; j < upTo; j++ {
 		d, err := decode[decideOut](prev[stepName("decide", j)])
 		if err != nil || d.Decision == nil {
@@ -281,10 +281,20 @@ func (l *loop) transcript(prev map[string]json.RawMessage, upTo int) []turn {
 				res[kind] = modelView(kind, raw)
 			}
 		}
+		if j < lastCommit && isBookRead(d.Decision.Tool) {
+			// Presentation metadata, not a mutation of historical evidence.
+			// Invalidate amounts conservatively; stable IDs remain useful to
+			// request a fresh, permission-checked report.
+			res["freshness"] = json.RawMessage(`{"potentially_stale":true,"reason":"A later successful commit may have changed these figures. Re-read before stating the current balance, quantity or reconciliation position."}`)
+		}
 		out, _ := json.Marshal(res)
 		turns = append(turns, turn{decision: dec, result: out})
 	}
 	return turns
+}
+
+func isBookRead(tool string) bool {
+	return tool == ToolRead || tool == ToolQueryBooks || strings.HasPrefix(tool, "get_")
 }
 
 // modelView is what of a recorded step the MODEL is shown. A gate's reasons
@@ -375,7 +385,7 @@ func (l *loop) finishStep(f finishOut) durable.Step {
 			kind = intentlog.KindRunFailed
 		}
 		if err := l.e.appendIntentTx(ctx, l.run, intentlog.Event{Kind: kind, ActorKind: intentlog.ActorAgent,
-			Payload: map[string]any{"status": f.Status, "reason": f.Reason, "final_hash": hashText(f.Final)}}); err != nil {
+			Payload: map[string]any{"status": f.Status, "reason": f.Reason, "final_hash": hashText(f.Final), "details_hash": hashText(f.Details)}}); err != nil {
 			return nil, err
 		}
 		return json.Marshal(f)

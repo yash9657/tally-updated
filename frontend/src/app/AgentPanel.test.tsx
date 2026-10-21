@@ -44,6 +44,16 @@ const app = () => screen.getByRole("application");
 const ctrlK = (target: Element = app()) =>
   fireEvent.keyDown(target, { key: "k", code: "KeyK", ctrlKey: true });
 
+it("keeps the full explanation accessible without expanding it by default", async () => {
+  const run = { ...parkedRun(), status: "completed" as const, outcome: { final: "₹4,000 remains after the approved receipt.", details: "Full source explanation and requested draft." } };
+  renderShell(createMockClient({ agent: { runs: [run], events: { [RUN_ID]: [] }, approvals: [] } }));
+  ctrlK();
+  expect((await screen.findByTestId("agent-run-final")).textContent).toContain("₹4,000");
+  const details = await screen.findByTestId("agent-run-details");
+  expect(details.hasAttribute("open")).toBe(false);
+  expect(details.textContent).toContain("Full source explanation");
+});
+
 describe("Ctrl+K — the panel opens and closes from any screen", () => {
   it("opens on the Gateway, and Ctrl+K again closes it", async () => {
     renderShell(createMockClient());

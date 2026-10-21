@@ -14,12 +14,14 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--env-file', type=Path, help='Read only Fireworks key/model from this dotenv file; never execute it')
 parser.add_argument('--max-usd', required=True, help='Shared spending ceiling, including all earlier runs in the ledger')
 parser.add_argument('--budget-ledger', required=True, type=Path)
+parser.add_argument('--initialize-ledger', action='store_true', help='Explicitly initialize a genuinely new allowance; never use to replace missing prior spending')
 parser.add_argument('--prior-report', action='append', default=[], type=Path, help='Import completed prior runs once when creating a new ledger')
 parser.add_argument('--token-price-per-million-usd', required=True, help='Current upper bound for BOTH input and output token pricing')
 parser.add_argument('--model', help='Override FIREWORKS_MODEL')
 parser.add_argument('--report', required=True, type=Path)
 parser.add_argument('--tasks', help='Comma-separated fixture IDs; default is balanced 28-task suite')
-parser.add_argument('--suite', choices=['tasks', 'insights'], default='tasks')
+parser.add_argument('--suite', choices=['tasks', 'insights', 'expanded'], default='tasks')
+parser.add_argument('--book-size', type=int, choices=[1000, 10000, 100000], default=1000)
 args = parser.parse_args()
 env = os.environ.copy()
 if args.env_file:
@@ -38,7 +40,8 @@ for name in ('FIREWORKS_API_KEY', 'FIREWORKS_MODEL', 'ADMIN_DATABASE_URL'):
 env.update(EVAL_MAX_USD=args.max_usd,
            EVAL_TOKEN_PRICE_PER_MILLION_USD=args.token_price_per_million_usd,
            EVAL_SYNTHETIC_APPROVALS='1', EVAL_REPORT=str(args.report.resolve()),
-           EVAL_BUDGET_LEDGER=str(args.budget_ledger.resolve()), EVAL_SUITE=args.suite)
+           EVAL_BUDGET_LEDGER=str(args.budget_ledger.resolve()), EVAL_SUITE=args.suite,
+           EVAL_BOOK_SIZE=str(args.book_size))
 env.pop('EVAL_TASK_IDS', None)
 if args.tasks:
     env['EVAL_TASK_IDS'] = args.tasks
@@ -49,6 +52,8 @@ if env.get('CORED_SKIP_DB'):
 root = Path(__file__).resolve().parents[2]
 if not args.report.resolve().parent.is_dir():
     parser.error('report parent directory does not exist')
+if args.report.exists():
+    parser.error('report already exists; retain historical evidence and choose a new path')
 revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
 dirty = subprocess.check_output(['git', 'diff', '--name-only'], cwd=root, text=True).strip()
 env['EVAL_SOURCE_REVISION'] = revision + ('+dirty' if dirty else '')
@@ -75,6 +80,8 @@ with open(lock_path, 'a') as lock:
         if args.prior_report:
             parser.error('prior reports can only initialize a new ledger')
     else:
+        if not args.initialize_ledger:
+            parser.error('shared ledger is missing; recover it or explicitly reconcile prior spending before initialization')
         charge, hashes = Decimal(0), []
         for path in args.prior_report:
             raw = path.read_bytes()

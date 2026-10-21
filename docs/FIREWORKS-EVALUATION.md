@@ -54,7 +54,7 @@ python3 scripts/evals/fireworks.py \
   --report /tmp/fireworks-evaluation.json
 ```
 
-For a small check, add `--tasks guard-001-en,ve-receipt-000-en` and reuse the same ledger and cap. Use `--suite insights` for the nine business-usefulness cases.
+For a small check, add `--tasks guard-001-en,ve-receipt-000-en` and reuse the same ledger and cap. Use `--suite insights` for the nine business-usefulness cases. `--suite expanded --book-size 1000` selects the 12 industry/language cases; validate larger tiers offline before selecting 10000 or 100000.
 The default selects one task per family/language plus all ten guards: 28 tasks.
 Every trial uses a fresh company. The model sees the user instruction and real
 tool results, never the reference plan or expected state. The fixture operator
@@ -71,7 +71,10 @@ missing, inconsistent or failed usage retains the full reservation. A crash does
 not erase spending. Concurrent runs and changes to an existing ledger's cap/rate
 are refused. Reuse the ledger across runs; never reset it to obtain more budget.
 When migrating earlier runs, `--prior-report` imports each original private raw
-report exactly once when creating the ledger. The report records usage, latency,
+report exactly once when creating the ledger with explicit `--initialize-ledger`.
+The default refuses a missing ledger, and an existing report path is never a
+fresh-run destination. A missing historical ledger must be recovered/reconciled,
+not initialized as zero spending. The report records usage, latency,
 provider model/response IDs, source revision and a hash of the Go source.
 Verify current model availability and pricing first.
 
@@ -203,3 +206,34 @@ not reset the allowance. Recheck pricing before another evaluation:
 [model pricing](https://fireworks.ai/models/deepseek-ai/deepseek-v4p1-flash),
 [function calling](https://docs.fireworks.ai/guides/function-calling),
 [reasoning token controls](https://docs.fireworks.ai/guides/reasoning).
+
+## Subsequent parity phase — 21 October 2026
+
+The earlier $5/v8 figures above are historical. The user explicitly authorized
+an additional $10; the audited cap increase preserved the same ledger, all prior
+charges and the original bytes/hash. The cap is now **$15**, with **$10.371306**
+conservatively charged and **$4.628694** remaining. Do not initialize or reset
+`/tmp/tally-fireworks-shared-budget.json`.
+
+Seven additive runs and their original answers/verdicts are in
+[the parity evidence](evals/agent-parity-2026-10-21.json). The latest completed
+full suite was v10: 28/28 state checks with one short-Hinglish heuristic flag;
+its 9/9 business necessary checks still had manual quality defects. v11 repaired
+those observed wording contracts and passed deterministic checks, but its live
+task run stopped at 17/28 after Fireworks returned HTTP 412 and reported an
+account suspension. Eleven failed requests retain $0.499284 of reservations.
+The cap is not exhausted. No billing settings were changed and no further paid
+run was launched. Account-owner resolution is required before resuming.
+
+The runner's transport now blocks subsequent requests after terminal
+401/402/403/412 errors, without refunding the failed request. Test this offline
+with `go test ./internal/evals/tau -run TestLiveEvaluation -count=1`; adding the
+live build tag with that prefix still does not select `TestFireworksLiveEvaluation`.
+
+The 1k tier is deterministically validated across four industries; only two
+v9 multilingual smoke cases have live results. The final 12-case 1k suite and
+v11 business rerun are prepared but unrun, and 10k/100k still need offline
+validation. See the [implementation and remaining gaps](AGENT-PARITY-PROGRESS-2026-10-21.md)
+for the UI inventory, new approved workflows, question coverage, unchanged-book
+checks, API execution measurements and opt-in UI pilot recorder. Human time
+savings and customer ROI remain unmeasured.

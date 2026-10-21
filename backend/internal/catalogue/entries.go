@@ -314,6 +314,7 @@ var reportEntries = []Entry{
 }
 
 var entityEntries = []EntityEntry{
+	{Entity: query.EntityBillAllocations, Description: "Current voucher bill allocations: trace invoices, partial receipts and credits by reference and voucher date. Excludes opening bills; debit_minus_credit is signed movement, not always payable.", Synonyms: []string{"bill allocations", "partial receipts", "credit allocation"}, Hinglish: []string{"aadha bhugtan", "bill ka adjustment", "बिल आवंटन"}},
 	{Entity: query.EntityLedgerBalances, Description: "Per-ledger balances (movement, opening, closing_net) by ledger/group/nature. No date range.",
 		Synonyms: []string{"ledger balance", "account balance", "group total"}, Hinglish: []string{"khata balance"}},
 	{Entity: query.EntityVouchers, Description: "Current voucher versions: type, class, party, GST base and heads, by month/quarter/year.",

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/khata/cored/internal/agent"
 	"github.com/khata/cored/internal/insights"
@@ -73,8 +74,23 @@ func (p agentProfiles) businessInsights(ctx context.Context, asOf string, may, m
 			continue
 		}
 		// Verify exactly the payload we will return, not a second fetched row.
+		sources := []map[string]string{}
 		err = p.s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-			return insights.Verify(ctx, tx, row.Candidate())
+			if err := insights.Verify(ctx, tx, row.Candidate()); err != nil {
+				return err
+			}
+			if !may("day-book") {
+				return nil
+			}
+			// Resolve readable references in the same scoped read transaction.
+			// IDs remain machine metadata, never the user-facing citation label.
+			ids := row.VoucherIDs
+			if len(ids) > 20 {
+				ids = ids[:20]
+			}
+			var err error
+			sources, err = insightVoucherSources(ctx, tx, ids)
+			return err
 		})
 		if err != nil {
 			continue
@@ -118,7 +134,8 @@ func (p agentProfiles) businessInsights(ctx context.Context, asOf string, may, m
 		items = append(items, map[string]any{"id": row.ID, "type": row.Type, "title": row.Title,
 			"entity": row.EntityName, "as_of": row.AsOf, "facts": row.Fields,
 			"summary": row.Summary, "next_action": action, "interpretation": meaning, "voucher_ids": row.VoucherIDs,
-			"source_reports": reports, "evidence_verified": true})
+			"source_reports": reports, "sources": sources, "source_count": len(row.VoucherIDs),
+			"sources_truncated": len(row.VoucherIDs) > len(sources), "evidence_verified": true})
 		seen[key], counts[row.Type] = true, counts[row.Type]+1
 		if len(items) == 5 {
 			break
@@ -126,8 +143,27 @@ func (p agentProfiles) businessInsights(ctx context.Context, asOf string, may, m
 	}
 	out := profileJSON(http.StatusOK, map[string]any{"as_of": date.Format("2006-01-02"), "findings": items,
 		"coverage": "Up to five accessible findings from deterministic detectors refreshed within three days, rechecked against the books. Empty findings do not establish that the business is healthy; inspect current reports or request missing history.",
-		"usage":    "Figures describe exposure, balances or scenarios, not guaranteed savings. Do not add overlapping amounts. Read current source books before proposing any write; every write still needs preview and authorization."})
+		"usage":    "Figures describe exposure, balances or scenarios, not guaranteed savings. Do not add overlapping amounts. Recovery is unknown until terms are agreed. A payable is not necessarily bill-allocated: on-account balances must not be called bill-wise. Read current source books before proposing any write; every write still needs preview and authorization."})
 	// Cached facts can support advice, never authorize a financial mutation.
 	out.Source = policy.SourceStoredText
 	return out, nil
+}
+
+func insightVoucherSources(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) ([]map[string]string, error) {
+	out := []map[string]string{}
+	rows, err := tx.Query(ctx, `SELECT vv.voucher_id::text, COALESCE(vv.voucher_no,''), to_char(vv.voucher_date,'YYYY-MM-DD')
+	 FROM voucher_version vv JOIN voucher_head vh ON vh.company_id=vv.company_id AND vh.current_version_id=vv.id
+	 WHERE NOT vh.is_deleted AND vv.voucher_id=ANY($1::uuid[]) ORDER BY vv.voucher_date, vv.voucher_no, vv.voucher_id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, no, date string
+		if err := rows.Scan(&id, &no, &date); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]string{"voucher_id": id, "voucher_no": no, "date": date, "report": "day-book"})
+	}
+	return out, rows.Err()
 }

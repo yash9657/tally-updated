@@ -71,7 +71,7 @@ export interface AgentRun {
   delegation: AgentDelegation;
   status: AgentRunStatus;
   /** `{status, final, reason}` once finished; absent while running. */
-  outcome?: { status?: string; final?: string; reason?: string } | null;
+  outcome?: { status?: string; final?: string; details?: string; reason?: string } | null;
   last_error?: string;
   attempts: number;
   next_poll_at?: string;

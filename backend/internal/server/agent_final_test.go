@@ -3,6 +3,7 @@ package server_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/khata/cored/internal/agent"
@@ -31,6 +32,26 @@ func TestAgentPreservesNestedFinishAnswer(t *testing.T) {
 				t.Fatalf("lost finish answer: %v", run)
 			}
 		})
+	}
+}
+
+func TestAgentRepairsPresentationWithoutTruncatingDetails(t *testing.T) {
+	srv := newAgentServer(t)
+	b := newAgentBooks(t, srv)
+	runID, m := runToQuiet(t, srv, b, func(t *testing.T, turn int, _ []json.RawMessage) agent.ModelDecision {
+		if turn == 0 {
+			return finish(strings.Repeat("review ", 251))
+		}
+		d := finish("₹25,000 is last-rate stock value; recovery terms are unknown. Draft: Please confirm return or credit terms. No write or send occurred.")
+		d.Details = strings.Repeat("Requested full explanation. ", 300)
+		return d
+	}, map[string]any{"instruction": "Explain in detail and include a supplier draft."})
+	r := getRun(t, srv, b, runID)
+	if r["status"] != "completed" || len(asMap(r["outcome"])["details"].(string)) < 1000 {
+		t.Fatal(r)
+	}
+	if result := profileResult(t, m, 0); result["ok"] != false {
+		t.Fatalf("no revision requested: %v", result)
 	}
 }
 

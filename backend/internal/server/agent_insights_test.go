@@ -64,6 +64,9 @@ func TestAgentBusinessInsightsEvidenceAndACL(t *testing.T) {
 	if strings.Contains(owner, "evidence_sql") || strings.Contains(owner, "evidence_args") {
 		t.Fatal("raw SQL exposed")
 	}
+	if !strings.Contains(owner, `"voucher_no":"1"`) || !strings.Contains(owner, `"date":"2025-06-30"`) {
+		t.Fatalf("missing usable source voucher number/date: %s", owner)
+	}
 	for _, resource := range []string{"report:outstandings", "report:day-book", "master", "insights"} {
 		tok := memberWithRules(t, srv, b, []map[string]string{{"effect": "disallow", "action": "display", "resource": resource}})
 		if got := read(t, tok, "2025-06-30"); strings.Contains(got, "credit_limit_breach") || strings.Contains(got, "30000") {

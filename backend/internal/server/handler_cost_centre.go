@@ -245,7 +245,7 @@ func (s *Server) handleCreateCostCategory(w http.ResponseWriter, r *http.Request
 	id, err := s.masters.CreateCostCategory(r.Context(), masters.CostCategoryInput{
 		Name:               req.Name,
 		AllocateNonRevenue: req.AllocateNonRevenue,
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeCostMasterError(w, err)
 		return

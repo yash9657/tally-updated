@@ -58,6 +58,11 @@ function renderQuery(client: Partial<CoredClient>) {
 }
 
 describe("QueryScreen (Ask your books)", () => {
+  it("discloses incomplete results instead of implying the first page is the book", async () => {
+    renderQuery({ query: vi.fn(async () => ({ ...CANNED, limit: 2, has_more: true })) });
+    await act(async () => { fireEvent.click(screen.getByTestId("query-example-trial balance")); });
+    expect((await screen.findByTestId("query-limit")).textContent).toMatch(/first 2.*More rows match/);
+  });
   it("submits the typed NL question to client.query and renders the columns + rows verbatim", async () => {
     const query = vi.fn(async () => CANNED);
     renderQuery({ query });

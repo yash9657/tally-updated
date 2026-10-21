@@ -21,6 +21,8 @@ type businessCase struct {
 	ID, Industry, Prompt, Finding, Entity string
 	Numbers, Actions                      []string
 	Steps                                 []tau.Step
+	Language                              string
+	VoucherCount                          int
 }
 
 const businessToday = "2026-03-31"
@@ -112,7 +114,7 @@ func businessCases() []businessCase {
 func seedBusiness(t *testing.T, r *rig, c businessCase) (tau.Books, []insights.Insight) {
 	t.Helper()
 	ctx := context.Background()
-	books, err := r.factory(t)(ctx, map[string]any{"fy_start_date": "2025-04-01", "state_code": "27"})
+	books, err := r.factory(t)(ctx, map[string]any{"fy_start_date": "2024-04-01", "state_code": "27"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,6 +25,8 @@ type ReadOnlyRunner interface {
 type Result struct {
 	Columns []ColumnMeta `json:"columns"`
 	Rows    [][]string   `json:"rows"`
+	Limit   int          `json:"limit"`
+	HasMore bool         `json:"has_more"`
 }
 
 // Execute compiles q, runs it in a read-only company-scoped transaction (RLS
@@ -32,12 +34,12 @@ type Result struct {
 // returned as a *CompileError (the endpoint maps it to 422); a database error is
 // returned as-is.
 func Execute(ctx context.Context, runner ReadOnlyRunner, q Query) (Result, error) {
-	c, err := compile(q)
+	c, err := compileBounded(q, true)
 	if err != nil {
 		return Result{}, err
 	}
 
-	out := Result{Columns: c.columns, Rows: [][]string{}}
+	out := Result{Columns: c.columns, Rows: [][]string{}, Limit: c.limit}
 
 	err = runner.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, c.sql, c.args...)
@@ -47,6 +49,10 @@ func Execute(ctx context.Context, runner ReadOnlyRunner, q Query) (Result, error
 		defer rows.Close()
 
 		for rows.Next() {
+			if len(out.Rows) == c.limit {
+				out.HasMore = true
+				break
+			}
 			vals, err := rows.Values()
 			if err != nil {
 				return err
@@ -56,9 +62,6 @@ func Execute(ctx context.Context, runner ReadOnlyRunner, q Query) (Result, error
 				rec[i] = stringify(v)
 			}
 			out.Rows = append(out.Rows, rec)
-			if len(out.Rows) >= c.limit {
-				break
-			}
 		}
 		return rows.Err()
 	})

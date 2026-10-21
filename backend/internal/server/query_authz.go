@@ -45,6 +45,7 @@ var queryEntityReports = map[query.Entity][]string{
 	// Outstandings is resolved per query below: receivables only when the
 	// query pins nature = ASSET, otherwise both sides.
 	query.EntityOutstandings:       {"outstandings", "bills-payable"},
+	query.EntityBillAllocations:    {"day-book", "outstandings", "bills-payable"},
 	query.EntityStockMovements:     {"stock-movement"},
 	query.EntityBankStatementLines: {"bank-statement"},
 	// Resolved from internal/profile's closed vocabulary below.

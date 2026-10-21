@@ -33,7 +33,7 @@ const emitQuerySchema = `{
   "additionalProperties": false,
   "required": ["entity", "metrics", "dimensions", "filters", "date_range", "order_by", "limit"],
   "properties": {
-    "entity": {"type": "string", "enum": ["ledger_balances", "vouchers", "postings", "outstandings", "stock_movements", "bank_statement_lines", "profile_facts", ""]},
+    "entity": {"type": "string", "enum": ["ledger_balances", "vouchers", "postings", "outstandings", "bill_allocations", "stock_movements", "bank_statement_lines", "profile_facts", ""]},
     "metrics": {
       "type": "array",
       "items": {
@@ -220,7 +220,8 @@ func staticPrompt() string {
 	b.WriteString(`
 RULES (the compiler rejects violations; obey them so the query is answerable):
 1. Aliases (a metric's "as", and any order_by column) must be lowercase snake_case, and an order_by column must spell an emitted dimension or metric alias IDENTICALLY.
-2. ledger_balances accepts NO date_range. Only vouchers/postings/stock_movements (voucher_date), outstandings (due_date), bank_statement_lines (value_date) and profile_facts (as_of) do.
+2. bill_allocations contains current voucher allocation movements, not opening bills. Use ref_name and voucher_no/date to trace partial receipts and credits. debit_minus_credit is signed D minus C, not a universal payable. outstandings includes opening bills.
+2. ledger_balances accepts NO date_range. Only vouchers/postings/stock_movements (voucher_date), outstandings (due_date), bill_allocations (voucher_date or due_date), bank_statement_lines (value_date) and profile_facts (as_of) do.
 3. The metrics "net", "natural_net" and "pending" accept only func "sum". count uses column "*".
 4. On vouchers, filter by party name using the filter column "party", but GROUP BY the dimension "party_name" — they are different keys.
 5. outstandings "nature" accepts only op "eq" (values ASSET for receivables, LIABILITY for payables).

@@ -21,6 +21,9 @@ type spendLedger struct {
 	Rate         decimal.Decimal `json:"rate_per_million_usd"`
 	Charged      decimal.Decimal `json:"charged_usd"`
 	PriorReports []string        `json:"prior_reports,omitempty"`
+	// Keep authorization history through every reservation/settlement. The
+	// explicit cap-increase CLI is the only writer of these audit entries.
+	CapIncreases []json.RawMessage `json:"cap_increases,omitempty"`
 }
 
 func openSpendLedger(path string, cap, rate decimal.Decimal) (*spendLedger, error) {
@@ -51,11 +54,12 @@ func (l *spendLedger) close() { syscall.Flock(int(l.lock.Fd()), syscall.LOCK_UN)
 
 func (l *spendLedger) save(charge decimal.Decimal) error {
 	raw, err := json.MarshalIndent(struct {
-		Cap          decimal.Decimal `json:"cap_usd"`
-		Rate         decimal.Decimal `json:"rate_per_million_usd"`
-		Charged      decimal.Decimal `json:"charged_usd"`
-		PriorReports []string        `json:"prior_reports,omitempty"`
-	}{l.Cap, l.Rate, charge, l.PriorReports}, "", "  ")
+		Cap          decimal.Decimal   `json:"cap_usd"`
+		Rate         decimal.Decimal   `json:"rate_per_million_usd"`
+		Charged      decimal.Decimal   `json:"charged_usd"`
+		PriorReports []string          `json:"prior_reports,omitempty"`
+		CapIncreases []json.RawMessage `json:"cap_increases,omitempty"`
+	}{l.Cap, l.Rate, charge, l.PriorReports, l.CapIncreases}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -98,7 +102,7 @@ func (l *spendLedger) settle(reservation, charge decimal.Decimal) error {
 
 func TestSharedFireworksBudgetSurvivesRunsAndFailures(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "ledger.json")
-	os.WriteFile(p, []byte(`{"cap_usd":"1","rate_per_million_usd":"2","charged_usd":"0.2"}`), 0600)
+	os.WriteFile(p, []byte(`{"cap_usd":"1","rate_per_million_usd":"2","charged_usd":"0.2","prior_reports":["old-report"],"cap_increases":[{"old_cap_usd":"0.5","new_cap_usd":"1","authorization":"explicit user permission"}]}`), 0600)
 	l, err := openSpendLedger(p, decimal.NewFromInt(1), decimal.NewFromInt(2))
 	if err != nil {
 		t.Fatal(err)
@@ -126,5 +130,20 @@ func TestSharedFireworksBudgetSurvivesRunsAndFailures(t *testing.T) {
 	}
 	if err := l.settle(decimal.RequireFromString("0.1"), decimal.RequireFromString("0.2")); err == nil {
 		t.Fatal("invalid usage released reservation")
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved spendLedger
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.PriorReports) != 1 || saved.PriorReports[0] != "old-report" || len(saved.CapIncreases) != 1 {
+		t.Fatalf("lost history: %s", raw)
+	}
+	var audit map[string]string
+	if err := json.Unmarshal(saved.CapIncreases[0], &audit); err != nil || audit["authorization"] != "explicit user permission" {
+		t.Fatalf("lost authorization: %s", raw)
 	}
 }

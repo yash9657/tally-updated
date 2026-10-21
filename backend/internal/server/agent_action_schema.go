@@ -23,6 +23,16 @@ func agentActionSchema(id string) json.RawMessage {
 		body = ledgerReq{}
 	case id == "post.stock-items":
 		body = stockItemReq{}
+	case id == "post.groups":
+		body = groupReq{}
+	case id == "post.units":
+		body = unitReq{}
+	case id == "post.cost-categories":
+		body = costCategoryReq{}
+	case id == "post.budgets":
+		body = budgetReq{}
+	case id == "put.stock-items._stockitemid.valuation-method":
+		body = valuationMethodReq{}
 	case id == "post.sales-orders", id == "post.purchase-orders":
 		body = orderReq{}
 	case id == "put.sales-orders._orderid.close", id == "put.purchase-orders._orderid.close":

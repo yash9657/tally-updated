@@ -39,10 +39,10 @@ func TestConcretePathRefusesAnythingButIDsAndOrdinals(t *testing.T) {
 // a write would be a read dispatched as a write.
 func TestEveryPreviewableSpecIsAWriteTheAgentMayEverMake(t *testing.T) {
 	// PINNED, not floored: 8 accounting creates + their 8 alters + 8 stock
-	// voucher creates/alters + 3 masters + 4 order acts + 2 bank ticks. A new
+	// voucher creates/alters + 7 masters + 4 order acts + 2 bank ticks. A new
 	// entry is a handler somebody read; the pin makes that an edit here too.
-	if len(previewable) != 33 {
-		t.Fatalf("previewable has %d entries, pinned at 33", len(previewable))
+	if len(previewable) != 37 {
+		t.Fatalf("previewable has %d entries, pinned at 37", len(previewable))
 	}
 	for id := range previewable {
 		spec, ok := actions.ByID(id)

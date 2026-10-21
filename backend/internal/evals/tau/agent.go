@@ -36,7 +36,8 @@ type Env struct {
 
 // Result is the agent's final reply.
 type Result struct {
-	Answer string
+	Answer  string
+	Details string
 }
 
 // ReferenceAgent executes each task's hand-written plan. Its plans are handed

@@ -25,13 +25,23 @@ type spendTransport struct {
 	cap, rate, reserved decimal.Decimal
 	calls               int
 	exhausted           bool
+	providerStopped     string
 	records             []map[string]any
 	ledger              *spendLedger
+}
+
+func (s *spendTransport) providerStopReason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.providerStopped
 }
 
 func (s *spendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.providerStopped != "" {
+		return nil, fmt.Errorf("%s; no further provider calls attempted", s.providerStopped)
+	}
 	if req.URL.Scheme != "https" || req.URL.Host != "api.fireworks.ai" || req.URL.Path != "/inference/v1/chat/completions" {
 		return nil, fmt.Errorf("evaluation refused unexpected network destination")
 	}
@@ -72,6 +82,13 @@ func (s *spendTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	record["status"] = resp.StatusCode
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden, http.StatusPreconditionFailed:
+		// Authentication/billing/account failures cannot be repaired by trying
+		// another fixture. Keep this call's reservation and block future calls
+		// before reserving or sending. Never change provider settings here.
+		s.providerStopped = fmt.Sprintf("provider account unavailable (HTTP %d)", resp.StatusCode)
+	}
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(raw))
@@ -152,5 +169,33 @@ func TestLiveEvaluationSpendingControls(t *testing.T) {
 	}
 	if failed.reserved.IsZero() {
 		t.Fatal("failed call reservation was refunded")
+	}
+}
+
+func TestLiveEvaluationStopsAfterAccountFailure(t *testing.T) {
+	for _, status := range []int{401, 402, 403, 412} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			s := &spendTransport{cap: decimal.NewFromInt(15), rate: decimal.NewFromInt(2), next: evaluationRoundTrip(func(*http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"PRECONDITION_FAILED"}}`)), Header: make(http.Header)}, nil
+			})}
+			request := func() *http.Request {
+				r, _ := http.NewRequest("POST", "https://api.fireworks.ai/inference/v1/chat/completions", strings.NewReader(`{"max_tokens":1024}`))
+				return r
+			}
+			resp, err := s.RoundTrip(request())
+			if err != nil || resp.StatusCode != status {
+				t.Fatal("original provider failure was hidden", err)
+			}
+			resp.Body.Close()
+			reserved := s.reserved
+			if reserved.IsZero() || s.providerStopReason() == "" {
+				t.Fatal("failed request was refunded or did not stop future requests")
+			}
+			if _, err = s.RoundTrip(request()); err == nil || calls != 1 || len(s.records) != 1 || !s.reserved.Equal(reserved) {
+				t.Fatal("another provider call or reservation occurred after account failure", err)
+			}
+		})
 	}
 }

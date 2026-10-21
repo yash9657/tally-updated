@@ -1,0 +1,111 @@
+{
+  "kind": "synthetic_api_automation_benchmark",
+  "agent_decisions": "scripted, required approvals use real endpoints",
+  "manual_path": "UI-equivalent API, not browser interactions or human timing",
+  "limitations": [
+    "Single sample per path; no statistical latency conclusion.",
+    "Seed/startup, human review/entry/approval, live model time and physical/external work excluded.",
+    "No customer time savings or ROI inferred."
+  ],
+  "services": {
+    "customer_time_saved": null,
+    "excludes": "seed/startup; human thinking, typing and approval time; browser rendering; live-model latency",
+    "industry": "services",
+    "kind": "api_automation_benchmark",
+    "samples": [
+      {
+        "active_human_ms": null,
+        "approvals": 0,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 44.114,
+        "path": "ui_equivalent_api",
+        "verified_remaining": "4000.0000"
+      },
+      {
+        "active_human_ms": null,
+        "approvals": 1,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 164.174,
+        "path": "scripted_agent_api",
+        "verified_remaining": "4000.0000"
+      }
+    ],
+    "source_revision": "f8964c6f58e3cc7f7974242bde2f95cbd18373d6+dirty",
+    "task": "partial_receipt_allocation"
+  },
+  "other_industries": {
+    "customer_time_saved": null,
+    "excludes": "seed/startup, physical activity, human UI and live-model latency",
+    "kind": "api_automation_benchmark",
+    "samples": [
+      {
+        "active_human_ms": null,
+        "approvals": 0,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 56.301,
+        "industry": "retail",
+        "path": "ui_equivalent_api",
+        "payable": "20000.0000",
+        "stock_qty": "80.0000"
+      },
+      {
+        "active_human_ms": null,
+        "approvals": 1,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 211.558,
+        "industry": "retail",
+        "path": "scripted_agent_api",
+        "payable": "20000.0000",
+        "stock_qty": "80.0000"
+      },
+      {
+        "active_human_ms": null,
+        "approvals": 0,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 58.239,
+        "industry": "wholesale",
+        "path": "ui_equivalent_api",
+        "payable": "12000.0000",
+        "stock_qty": "0.0000"
+      },
+      {
+        "active_human_ms": null,
+        "approvals": 1,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 137.875,
+        "industry": "wholesale",
+        "path": "scripted_agent_api",
+        "payable": "12000.0000",
+        "stock_qty": "0.0000"
+      },
+      {
+        "active_human_ms": null,
+        "approvals": 0,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 35.84,
+        "industry": "manufacturing",
+        "path": "ui_equivalent_api",
+        "payable": "0.0000",
+        "stock_qty": "5.0000"
+      },
+      {
+        "active_human_ms": null,
+        "approvals": 1,
+        "browser_clicks": null,
+        "completed": true,
+        "elapsed_ms": 103.246,
+        "industry": "manufacturing",
+        "path": "scripted_agent_api",
+        "payable": "0.0000",
+        "stock_qty": "5.0000"
+      }
+    ]
+  }
+}

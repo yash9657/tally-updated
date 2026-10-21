@@ -248,6 +248,33 @@ func dateOps() map[Op]bool {
 
 // entities is the closed registry. A nil lookup result is a hard reject.
 var entities = map[Entity]entityDef{
+	EntityBillAllocations: {
+		skeleton: `bill_allocation ba
+		 JOIN voucher_version vv ON vv.company_id = ba.company_id AND vv.id = ba.voucher_version_id
+		 JOIN voucher_head vh ON vh.company_id = vv.company_id AND vh.current_version_id = vv.id
+		 JOIN ledger l ON l.company_id = ba.company_id AND l.id = ba.ledger_id`,
+		whereGuard: "vh.is_deleted = false",
+		dimensions: map[string]string{
+			"ledger_name": "l.name", "ref_name": "ba.ref_name", "ref_type": "ba.ref_type::text",
+			"dr_cr": "ba.dr_cr::text", "voucher_no": "COALESCE(vv.voucher_no,'')",
+			"voucher_date":  "to_char(vv.voucher_date,'YYYY-MM-DD')",
+			"voucher_class": "COALESCE(vv.payload->>'class','')",
+			"due_date":      "COALESCE(to_char(ba.due_date,'YYYY-MM-DD'),'')",
+		},
+		metrics: map[string]metricCol{
+			"amount":             {rawExpr: "ba.amount", aggs: numericAggs(), isMoney: true},
+			"debit_minus_credit": {rawExpr: "CASE WHEN ba.dr_cr = 'D' THEN ba.amount ELSE -ba.amount END", aggs: sumOnly(), isMoney: true},
+		},
+		filters: map[string]filterCol{
+			"ledger_name":  {expr: "l.name", ops: nameOps(), valType: valueAny},
+			"ref_name":     {expr: "ba.ref_name", ops: nameOps(), valType: valueAny},
+			"ref_type":     {expr: "ba.ref_type::text", ops: enumOps(), valType: valueAny},
+			"dr_cr":        {expr: "ba.dr_cr::text", ops: enumOps(), valType: valueDrCr},
+			"voucher_no":   {expr: "vv.voucher_no", ops: nameOps(), valType: valueAny},
+			"voucher_date": {expr: "vv.voucher_date", ops: dateOps(), valType: valueDate},
+		},
+		dateCols: map[string]string{"voucher_date": "vv.voucher_date", "due_date": "ba.due_date"},
+	},
 	// ---------------------------------------------------------------------
 	// ledger_balances — ledger positions. All three tables are FORCE-RLS, so
 	// tenant-scoped. No version/delete guard needed (no vouchers involved).
@@ -320,6 +347,8 @@ var entities = map[Entity]entityDef{
 		    AND party.id = vv.party_ledger_id`,
 		whereGuard: "vh.is_deleted = false",
 		dimensions: map[string]string{
+			"voucher_no":        "COALESCE(vv.voucher_no,'')",
+			"voucher_date":      "to_char(vv.voucher_date,'YYYY-MM-DD')",
 			"voucher_type_name": "COALESCE(vt.name,'')",
 			// sanctioned payload carve-out: a FIXED scalar extraction, never a
 			// user-controlled jsonb path.
@@ -344,6 +373,7 @@ var entities = map[Entity]entityDef{
 			"igst":          {rawExpr: "vv.igst", aggs: numericAggs(), isMoney: true},
 		},
 		filters: map[string]filterCol{
+			"voucher_no":        {expr: "vv.voucher_no", ops: nameOps(), valType: valueAny},
 			"voucher_type_name": {expr: "vt.name", ops: nameOps(), valType: valueAny},
 			"party":             {expr: "party.name", ops: nameOps(), valType: valueAny},
 			"voucher_date":      {expr: "vv.voucher_date", ops: dateOps(), valType: valueDate},

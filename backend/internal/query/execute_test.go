@@ -231,6 +231,14 @@ func TestExecute_LimitCapsRows(t *testing.T) {
 	if len(res.Rows) != 1 {
 		t.Fatalf("limit 1 should cap to 1 row, got %d", len(res.Rows))
 	}
+	if !res.HasMore || res.Limit != 1 {
+		t.Fatalf("missing incomplete-result metadata: %+v", res)
+	}
+	q.Limit = 2
+	res, err = query.Execute(ctx, pool, q)
+	if err != nil || res.HasMore || len(res.Rows) != 2 {
+		t.Fatalf("exact-limit result incorrectly incomplete: %+v %v", res, err)
+	}
 }
 
 // TestRunInReadOnlyTx_RejectsWrite proves the read-only transaction is the

@@ -126,7 +126,7 @@ const translatorFeature = "nlq.translate"
 // new Dynamic system message. This is the "with catalogue + selector" arm of
 // W3's +15 pt gate; a v3 score is the "without" arm and must stay credited
 // to v3.
-const translatorPromptVersion = "nlq-dsl-v4"
+const translatorPromptVersion = "nlq-dsl-v5"
 
 // emitQueryTool is the single tool the model is forced to call. The name is
 // referenced by the schema comment, the prompt text and the response decoder;

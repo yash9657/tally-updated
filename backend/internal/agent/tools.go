@@ -90,7 +90,7 @@ func RequestHash(req *llm.Request) string {
 //   - delete of anything: structural;
 //   - post.drafts._draftid.accepted and the other insightd proxies: they call
 //     another service, which no rollback can take back;
-//   - groups, units, godowns, price lists, BOMs, budgets, cost centres: each
+//   - godowns (no UI create), price lists, BOMs, budget lines, cost centres: each
 //     is one more handler to read, and none is on PLAN-AGENTIC W2's list.
 var previewable = map[string]bool{
 	// The eight accounting voucher creates: postVoucher -> ledger.PostVoucher,
@@ -132,6 +132,12 @@ var previewable = map[string]bool{
 	// row); the valuation-method setter (one RunInTx, audit ALTER row).
 	"post.ledgers":     true,
 	"post.stock-items": true,
+	// Audited single-transaction master creates; appendAudit is inside the
+	// same transaction. No service calls, files or external side effects.
+	"post.groups":          true,
+	"post.units":           true,
+	"post.cost-categories": true,
+	"post.budgets":         true,
 	"put.stock-items._stockitemid.valuation-method": true,
 	// Orders: postOrder -> orders.Create and putOrderClose -> orders.Close,
 	// one RunInTx each.
@@ -347,6 +353,8 @@ func strictDecode(raw json.RawMessage, v any) error {
 // step is retried); a tool-level failure is a recorded toolOut the model sees.
 func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d ModelDecision) (toolOut, error) {
 	switch d.Tool {
+	case ToolFinish:
+		return toolErr(d.Tool, "Revise the answer without changing the books: "+finalProblem(finalText(d), d.Details)+". Preserve amounts, qualifications and execution/approval status. Put requested extended explanations in details."), nil
 	case ToolSearch:
 		var a searchArgs
 		if err := strictDecode(d.Args, &a); err != nil {
