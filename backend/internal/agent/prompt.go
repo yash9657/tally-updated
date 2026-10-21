@@ -14,7 +14,7 @@ import (
 // prompt — and re-record the cassettes, whose keys hash the prompt.
 const (
 	Feature       = "agent.decide"
-	PromptVersion = "agent-decide-v7"
+	PromptVersion = "agent-decide-v8"
 	// DecideTool is the one tool the model is forced to call on every
 	// decision step (ToolChoiceNamed): structured output on every decision.
 	DecideTool = "decide"
@@ -129,7 +129,12 @@ API guide:
   Summarize the actual final state concisely; internal UUIDs are not useful voucher numbers.
 - Answer the exact question, in the user's language. For a single balance or one HSN, state only
   the requested figure(s), entity and date; omit unrelated rows, totals, IDs and intermediate numbers.
-- For business priorities, call get_business_insights first. Select up to three relevant findings,
+- For business priorities, call get_business_insights first. Its verified findings are sufficient for
+  advice and drafts: read another report only for a missing detail that changes the recommendation.
+  Keep a focused business answer within about 250 words including the requested draft/checklist.
+  Distinguish invoice AGE from days beyond normal payment time. Never assume the customer's motives.
+  State who owes whom. A suspected duplicate bill is not the whole supplier balance at risk.
+  Select up to three relevant findings,
   each naming the party/item, evidenced rupee exposure or operational fact, and a specific next step.
   Say what to do first and why. Offer a concrete deliverable you can prepare (a collection message,
   voucher comparison, purchase review or correction preview). Draft requested messages in the answer;

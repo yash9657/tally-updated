@@ -132,6 +132,65 @@ These are necessary checks, not a substitute for reviewing the full answers or
 measuring customer outcomes. There is no claim of universal industry coverage,
 measured hours saved, or external email/payment execution.
 
+## Follow-up: verified business insight tool and live retests
+
+The agent can now read `get_business_insights`: up to five recent findings,
+filtered by the human's insights, source-report and relevant master permissions.
+Every returned finding rechecks its evidence; stale findings, inaccessible
+bundles and unknown detector types are omitted. Raw evidence SQL, notes and
+generated digest prose are not exposed. Findings support advice and drafts;
+current-book reads, previews and authorization still govern every write.
+
+Purchase entry can read only authorized company tax context, with the company
+correlation ID and editable prose removed. HTTP/sync voucher requests now retain
+supplier invoice identity, enabling the real duplicate-bill detector. Empty
+answers and unfinished runs cannot count as successful live trials.
+
+| Live run | Result | Interpretation |
+| --- | --- | --- |
+| v6 focused regressions | 4/4 | Purchase invoice, exact bank balance, HSN question, injection refusal |
+| v6 broad suite | 24/28 | All families and languages; four failures retained in the report |
+| v7 business discovery | 5/9 initial automated checks | Four flags included legitimate figures from follow-up reports. Manual review also found wording/attribution issues; neither is hidden |
+| v8 targeted repairs | 4/4 | Deletion refusal, ambiguous-party clarification, bank master, concise balance |
+| v8 business usefulness | 5/5 necessary checks | Retail, wholesale, services, manufacturing and insufficient-data control; unchanged books |
+
+The bank-master fixture named “Kotak Bank OD” but expected `Bank Accounts`
+without asking for that group. Bank-master prompts now explicitly state the
+required group. This repairs an ambiguous test; it does not teach the agent to
+misclassify overdrafts. The original failure remains recorded. The v8 repair run
+is **not a fresh 28/28 full-suite run** on that prompt version.
+
+| Business | Verified opportunity and usable output |
+| --- | --- |
+| Retail | 100 unsold shelving kits idle for 200 days, valued at ₹25,000 at the last rate, with the same ₹25,000 still payable. Draft supplier return/exchange request; the exposures are not added together |
+| Wholesale | Possible duplicate ₹12,000 supplier bill inside ₹24,000 total payable. Checklist compares source bills, goods receipts and supplier confirmation before correction/payment |
+| Services | ₹20,000 on two open invoices; oldest age 100 days versus a 20-day historic payment norm, correctly distinguished as 80 days beyond that norm. Neutral collection and repeat-order message |
+| Manufacturing | Steel Blank rate ₹50→₹60 (+20%); 300 idle units. Return/credit and quotation discussion; ₹3,000 is explicitly a comparison scenario, not achieved savings |
+| New business | No invented opportunities or savings. Requests opening balances, master data and transaction history |
+
+The additional v7 books changed the entities and amounts for all four industries.
+The final v8 base cases took **10.6–38.9 seconds**, median **22.7 seconds**, with
+26 model calls total. No manual-work timing baseline was measured, so these
+results do not quantify hours saved.
+
+Manual review finds the outputs useful but not flawless: retail still includes
+an internal voucher ID and an overconfident statement about recovery value;
+manufacturing calls an on-account payable “bill-wise.” Answers also exceed the
+requested concise length in places. These are remaining presentation/precision
+limits, alongside the need for real-customer, large-book and multilingual
+business-insight validation. The English synthetic cases do not establish a
+universal customer “wow” score. Messages were drafted, never sent, and no advice
+run changed the books.
+
+Across **all eleven runs**, including the original six: **555 provider calls,
+2,442,155 reported tokens, $4.88431 conservatively charged against the same $5
+cap**. Every call has validated usage; no uncertain reservation remains. The
+published-rate estimate ignoring cache discounts is **$0.8798199**, not a provider
+invoice. No more paid calls were made after the v8 business run. The original
+private reports are retained locally; the public [results file](evals/fireworks-2026-10-21.json)
+contains scores, answers, source hashes, caveats and budget reconciliation, with
+synthetic GSTINs/internal IDs redacted from follow-up prose.
+
 ## Current provider references
 
 Verified on 21 October 2026: the configured account serves DeepSeek V4.1 Flash.

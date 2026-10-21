@@ -87,7 +87,7 @@
       }
     ]
   },
-  "utterance": "'Axis Bank CC A/c' naam ka bank ledger add karo, opening ₹1,25,000 Dr.",
+  "utterance": "'Axis Bank CC A/c' naam ka bank ledger Bank Accounts group mein add karo, opening ₹1,25,000 Dr.",
   "reference_plan": [
     {
       "method": "POST",

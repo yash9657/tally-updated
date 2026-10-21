@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,7 +23,25 @@ func runBusinessLive(t *testing.T, r *rig, spend *spendTransport, ledger *spendL
 	var results []map[string]any
 	passed := 0
 	a := liveAgent{rig: r, spend: spend, approve: map[string]bool{}, logf: t.Logf}
-	for _, c := range businessCases() {
+	cases := businessCases()
+	if ids := os.Getenv("EVAL_TASK_IDS"); ids != "" {
+		wanted := map[string]bool{}
+		for _, id := range strings.Split(ids, ",") {
+			wanted[id] = true
+		}
+		var selected []businessCase
+		for _, c := range cases {
+			if wanted[c.ID] {
+				selected = append(selected, c)
+				delete(wanted, c.ID)
+			}
+		}
+		if len(wanted) != 0 || len(selected) == 0 {
+			t.Fatalf("unknown business case selection: %v", wanted)
+		}
+		cases = selected
+	}
+	for _, c := range cases {
 		books, findings := seedBusiness(t, r, c)
 		before, err := tau.Snapshot(ctx, books)
 		if err != nil {
@@ -57,6 +76,7 @@ func runBusinessLive(t *testing.T, r *rig, spend *spendTransport, ledger *spendL
 				allow(item.Amount)
 			}
 		}
+		allowReadResultNumbers(spend.records[callStart:], allowed)
 		reasons = append(reasons, unsupportedMoney(answer.Answer, allowed)...)
 		if runErr != nil {
 			reasons = append(reasons, runErr.Error())

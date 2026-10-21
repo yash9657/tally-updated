@@ -966,9 +966,9 @@ def mc_bank(s: Suite, n: int, lang: str):
     body = Book.ledger_body(bank, "Bank Accounts", opening=opening, dc="D")
     exp = b.expected(extra_ledgers=[Book.ledger_canon(bank, "Bank Accounts", opening=opening, dc="D")])
     utt = {
-        "en": f"Add a bank ledger '{bank}' with an opening balance of {inr(opening)} (debit).",
-        "hi": f"'{bank}' नाम का बैंक लेजर जोड़ें, ओपनिंग बैलेंस {inr(opening)} (डेबिट)।",
-        "hinglish": f"'{bank}' naam ka bank ledger add karo, opening {inr(opening)} Dr.",
+        "en": f"Add a bank ledger '{bank}' in the Bank Accounts group with an opening balance of {inr(opening)} (debit).",
+        "hi": f"'{bank}' नाम का बैंक लेजर Bank Accounts समूह में जोड़ें, ओपनिंग बैलेंस {inr(opening)} (डेबिट)।",
+        "hinglish": f"'{bank}' naam ka bank ledger Bank Accounts group mein add karo, opening {inr(opening)} Dr.",
     }[lang]
     s.add(f"mc-bank-{n:03d}-{lang}", "master_creation", lang, "new bank ledger with opening balance",
           b, utt, [step("POST", "/ledgers", body), answer(f"Bank ledger {bank} added.")], exp)

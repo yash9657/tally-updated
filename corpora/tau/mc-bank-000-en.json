@@ -87,7 +87,7 @@
       }
     ]
   },
-  "utterance": "Add a bank ledger 'Axis Bank CC A/c' with an opening balance of ₹1,25,000 (debit).",
+  "utterance": "Add a bank ledger 'Axis Bank CC A/c' in the Bank Accounts group with an opening balance of ₹1,25,000 (debit).",
   "reference_plan": [
     {
       "method": "POST",

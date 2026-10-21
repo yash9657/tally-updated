@@ -87,7 +87,7 @@
       }
     ]
   },
-  "utterance": "'ICICI Bank Current' naam ka bank ledger add karo, opening ₹3,10,000 Dr.",
+  "utterance": "'ICICI Bank Current' naam ka bank ledger Bank Accounts group mein add karo, opening ₹3,10,000 Dr.",
   "reference_plan": [
     {
       "method": "POST",

@@ -1,6 +1,8 @@
 package tau_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"github.com/shopspring/decimal"
 	"regexp"
 	"strings"
@@ -30,6 +32,9 @@ func businessQuality(c businessCase, answer string) []string {
 	if !strings.Contains(lower, strings.ToLower(c.Entity)) {
 		reasons = append(reasons, "missing named entity")
 	}
+	if c.Industry == "services" && regexp.MustCompile(`100.days (past|beyond|overdue)`).MatchString(lower) {
+		reasons = append(reasons, "invoice age confused with days beyond payment norm")
+	}
 	normalized := strings.ReplaceAll(answer, ",", "")
 	for _, number := range c.Numbers {
 		if !regexp.MustCompile(`(?:^|[^\d])` + regexp.QuoteMeta(number) + `(?:\.0+)?(?:[^\d]|$)`).MatchString(normalized) {
@@ -49,6 +54,80 @@ func businessQuality(c businessCase, answer string) []string {
 		reasons = append(reasons, "unsupported guarantee or execution claim")
 	}
 	return reasons
+}
+
+func allowReadResultNumbers(records []map[string]any, allowed map[string]bool) {
+	var walk func(any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for _, child := range x {
+				walk(child)
+			}
+		case []any:
+			for _, child := range x {
+				walk(child)
+			}
+		case string:
+			if n, err := decimal.NewFromString(x); err == nil {
+				allowed[n.String()] = true
+			}
+		case json.Number:
+			if n, err := decimal.NewFromString(x.String()); err == nil {
+				allowed[n.String()] = true
+			}
+		}
+	}
+	for _, record := range records {
+		raw, ok := record["messages"].(json.RawMessage)
+		if !ok {
+			continue
+		}
+		var messages []struct{ Role, Content string }
+		if json.Unmarshal(raw, &messages) != nil {
+			continue
+		}
+		for _, message := range messages {
+			if message.Role != "user" || !strings.HasPrefix(message.Content, "RESULT OF tool:") {
+				continue
+			}
+			_, body, ok := strings.Cut(message.Content, "\n")
+			if !ok {
+				continue
+			}
+			var result struct {
+				Tool struct {
+					Tool   string
+					OK     bool
+					Result json.RawMessage
+				}
+			}
+			if json.Unmarshal([]byte(body), &result) != nil || !result.Tool.OK {
+				continue
+			}
+			if result.Tool.Tool != "actions.read" && result.Tool.Tool != "query_books" && !strings.HasPrefix(result.Tool.Tool, "get_") {
+				continue
+			}
+			var data any
+			decoder := json.NewDecoder(bytes.NewReader(result.Tool.Result))
+			decoder.UseNumber()
+			if decoder.Decode(&data) == nil {
+				walk(data)
+			}
+		}
+	}
+}
+
+func TestBusinessMoneyUsesReadResultsNotModelClaims(t *testing.T) {
+	allowed := map[string]bool{}
+	allowReadResultNumbers([]map[string]any{{"messages": json.RawMessage(`[
+	{"role":"assistant","content":"Rs 999"},
+	{"role":"user","content":"RESULT OF tool:0\n{\"tool\":{\"tool\":\"actions.read\",\"ok\":true,\"result\":{\"payable\":\"24000.00\"}}}"},
+	{"role":"user","content":"RESULT OF tool:1\n{\"tool\":{\"tool\":\"actions.preview\",\"ok\":true,\"result\":{\"amount\":\"888\"}}}"}
+	]`)}}, allowed)
+	if !allowed["24000"] || allowed["999"] || allowed["888"] {
+		t.Fatal(allowed)
+	}
 }
 
 // Every explicit rupee claim must be present in source books or verified

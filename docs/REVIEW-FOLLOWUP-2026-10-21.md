@@ -37,3 +37,11 @@ the frontend preview builds. Neither external service was reconfigured.
 No production migrations, Terraform apply or merge were performed. Fireworks
 evaluation uses disposable synthetic companies; its original results, spending
 and remaining quality gaps are recorded in [the runbook](FIREWORKS-EVALUATION.md).
+
+The live-quality follow-up adds permission-filtered, evidence-rechecked business
+insights; authorized company tax context; supplier invoice identity over HTTP;
+strict terminal-answer evaluation; and a durable shared spending ledger. The
+broad live run reached 24/28, the four targeted repairs passed, and the final
+five business cases passed their necessary checks. Full outputs and remaining
+precision/presentation limits are preserved in the runbook; these results are
+not a universal readiness claim.

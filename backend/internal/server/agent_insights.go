@@ -9,6 +9,7 @@ import (
 	"github.com/khata/cored/internal/agent"
 	"github.com/khata/cored/internal/insights"
 	"github.com/khata/cored/internal/policy"
+	"github.com/shopspring/decimal"
 )
 
 // Every finding is a bundle: deny the entire bundle if any source report is
@@ -82,13 +83,31 @@ func (p agentProfiles) businessInsights(ctx context.Context, asOf string, may, m
 		meaning := "An observed condition requiring review, not guaranteed savings."
 		if row.Type == insights.TypeDuplicateBill {
 			action = "Compare both source bills and vouchers before paying; if they are duplicates, preview a correction for human approval."
-			meaning = "Matching supplier document numbers identify a possible duplicate, not proof that either purchase is invalid."
+			meaning = "Matching supplier document numbers identify a possible duplicate, not proof that either purchase is invalid. The amount is one suspected duplicate bill, NOT the entire supplier balance. You owe the supplier; the supplier does not owe you. Preserve original document identities while checking the source bills and delivery evidence."
+		}
+		if row.Type == insights.TypeCustomerSlower {
+			meaning = "oldest_days is invoice AGE, not days overdue beyond the historical payment norm. The historic payment sample is not a promise, and does not prove why payment stopped. Draft a neutral payment-date/dispute enquiry without assuming customer intent."
+			age, e1 := decimal.NewFromString(row.Payload["oldest_days"])
+			norm, e2 := decimal.NewFromString(row.Payload["p90_days"])
+			if e1 == nil && e2 == nil {
+				row.Fields = append(row.Fields, insights.FieldView{Key: "oldest_beyond_norm_days", Label: "oldest invoice age minus historical payment norm", Unit: insights.UnitDays, Value: age.Sub(norm).String()})
+			}
 		}
 		if row.Type == insights.TypeSupplierPriceCreep {
 			meaning = "extra_cost applies the latest-minus-first rate to the whole historical quantity: a comparison scenario, NOT actual extra spending or achievable savings. Confirm specification, terms and alternative quotations."
+			first, e1 := decimal.NewFromString(row.Payload["first_rate"])
+			last, e2 := decimal.NewFromString(row.Payload["last_rate"])
+			if e1 == nil && e2 == nil {
+				row.Fields = append(row.Fields, insights.FieldView{Key: "unit_price_increase", Label: "latest rate minus first rate per unit", Unit: insights.UnitINR, Value: last.Sub(first).String()})
+			}
 		}
 		if row.Type == insights.TypeDeadStock {
-			meaning = "Stock value uses the latest purchase rate; it is not recoverable cash, profit or a guaranteed sale price. Check physical stock, seasonality and supplier return terms before acting."
+			meaning = "Stock value uses the latest purchase rate; it is not recoverable cash, profit or a guaranteed sale price. Idle days start at the first receipt when there has NEVER been an outward movement. Check physical stock, seasonality, demand and supplier return terms before acting. Do not propose reordering idle stock just to obtain a lower price."
+			for i := range row.Fields {
+				if row.Fields[i].Key == "idle_days" {
+					row.Fields[i].Label = "days without outward movement; since first receipt if never sold"
+				}
+			}
 		}
 		if row.Type == insights.TypeReorderNow {
 			meaning = "Cover extrapolates historical sales; verify open orders, supplier lead time and seasonality before ordering."
