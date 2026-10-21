@@ -162,9 +162,19 @@ def test_the_harness_hides_the_environments_dsn_from_a_freshly_built_settings():
 
 @pytest.fixture(scope="module")
 def dsn() -> str:
+    required = os.environ.get("INSIGHTD_REQUIRE_DB") == "1"
+
+    def unavailable(reason):
+        if required:
+            pytest.fail(reason)
+        pytest.skip(reason)
+
     if os.environ.get("CORED_SKIP_DB") or os.environ.get("INSIGHTD_SKIP_DB"):
-        pytest.skip("CORED_SKIP_DB/INSIGHTD_SKIP_DB set")
-    psycopg = pytest.importorskip("psycopg", reason="psycopg not installed (requirements-db.txt)")
+        unavailable("CORED_SKIP_DB/INSIGHTD_SKIP_DB set")
+    try:
+        import psycopg
+    except ImportError:
+        unavailable("psycopg not installed (requirements-db.txt)")
     # conftest's captured value, NOT os.environ: the autouse
     # `_in_memory_draft_store_by_default` fixture has already deleted
     # INSIGHTD_DATABASE_URL from the environment by the time this module-scoped
@@ -177,14 +187,14 @@ def dsn() -> str:
             with conn.cursor() as cur:
                 cur.execute("SELECT to_regclass('public.insightd_draft')")
                 if cur.fetchone()[0] is None:
-                    pytest.skip(
+                    unavailable(
                         "insightd_draft missing — run: cd backend && "
                         "go run ./cmd/cored migrate"
                     )
     except pytest.skip.Exception:
         raise
-    except Exception as exc:  # unreachable PG -> skip, never fail (Go idiom)
-        pytest.skip(f"postgres unreachable at {value}: {exc}")
+    except Exception as exc:  # required CI fails; core-only runs may skip
+        unavailable(f"postgres unavailable: {type(exc).__name__}")
     return value
 
 

@@ -102,6 +102,10 @@ func TestAgentProfileToolsAreRegisteredAndACLFiltered(t *testing.T) {
 		if !found {
 			t.Fatalf("the customer profile has no receivable fact: %v", facts)
 		}
+		card := asMap(asMap(profileResult(t, m, 1)["result"])["card"])
+		if !strings.Contains(card["text"].(string), "Bharat Stores: Rs 30000.00") {
+			t.Fatalf("the owner lost the complete tenant card: %v", card)
+		}
 	})
 
 	t.Run("a level that may not open Outstandings is refused the customer profile and the receivables fact", func(t *testing.T) {
@@ -123,6 +127,9 @@ func TestAgentProfileToolsAreRegisteredAndACLFiltered(t *testing.T) {
 			t.Fatalf("tenant profile: %v", tp)
 		}
 		body := asMap(tp["result"])
+		if _, present := body["card"]; present {
+			t.Fatalf("the unfiltered tenant card reached a member denied Outstandings: %v", body["card"])
+		}
 		if body["withheld_facts"] == nil {
 			t.Fatalf("no fact was withheld from a level refused Outstandings: %v", body)
 		}

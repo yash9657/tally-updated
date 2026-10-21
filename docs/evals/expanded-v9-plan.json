@@ -1,0 +1,45 @@
+{
+  "kind": "forecast_not_provider_invoice",
+  "agent_prompt": "agent-decide-v9",
+  "fixture_version": "scale-fixture-v1",
+  "shared_ledger_cap_usd": "5",
+  "shared_ledger_charge_usd": "4.88431",
+  "shared_ledger_remaining_usd": "0.11569",
+  "conservative_rate_per_million_tokens_usd": "2",
+  "initial_suite": {
+    "original_tasks": 28,
+    "original_business_cases_and_holdouts": 9,
+    "expanded_1000_voucher_cases": 12,
+    "total": 49
+  },
+  "later_tiers_after_offline_validation": {
+    "10000_vouchers": 12,
+    "100000_vouchers": 12
+  },
+  "total_if_all_tiers_validated": 73,
+  "languages": [
+    "English",
+    "Devanagari Hindi",
+    "Hinglish"
+  ],
+  "industries": [
+    "retail",
+    "wholesale",
+    "services",
+    "manufacturing"
+  ],
+  "empirical_initial_conservative_usd": "3.0204696",
+  "empirical_all_tiers_conservative_usd": "4.0679448",
+  "planning_allowance_at_2x_all_tiers_usd": "8.1358896",
+  "requested_additional_authorization_usd": "10",
+  "proposed_total_cap_usd_only_if_authorized": "15",
+  "paid_runs_authorized": false,
+  "caveats": [
+    "Forecast uses historical observed token usage, not a guaranteed maximum.",
+    "Larger context, Hindi, repairs and complex reads may cost more; shared cap stops spending.",
+    "Business insight cases are advice-only and require unchanged books; not completed collections or sends.",
+    "10k/100k runs require independent fixture validation and resource inspection first.",
+    "No ledger mutation: a later approved increase must retain charge/history and audit old/new cap.",
+    "No human UI timing or customer ROI is established."
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "kind": "observer_instrumentation_browser_control",
+  "note": "Illustrative landing-page tab switch; not a completed accounting workflow or human timing evidence.",
+  "trials": [
+    {
+      "task": "observer-incomplete-control",
+      "industry": "services",
+      "bookFingerprint": "illustrative-preview-only",
+      "path": "manual_ui",
+      "source": "browser_automation",
+      "operator": "automation-control",
+      "completed": false,
+      "qualityVerified": false,
+      "finalFingerprint": null,
+      "deliverable": "state_change",
+      "elapsedMs": 2635.1000003814697,
+      "activeHumanMs": null,
+      "clicks": 1,
+      "keystrokes": 0,
+      "approvals": 0,
+      "clarifications": 0,
+      "corrections": 0
+    }
+  ],
+  "summary": {
+    "kind": "matched_operator_pilot_summary",
+    "customer_roi": null,
+    "limitation": "Internal pilot timing does not establish representative customer savings. All failures remain in the denominator.",
+    "industries": [
+      {
+        "industry": "retail",
+        "attempted_pairs": 0,
+        "correct_completed_pairs": 0,
+        "human_timed_pairs": 0,
+        "median_active_minutes_saved": null,
+        "median_paired_reduction_fraction": null,
+        "excluded_from_human_savings": {}
+      },
+      {
+        "industry": "wholesale",
+        "attempted_pairs": 0,
+        "correct_completed_pairs": 0,
+        "human_timed_pairs": 0,
+        "median_active_minutes_saved": null,
+        "median_paired_reduction_fraction": null,
+        "excluded_from_human_savings": {}
+      },
+      {
+        "industry": "services",
+        "attempted_pairs": 1,
+        "correct_completed_pairs": 0,
+        "human_timed_pairs": 0,
+        "median_active_minutes_saved": null,
+        "median_paired_reduction_fraction": null,
+        "excluded_from_human_savings": {
+          "missing_matched_path": 1
+        }
+      },
+      {
+        "industry": "manufacturing",
+        "attempted_pairs": 0,
+        "correct_completed_pairs": 0,
+        "human_timed_pairs": 0,
+        "median_active_minutes_saved": null,
+        "median_paired_reduction_fraction": null,
+        "excluded_from_human_savings": {}
+      }
+    ]
+  }
+}

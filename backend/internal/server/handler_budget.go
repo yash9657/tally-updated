@@ -195,7 +195,7 @@ func (s *Server) handleCreateBudget(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.masters.CreateBudget(r.Context(), masters.BudgetInput{
 		Name: req.Name, FromDate: req.FromDate, ToDate: req.ToDate,
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeBudgetError(w, err)
 		return

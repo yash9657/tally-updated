@@ -90,7 +90,7 @@ func RequestHash(req *llm.Request) string {
 //   - delete of anything: structural;
 //   - post.drafts._draftid.accepted and the other insightd proxies: they call
 //     another service, which no rollback can take back;
-//   - groups, units, godowns, price lists, BOMs, budgets, cost centres: each
+//   - godowns (no UI create), price lists, BOMs, budget lines, cost centres: each
 //     is one more handler to read, and none is on PLAN-AGENTIC W2's list.
 var previewable = map[string]bool{
 	// The eight accounting voucher creates: postVoucher -> ledger.PostVoucher,
@@ -132,6 +132,12 @@ var previewable = map[string]bool{
 	// row); the valuation-method setter (one RunInTx, audit ALTER row).
 	"post.ledgers":     true,
 	"post.stock-items": true,
+	// Audited single-transaction master creates; appendAudit is inside the
+	// same transaction. No service calls, files or external side effects.
+	"post.groups":          true,
+	"post.units":           true,
+	"post.cost-categories": true,
+	"post.budgets":         true,
 	"put.stock-items._stockitemid.valuation-method": true,
 	// Orders: postOrder -> orders.Create and putOrderClose -> orders.Close,
 	// one RunInTx each.
@@ -155,12 +161,14 @@ type searchArgs struct {
 }
 
 type searchHit struct {
-	ActionID string `json:"action_id"`
-	ACLKey   string `json:"acl_key"`
-	Risk     string `json:"risk"`
-	Method   string `json:"method"`
-	Route    string `json:"route"`
-	Commit   bool   `json:"committable"`
+	ActionID       string          `json:"action_id"`
+	ACLKey         string          `json:"acl_key"`
+	Risk           string          `json:"risk"`
+	Method         string          `json:"method"`
+	Route          string          `json:"route"`
+	Commit         bool            `json:"committable"`
+	BodySchema     json.RawMessage `json:"body_schema,omitempty"`
+	BodySchemaFrom string          `json:"body_schema_from,omitempty"`
 }
 
 // search is actions.search: the registry's deterministic matcher, filtered to
@@ -169,16 +177,26 @@ func (l *loop) search(q string) []searchHit {
 	now := l.e.now()
 	p := l.run.Principal()
 	var words []string
+	method := ""
 	for _, w := range strings.Fields(strings.ToLower(q)) {
 		switch w {
-		case "voucher", "vouchers", "entry", "a", "an", "the", "for", "to", "of":
+		case "list", "get", "read", "show":
+			method = "GET"
+			continue
+		case "create", "post", "record":
+			method = "POST"
+			continue
+		case "alter", "update", "edit":
+			method = "PUT"
+			continue
+		case "voucher", "vouchers", "invoice", "invoices", "entry", "a", "an", "the", "for", "to", "of":
 			continue
 		}
 		words = append(words, w)
 	}
 	var hits []searchHit
 	for _, s := range actions.Specs {
-		if !policy.EffectiveRights(p, s, now).Allow {
+		if (method != "" && s.Method != method) || !policy.EffectiveRights(p, s, now).Allow {
 			continue
 		}
 		hay := strings.ToLower(s.ID + " " + s.ACLKey + " " + s.Label)
@@ -192,7 +210,11 @@ func (l *loop) search(q string) []searchHit {
 		if !match {
 			continue
 		}
-		hits = append(hits, searchHit{ActionID: s.ID, ACLKey: s.ACLKey, Risk: string(s.Risk),
+		var schema json.RawMessage
+		if l.e.ActionSchema != nil {
+			schema = l.e.ActionSchema(s.ID)
+		}
+		hits = append(hits, searchHit{BodySchema: schema, ActionID: s.ID, ACLKey: s.ACLKey, Risk: string(s.Risk),
 			Method: s.Method, Route: strings.TrimPrefix(s.Route, "/v1/companies/{companyID}"), Commit: previewable[s.ID]})
 	}
 	sort.Slice(hits, func(i, j int) bool {
@@ -203,6 +225,19 @@ func (l *loop) search(q string) []searchHit {
 	})
 	if len(hits) > 10 {
 		hits = hits[:10]
+	}
+	schemas := map[string]string{}
+	for i := range hits {
+		if len(hits[i].BodySchema) == 0 {
+			continue
+		}
+		key := string(hits[i].BodySchema)
+		if first, ok := schemas[key]; ok {
+			hits[i].BodySchemaFrom = first
+			hits[i].BodySchema = nil
+		} else {
+			schemas[key] = hits[i].ActionID
+		}
 	}
 	return hits
 }
@@ -318,6 +353,8 @@ func strictDecode(raw json.RawMessage, v any) error {
 // step is retried); a tool-level failure is a recorded toolOut the model sees.
 func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d ModelDecision) (toolOut, error) {
 	switch d.Tool {
+	case ToolFinish:
+		return toolErr(d.Tool, "Revise the answer without changing the books: "+finalProblem(finalText(d), d.Details)+". Preserve amounts, qualifications and execution/approval status. Put requested extended explanations in details."), nil
 	case ToolSearch:
 		var a searchArgs
 		if err := strictDecode(d.Args, &a); err != nil {
@@ -332,7 +369,7 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 	case ToolReverse:
 		return l.reverse(ctx, prev, d)
 
-	case ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile:
+	case ToolCustomerProfile, ToolSupplierProfile, ToolItemProfile, ToolRecurring, ToolTenantProfile, ToolBusinessInsights:
 		return l.profile(ctx, d)
 
 	case ToolRead:
@@ -392,6 +429,22 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		// prose fields (a ledger's address, bank details) never reach the
 		// model; a body the projection cannot walk is labelled stored_text.
 		src, body := readSourceFor(spec), res.Body
+		if spec.ID == "get._self" && res.OK() {
+			// Only tax context is needed. Omit the tenant correlation ID and
+			// all editable company prose from the provider request.
+			var company map[string]json.RawMessage
+			if json.Unmarshal(body, &company) == nil {
+				fields := map[string]json.RawMessage{}
+				for _, key := range []string{"state_code", "gstin", "fy_start_date", "base_currency"} {
+					if value, ok := company[key]; ok {
+						fields[key] = value
+					}
+				}
+				body, _ = json.Marshal(fields)
+			} else {
+				return toolErr(d.Tool, "invalid company tax context"), nil
+			}
+		}
 		if src == policy.SourceBooks {
 			if p, ok := projectBooks(body); ok {
 				body = p

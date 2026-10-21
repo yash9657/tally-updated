@@ -459,3 +459,25 @@ func TestProviderCapabilitiesAreExactlyDeclared(t *testing.T) {
 			"in this package.")
 	}
 }
+
+func TestNamedFireworksToolDisablesParallelDecisions(t *testing.T) {
+	a, _ := AdapterFor(ProviderFireworks)
+	body, err := a.Encode("fixture", &Request{ToolChoice: ToolChoice{Mode: ToolChoiceNamed, Name: "decide"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := wire["parallel_tool_calls"]; !ok || v != false {
+		t.Fatalf("single decision not enforced: %s", body)
+	}
+	body, err = a.Encode("fixture", &Request{ToolChoice: ToolChoice{Mode: ToolChoiceAuto}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "parallel_tool_calls") {
+		t.Fatal("automatic tool mode was narrowed")
+	}
+}

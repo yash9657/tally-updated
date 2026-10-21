@@ -491,6 +491,12 @@ export function AgentPanel({
                   {run.outcome.final}
                 </p>
               ) : null}
+              {run.outcome?.details ? (
+                <details data-testid="agent-run-details" className="mt-2 whitespace-pre-wrap">
+                  <summary>Full explanation or draft</summary>
+                  <p>{run.outcome.details}</p>
+                </details>
+              ) : null}
               <h4 className="mt-2 text-tally-title">Steps</h4>
               <ol className="ml-4 list-decimal" data-testid="agent-steps">
                 {events.map((e) => (

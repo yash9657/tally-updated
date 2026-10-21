@@ -11,4 +11,6 @@ misconfigurations:
   - id: AVD-AWS-0104
     paths:
       - "git::https:/github.com/terraform-aws-modules/terraform-aws-eks*/node_groups.tf"
+      # Trivy 0.76 labels the same downloaded module by registry coordinates.
+      - "terraform-aws-modules/eks/aws/node_groups.tf"
     statement: "EKS nodes need NAT egress for image pulls and AWS APIs until VPC endpoints exist."

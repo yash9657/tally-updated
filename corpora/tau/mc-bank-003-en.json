@@ -87,7 +87,7 @@
       }
     ]
   },
-  "utterance": "Add a bank ledger 'SBI Savings' with an opening balance of ₹76,500 (debit).",
+  "utterance": "Add a bank ledger 'SBI Savings' in the Bank Accounts group with an opening balance of ₹76,500 (debit).",
   "reference_plan": [
     {
       "method": "POST",

@@ -86,7 +86,7 @@ const (
 // Facts is the closed vocabulary.
 var Facts = []FactDef{
 	// --- customers (Sundry Debtors subtree) --------------------------------
-	{Key: "receivable_outstanding", Kind: KindParty, Unit: UnitINR, Label: "owes us (bill-wise)", ReconcilesTo: "outstandings", Job: JobCustomer},
+	{Key: "receivable_outstanding", Kind: KindParty, Unit: UnitINR, Label: "owes us (total outstanding; may include unallocated on-account balances)", ReconcilesTo: "outstandings", Job: JobCustomer},
 	{Key: "credit_sales_window", Kind: KindParty, Unit: UnitINR, Label: "invoiced in the window", ReconcilesTo: "day-book", Job: JobCustomer},
 	{Key: "dso_days", Kind: KindParty, Unit: UnitDays, Label: "days sales outstanding", Statistic: true, Job: JobCustomer},
 	{Key: "receipt_lag_p50_days", Kind: KindParty, Unit: UnitDays, Label: "median days to pay a bill", Statistic: true, Job: JobCustomer},
@@ -95,7 +95,7 @@ var Facts = []FactDef{
 	{Key: "bills_settled_count", Kind: KindParty, Unit: UnitCount, Label: "bills fully paid in the window", Statistic: true, Job: JobCustomer},
 
 	// --- suppliers (Sundry Creditors subtree) ------------------------------
-	{Key: "payable_outstanding", Kind: KindParty, Unit: UnitINR, Label: "we owe them (bill-wise)", ReconcilesTo: "bills-payable", Job: JobSupplier},
+	{Key: "payable_outstanding", Kind: KindParty, Unit: UnitINR, Label: "we owe them (total outstanding; may include unallocated on-account balances)", ReconcilesTo: "bills-payable", Job: JobSupplier},
 	{Key: "purchases_window", Kind: KindParty, Unit: UnitINR, Label: "billed to us in the window", ReconcilesTo: "day-book", Job: JobSupplier},
 	{Key: "payment_lag_p50_days", Kind: KindParty, Unit: UnitDays, Label: "median days we take to pay", Statistic: true, Job: JobSupplier},
 	{Key: "payment_lag_p90_days", Kind: KindParty, Unit: UnitDays, Label: "90th-percentile days we take to pay", Statistic: true, Job: JobSupplier},

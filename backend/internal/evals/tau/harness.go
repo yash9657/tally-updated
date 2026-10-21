@@ -33,6 +33,7 @@ type TrialResult struct {
 	Reasons  []string
 	AgentErr string
 	Answer   string
+	Details  string
 }
 
 // TaskResult aggregates a task's trials.
@@ -135,12 +136,17 @@ func runTrial(ctx context.Context, cfg Config, t Task, agent Agent, trial int) (
 		tr.AgentErr = aerr.Error()
 	}
 	tr.Answer = res.Answer
+	tr.Details = res.Details
 	after, err := Snapshot(ctx, books)
 	if err != nil {
 		return tr, fmt.Errorf("snapshot after: %w", err)
 	}
-	v := Judge(t.Expected, defaults, after, res.Answer)
+	v := Judge(t.Expected, defaults, after, strings.TrimSpace(res.Answer+"\n"+res.Details))
 	tr.Pass, tr.Reasons = v.Pass, v.Reasons
+	if aerr != nil {
+		tr.Pass = false
+		tr.Reasons = append(tr.Reasons, "agent did not complete: "+aerr.Error())
+	}
 	return tr, nil
 }
 

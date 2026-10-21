@@ -24,6 +24,7 @@ export type QueryEntity =
   | "vouchers"
   | "postings"
   | "outstandings"
+  | "bill_allocations"
   // W3 (backend internal/query/whitelist.go). stock_movements' `amount` is the
   // line value AS ENTERED, never the valued cost of goods issued; the
   // bank_statement_lines narration is a filter only and never a column.
@@ -123,6 +124,8 @@ export interface ColumnMeta {
  * is the deterministic identifier-whitelisted skeleton, not raw input.
  */
 export interface QueryResult {
+	limit?: number;
+	has_more?: boolean;
   dsl: Query;
   sql_preview: string;
   columns: ColumnMeta[];

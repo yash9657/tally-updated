@@ -87,7 +87,7 @@
       }
     ]
   },
-  "utterance": "'Kotak Bank OD' नाम का बैंक लेजर जोड़ें, ओपनिंग बैलेंस ₹48,000 (डेबिट)।",
+  "utterance": "'Kotak Bank OD' नाम का बैंक लेजर Bank Accounts समूह में जोड़ें, ओपनिंग बैलेंस ₹48,000 (डेबिट)।",
   "reference_plan": [
     {
       "method": "POST",

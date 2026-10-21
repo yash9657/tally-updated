@@ -90,6 +90,11 @@ func SQLPreview(q Query) string {
 }
 
 func compile(q Query) (*compiled, error) {
+	return compileBounded(q, false)
+}
+
+// sentinel adds one row only for execution, to detect an incomplete result.
+func compileBounded(q Query, sentinel bool) (*compiled, error) {
 	def, ok := entities[q.Entity]
 	if !ok {
 		return nil, compileErrf("unknown entity %q", string(q.Entity))
@@ -239,7 +244,11 @@ func compile(q Query) (*compiled, error) {
 		b.WriteString(strings.Join(orderParts, ", "))
 	}
 	limit := clampLimit(q.Limit)
-	b.WriteString(fmt.Sprintf(" LIMIT %d", limit))
+	fetchLimit := limit
+	if sentinel {
+		fetchLimit++
+	}
+	b.WriteString(fmt.Sprintf(" LIMIT %d", fetchLimit))
 
 	return &compiled{sql: b.String(), args: args, columns: columns, limit: limit}, nil
 }

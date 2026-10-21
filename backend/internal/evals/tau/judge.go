@@ -99,6 +99,18 @@ func diffSet(kind string, want, got []string) []string {
 // ⚠️ "Cr" IS NOT A MULTIPLIER HERE, deliberately: in an Indian ledger "59,000
 // Cr" is a CREDIT balance, and reading it as 59,000 crore would turn the most
 // common way a balance is written into a figure ten million times too large.
+// UUIDs are identifiers, not money. Exclude the complete token, including its
+// numeric segments, from both required-output matching and extra-figure checks.
+var uuidInAnswer = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
+
+var nonMoneyIDs = regexp.MustCompile(`(?i)\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b|\b(?:HSN|SAC)(?:\s+code)?[:\s]+[0-9]{4,8}\b|\b(?:filing\s+)?period[:\s]+(?:0[1-9]|1[0-2])20[0-9]{2}\b|\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b|https?://[^\s)]+`)
+
+func answerNumberText(answer string) string {
+	s := devanagariDigits.Replace(answer)
+	s = uuidInAnswer.ReplaceAllString(s, " ")
+	return nonMoneyIDs.ReplaceAllString(s, " ")
+}
+
 var numberRe = regexp.MustCompile(`(?i)(\d[\d,]*(?:\.\d+)?)\s*(lakhs?|lacs?|crores?|लाख|करोड़|करोड)?`)
 
 // devanagariDigits maps ० … ९ onto 0 … 9. A Hindi answer may write its figures
@@ -116,7 +128,7 @@ var devanagariDigits = strings.NewReplacer(
 // magnitudes, and the DIRECTION of a balance is judged — where it matters — by
 // the ledger state, not the prose.
 func AnswerFigures(answer string) []decimal.Decimal {
-	s := devanagariDigits.Replace(answer)
+	s := answerNumberText(answer)
 	var out []decimal.Decimal
 	for _, m := range numberRe.FindAllStringSubmatch(s, -1) {
 		d, err := decimal.NewFromString(strings.ReplaceAll(m[1], ",", ""))
@@ -138,6 +150,11 @@ func AnswerFigures(answer string) []decimal.Decimal {
 // paisa. A figure stated in lakh must still be exact: "1.18 lakh" is 118000.00,
 // and if the books say 118000.50 the answer is wrong.
 func checkOutputs(expected []string, answer string) []string {
+	// Write-only tasks specify their exact resulting books, without an answer
+	// constraint. Acknowledging the posted amounts is not an extra-output error.
+	if len(expected) == 0 {
+		return nil
+	}
 	figs := AnswerFigures(answer)
 	var out []string
 	for _, e := range expected {
@@ -188,11 +205,11 @@ func extraMoneyFigures(expected []string, answer string) []string {
 			want[d.Abs().Round(2).StringFixed(2)] = true
 		}
 	}
-	s := devanagariDigits.Replace(answer)
+	s := answerNumberText(answer)
 	seen := map[string]bool{}
 	var out []string
 	for _, m := range moneyShapedRe.FindAllStringSubmatch(s, -1) {
-		raw := m[2]
+		raw := strings.TrimRight(m[2], ",")
 		intPart, frac, _ := strings.Cut(raw, ".")
 		shaped := m[1] != "" || m[3] != "" || strings.Contains(raw, ",") || len(frac) == 2
 		if !shaped && frac == "" && len(intPart) >= 4 {

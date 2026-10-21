@@ -132,6 +132,9 @@ var AgentRules = []authz.Rule{
 	{Effect: authz.Disallow, Action: authz.Delete, Resource: authz.Wildcard},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "security"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "company"},
+	// Tax state is required to prepare purchases. The human's company-read
+	// permission and the books projection still apply; administration stays denied.
+	{Effect: authz.Allow, Action: authz.Display, Resource: "company"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "backup"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "import"},
 	{Effect: authz.Disallow, Action: authz.Wildcard, Resource: "sync"},

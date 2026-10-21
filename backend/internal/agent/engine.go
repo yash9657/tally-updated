@@ -24,10 +24,11 @@ import (
 const (
 	// DefaultApprovalWindow is the "days-long timeout" of PLAN-AGENTIC W2.
 	DefaultApprovalWindow = 72 * time.Hour
-	// DefaultMaxDecisions bounds the model calls in one run. A loop that has
-	// not finished in eight decisions is a loop that is not converging, and
-	// every further call is spend with no evidence it will help.
-	DefaultMaxDecisions = 8
+	// DefaultMaxDecisions bounds the model calls in one run. A loop needs
+	// enough turns for discovery, reads, preview, approval and a second
+	// action (e.g. bank reconciliation). Live evaluation exhausted eight on
+	// valid multi-action tasks. Sixteen remains a hard spend/loop bound.
+	DefaultMaxDecisions = 16
 	// DefaultParkedPoll is how soon a parked run is looked at again when
 	// nothing nudges it. A decision written through the API nudges it at once
 	// (next_poll_at = now), so this only bounds how late an EXPIRY is noticed.
@@ -50,6 +51,9 @@ type Engine struct {
 	// Profiles is W3's profile tools behind internal/server's ACL filter
 	// (profiles.go). Nil means the tools answer "not available".
 	Profiles ProfileReader
+	// ActionSchema describes the real HTTP body shape, supplied by the server.
+	// It is documentation only; existing validators and policy remain authoritative.
+	ActionSchema func(string) json.RawMessage
 	// Now is the one clock: step deadlines, the poller's due query and the
 	// intent log all read it, so the 72-hour test can drive it.
 	Now            func() time.Time

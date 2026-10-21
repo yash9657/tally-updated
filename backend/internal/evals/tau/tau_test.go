@@ -46,7 +46,7 @@ func TestAnswerFigures(t *testing.T) {
 		"HDFC Bank: 59,000.0000 Cr":   {"59000"}, // Cr is a side, not a crore
 		"कुल ₹५९,००० बकाया":           {"59000"},
 		"2 crore":       {"20000000"},
-		"on 2025-06-12": {"2025", "6", "12"},
+		"on 2025-06-12": nil,
 	}
 	for in, want := range cases {
 		got := AnswerFigures(in)
@@ -82,7 +82,8 @@ func TestJudge(t *testing.T) {
 		Ledgers:  append(append([]Ledger{}, defaults.Ledgers...), exp.Ledgers...),
 		Vouchers: []Voucher{saleVoucher("1000.0000")},
 	}
-	if v := Judge(exp, defaults, good, ""); !v.Pass {
+	acknowledgement := "Posted ₹1000.00, including ₹847.46 base and ₹152.54 tax."
+	if v := Judge(exp, defaults, good, acknowledgement); !v.Pass {
 		t.Fatalf("identical books judged failing: %v", v.Reasons)
 	}
 
@@ -105,7 +106,7 @@ func TestJudge(t *testing.T) {
 		"a bank date set":       mut(func(s *State) { s.Vouchers[0].Postings[0].BankDate = "2025-06-13" }),
 		"a side swapped":        mut(func(s *State) { s.Vouchers[0].Postings[0].DrCr = "C"; s.Vouchers[0].Postings[1].DrCr = "D" }),
 	} {
-		if v := Judge(exp, defaults, st, ""); v.Pass {
+		if v := Judge(exp, defaults, st, acknowledgement); v.Pass {
 			t.Errorf("%s: judged passing", name)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/platform/db"
 )
@@ -21,11 +22,9 @@ import (
 //
 //   - REAL TIME: insight_event_pending_companies() → ProcessEvents. Seconds of
 //     latency, by the tick.
-//   - NIGHTLY: once the IST clock passes NightlyHour, insight_nightly_due_companies
-//     (today) → RunNightly; then insight_digest_due_companies (today: the night
-//     ran, no digest yet) → ComposeDigest. Idempotent per (company, day) by
-//     insight_run's UNIQUE and the digest's, so every replica may run the same
-//     loop: the loser of a race finds the row and does nothing.
+//   - NIGHTLY: after NightlyHour, atomically claim durable nightly/digest jobs.
+//     Leases keep replicas apart; failures back off without losing their date.
+//     RunNightly and ComposeDigest remain idempotent if a lease expires.
 
 // NightlyHour is the IST hour after which the night's run may start.
 const NightlyHour = 2
@@ -73,40 +72,96 @@ func (p *Poller) NightlyOnce(ctx context.Context) (int, error) {
 	return p.NightlyFor(ctx, BusinessDate(now))
 }
 
-// NightlyFor runs the night for date regardless of the hour (the operator's
-// "run now", and the tests).
+// JobPass records selection separately from execution, so a missing digest can
+// be distinguished from a selection, lease, or composition failure.
+type JobPass struct{ Selected, Attempted, Succeeded, Failed int }
+type PassStats struct{ Nightly, Digest JobPass }
+type claimedJob struct {
+	Company uuid.UUID
+	Date    time.Time
+	Token   uuid.UUID
+}
+
+// NightlyFor runs due work through date regardless of the current hour.
 func (p *Poller) NightlyFor(ctx context.Context, date time.Time) (int, error) {
-	companies, err := p.ids(ctx, `SELECT company_id FROM insight_nightly_due_companies($1::date, $2)`,
-		date.Format(isoDate), p.batch())
-	if err != nil {
-		return 0, err
-	}
-	n := 0
-	for _, c := range companies {
-		cctx := db.WithCompany(ctx, c)
-		if _, err := RunNightly(cctx, p.Pool, c, date); err != nil {
-			// One company's failure must not stop the others (notify's rule).
-			log.Printf("insights: nightly for %s: %v", c, err)
-			continue
+	stats, err := p.NightlyForStats(ctx, date)
+	return stats.Nightly.Succeeded, err
+}
+
+func (p *Poller) NightlyForStats(ctx context.Context, date time.Time) (PassStats, error) {
+	var stats PassStats
+	for _, kind := range []string{"nightly", "digest"} {
+		pass := &stats.Nightly
+		if kind == "digest" {
+			pass = &stats.Digest
 		}
-		n++
-	}
-	// ⛔ THE DIGEST IS DUE ON ITS OWN CONDITION (0104, the wave-2 review):
-	// the night for the date ran and the digest does not exist — whichever
-	// road ran the night. Composed in the nightly pass alone, a night run by
-	// POST /insights/run was never followed by a digest, and a compose that
-	// failed after its night was never retried.
-	due, err := p.ids(ctx, `SELECT company_id FROM insight_digest_due_companies($1::date, $2)`,
-		date.Format(isoDate), p.batch())
-	if err != nil {
-		return n, err
-	}
-	for _, c := range due {
-		if _, err := ComposeDigest(db.WithCompany(ctx, c), p.Pool, c, date, "", p.Narrator); err != nil {
-			log.Printf("insights: digest for %s: %v", c, err)
+		jobs, err := p.claim(ctx, kind, date)
+		if err != nil {
+			return stats, err
 		}
+		pass.Selected = len(jobs)
+		for _, job := range jobs {
+			pass.Attempted++
+			cctx := db.WithCompany(ctx, job.Company)
+			var workErr error
+			if kind == "nightly" {
+				_, workErr = RunNightly(cctx, p.Pool, job.Company, job.Date)
+			} else {
+				_, workErr = ComposeDigest(cctx, p.Pool, job.Company, job.Date, "", p.Narrator)
+			}
+			if workErr != nil {
+				pass.Failed++
+				log.Printf("insights: %s company=%s date=%s failed: %v", kind, job.Company, job.Date.Format(isoDate), workErr)
+			} else {
+				pass.Succeeded++
+			}
+			if err := p.finishJob(cctx, kind, job, workErr); err != nil {
+				return stats, err
+			}
+		}
+		log.Printf("insights: %s date=%s selected=%d attempted=%d succeeded=%d failed=%d", kind, date.Format(isoDate), pass.Selected, pass.Attempted, pass.Succeeded, pass.Failed)
 	}
-	return n, nil
+	return stats, nil
+}
+
+func (p *Poller) claim(ctx context.Context, kind string, date time.Time) ([]claimedJob, error) {
+	// An explicit company scope (operator run-now / a company test) must not
+	// drain unrelated companies. The background scheduler has no company scope.
+	var company any
+	if cid, ok := db.CompanyFromContext(ctx); ok {
+		company = cid
+	}
+	rows, err := p.Pool.Raw().Query(ctx, `SELECT company_id, work_date, claim_token FROM insight_claim_jobs($1, $2::date, $3, $4, $5)`, kind, date.Format(isoDate), p.now(), p.batch(), company)
+	if err != nil {
+		return nil, fmt.Errorf("insights: claim %s: %w", kind, err)
+	}
+	defer rows.Close()
+	var jobs []claimedJob
+	for rows.Next() {
+		var job claimedJob
+		if err := rows.Scan(&job.Company, &job.Date, &job.Token); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (p *Poller) finishJob(ctx context.Context, kind string, job claimedJob, workErr error) error {
+	return p.Pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if workErr == nil {
+			_, err := tx.Exec(ctx, `DELETE FROM insight_job WHERE company_id=$1 AND kind=$2 AND work_date=$3::date AND claim_token=$4`, job.Company, kind, job.Date.Format(isoDate), job.Token)
+			return err
+		}
+		// The token prevents a worker whose lease expired from overwriting a
+		// newer claim. Backoff is persisted, including the original work date.
+		_, err := tx.Exec(ctx, `UPDATE insight_job SET lease_until='-infinity',
+            next_attempt_at=$5::timestamptz + interval '1 minute' * power(2, least(attempts-1,6)),
+            last_error=left($6,2000)
+            WHERE company_id=$1 AND kind=$2 AND work_date=$3::date AND claim_token=$4`,
+			job.Company, kind, job.Date.Format(isoDate), job.Token, p.now(), workErr.Error())
+		return err
+	})
 }
 
 // Run ticks both jobs until ctx ends. kick wakes it early (a voucher post).

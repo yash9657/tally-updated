@@ -49,6 +49,7 @@ func TestSchemaEnumsMatchDSLConstants(t *testing.T) {
 		string(query.EntityVouchers),
 		string(query.EntityPostings),
 		string(query.EntityOutstandings),
+		string(query.EntityBillAllocations),
 		string(query.EntityStockMovements),
 		string(query.EntityBankStatementLines),
 		string(query.EntityProfileFacts),

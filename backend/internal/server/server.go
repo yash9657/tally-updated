@@ -63,10 +63,10 @@ import (
 	// peekTallyXMLVoucherDate must parse the envelope and convert a Tally date with
 	// the SAME two calls migration's importer uses, or the PDP and the writer could
 	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
-	"github.com/khata/cored/internal/integration"
-	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/insights"
 	"github.com/khata/cored/internal/insights/narrate"
+	"github.com/khata/cored/internal/integration"
+	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/llm"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
@@ -459,7 +459,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 // router. Split out so the no-database registry generator (&Server{}) is not
 // asked to build one.
 func (s *Server) initAgent(model *llm.Client) {
-	s.agent = &agent.Engine{Pool: s.pool, LLM: model}
+	s.agent = &agent.Engine{Pool: s.pool, LLM: model, ActionSchema: agentActionSchema}
 	s.agent.Dispatch = agentDispatcher{s: s, now: s.agent.Clock}
 	s.agent.Profiles = agentProfiles{s: s}
 	s.agentPoller = &agent.Poller{Engine: s.agent}
@@ -2386,7 +2386,7 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		Nature:             masters.Nature(req.Nature),
 		IsPL:               req.IsPL,
 		BehavesAsSubledger: req.BehavesAsSubledger,
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -2649,7 +2649,7 @@ func (s *Server) handleCreateUnit(w http.ResponseWriter, r *http.Request) {
 		DecimalPlaces:    req.DecimalPlaces,
 		BaseUnitSymbol:   strings.TrimSpace(req.BaseUnitSymbol),
 		ConversionFactor: factor,
-	}, req.CreatedBy)
+	}, attributedTo(r, req.CreatedBy))
 	if err != nil {
 		writeMastersError(w, err)
 		return
@@ -2939,6 +2939,9 @@ type voucherReq struct {
 	CreatedBy       string              `json:"created_by"`
 	Postings        []postingReq        `json:"postings"`
 	BillAllocations []billAllocationReq `json:"bill_allocations"`
+	// Preserve the supplier's document identity through HTTP and offline sync.
+	// Duplicate-bill detection and ITC matching read these same ledger fields.
+	Inward *ledger.CanonicalInward `json:"inward"`
 	// Inventory is the item grid. Declared HERE — after bill_allocations and
 	// before gst — to mirror ledger.VoucherInput's field order, so the wire
 	// shape and the domain shape read the same way top to bottom.
@@ -3963,6 +3966,14 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		SourceDraftID: req.DraftID,
 		// Validated in the ledger (shape) and honoured on CREATE only.
 		IdempotencyKey: req.IdempotencyKey,
+	}
+	if req.Inward != nil {
+		in.Inward = &ledger.InwardDocument{
+			SupplierInvoiceNo:   req.Inward.SupplierInvoiceNo,
+			SupplierInvoiceDate: req.Inward.SupplierInvoiceDate,
+			ITCEligibility:      req.Inward.ITCEligibility,
+			ITCBlockedClause:    req.Inward.ITCBlockedClause,
+		}
 	}
 	var err error
 	if in.VoucherTypeID, err = optionalUUID(req.VoucherTypeID); err != nil {
@@ -5142,6 +5153,8 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		"sql_preview": preview,
 		"columns":     queryColumnsJSON(res.Columns),
 		"rows":        res.Rows,
+		"limit":       res.Limit,
+		"has_more":    res.HasMore,
 	})
 }
 

@@ -1,0 +1,16 @@
+.workflow-observer input:not([type="checkbox"]), .workflow-observer select {
+  border: 1px solid #64748b;
+  border-radius: 3px;
+  padding: 4px;
+  background: white;
+}
+.workflow-observer button {
+  border: 1px solid #475569;
+  border-radius: 4px;
+  background: #f1f5f9;
+  padding: 6px;
+  margin: 3px 0;
+}
+.workflow-observer button:disabled { opacity: 0.45; cursor: not-allowed; }
+.workflow-observer :focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
+.workflow-observer p { margin: 8px 0; line-height: 1.4; }

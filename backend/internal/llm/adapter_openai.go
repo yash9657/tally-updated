@@ -88,9 +88,10 @@ type chatRequest struct {
 	Model    string        `json:"model"`
 	Messages []chatMessage `json:"messages"`
 
-	Tools          []chatTool `json:"tools,omitempty"`
-	ToolChoice     any        `json:"tool_choice,omitempty"`
-	ResponseFormat any        `json:"response_format,omitempty"`
+	Tools             []chatTool `json:"tools,omitempty"`
+	ToolChoice        any        `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool      `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    any        `json:"response_format,omitempty"`
 	// GuidedGrammar is vLLM's extra-body field. omitempty so it never appears
 	// for the providers that would reject an unknown key.
 	GuidedGrammar string `json:"guided_grammar,omitempty"`
@@ -226,6 +227,10 @@ func (a openaiAdapter) Encode(model string, req *Request) ([]byte, error) {
 	case ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired:
 		cr.ToolChoice = string(req.ToolChoice.Mode)
 	case ToolChoiceNamed:
+		if a.caps.Has(CapParallelTools) {
+			single := false
+			cr.ParallelToolCalls = &single
+		}
 		if !a.caps.Has(CapToolChoiceNamed) {
 			return nil, capabilityError(a.provider, a.caps, CapToolChoiceNamed, "force a named tool")
 		}

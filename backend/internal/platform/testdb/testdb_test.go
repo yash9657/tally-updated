@@ -769,6 +769,8 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"insight_run", `INSERT INTO insight_run (id, company_id, run_date, kind, stats)
 			VALUES ($1, $2, DATE '2024-05-01', 'nightly', '{}'::jsonb)`,
 			[]any{id(), cid}},
+		{"insight_job", `INSERT INTO insight_job (company_id, kind, work_date)
+			VALUES ($1, 'nightly', DATE '2024-05-01')`, []any{cid}},
 		{"insight_digest", `INSERT INTO insight_digest (id, company_id, digest_date, items, narrative, narrator)
 			VALUES ($1, $2, DATE '2024-05-01', '[]'::jsonb, '', 'template')`,
 			[]any{id(), cid}},

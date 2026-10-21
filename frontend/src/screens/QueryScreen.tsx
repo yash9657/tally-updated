@@ -323,6 +323,13 @@ export function QueryScreen(_props: ScreenComponentProps) {
             that period" until the window is on screen.
           */}
           <div data-testid="query-basis" className="mb-2 bg-tally-panel p-2 text-xs">
+            {result.has_more ? (
+              <p role="status" data-testid="query-limit">
+                Showing the first {result.limit ?? result.rows.length} result rows.
+                More rows match; narrow the question or request an aggregate
+                before using this as a complete total.
+              </p>
+            ) : null}
             <p data-testid="query-basis-period" className="text-tally-fieldText">
               {periodBasis(result.dsl)}
             </p>

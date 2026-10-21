@@ -39,6 +39,9 @@ const (
 	EntityPostings Entity = "postings"
 	// EntityOutstandings projects bill-wise pending amounts of current versions.
 	EntityOutstandings Entity = "outstandings"
+	// Allocation movements, including partial receipts/credits. Excludes
+	// superseded/deleted vouchers; opening bills remain in outstandings.
+	EntityBillAllocations Entity = "bill_allocations"
 	// EntityStockMovements projects inventory movement lines of current,
 	// non-deleted voucher versions (W3). Quantities, and the line value AS
 	// ENTERED — never the valued cost of an issue, which only the valuer knows.
